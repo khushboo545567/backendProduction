@@ -596,6 +596,7 @@ router.get(
     RepostController.getRepostStatus as any
 );
 
+
 /**
  * @route   POST /api/v1/activity/comments/:commentId/report
  * @desc    Report a comment
@@ -641,5 +642,53 @@ router.get(
     '/muted-threads',
     AuthMiddleware.authenticate as any,
     ReportMuteController.getMutedThreads as any
+);
+
+
+
+
+
+// ==================== REPOST ROUTES ====================
+
+router.post(
+    '/posts/:entryId/repost',
+    AuthMiddleware.authenticate as any,
+    validateCreateRepost,
+    RepostController.createRepost as any
+);
+
+router.delete(
+    '/posts/reposts/:repostId',
+    AuthMiddleware.authenticate as any,
+    RepostController.deleteRepost as any
+);
+
+router.get(
+    '/posts/:entryId/reposts',
+    AuthMiddleware.authenticate as any,
+    RepostController.getRepostsByPost as any
+);
+
+router.get(
+    '/posts/reposts/my-reposts',
+    AuthMiddleware.authenticate as any,
+    RepostController.getMyReposts as any
+);
+
+router.get(
+    '/posts/:entryId/repost-status',
+    AuthMiddleware.authenticate as any,
+    RepostController.getRepostStatus as any
+);
+
+router.post(
+    '/posts/reposts/:repostId/react',
+    AuthMiddleware.authenticate as any,
+    RepostController.likeRepost as any
+);
+router.delete(
+    '/posts/reposts/:repostId/react',
+    AuthMiddleware.authenticate as any,
+    RepostController.unlikeRepost as any
 );
 export default router;// Force Railway rebuild 07/30/2026 17:41:23

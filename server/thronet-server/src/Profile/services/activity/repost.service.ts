@@ -7,7 +7,7 @@ import { IPostEntry } from '@/Profile/models/Post.model';
 import { LoggerUtil } from '@/shared/logger.util';
 import AnalyticsService from '../analytics.service';
 import redisService from '@/services/redis.service';
-import { emitToUser } from '@/socket/index'; // ✅ NEW
+import { emitToUser } from '@/socket/index';
 
 class RepostService {
 
@@ -29,12 +29,10 @@ class RepostService {
                 repostedBy, originalPostEntryId, repostType, correlationId
             });
 
-            // Step 1: Validate user
             const user = await User.findOne({ userId: repostedBy });
             if (!user) throw new Error('User not found');
             if (user.status !== 'active') throw new Error('User account is not active');
 
-            // Step 2: Find original post
             const originalDoc = await Post.findOne({ 'posts.entryId': originalPostEntryId });
             if (!originalDoc) throw new Error('Original post not found');
 
@@ -43,16 +41,13 @@ class RepostService {
             );
             if (!originalEntry) throw new Error('Original post not found or deleted');
 
-            // Step 3: Quote repost ke liye thoughtText required
             if (repostType === 'quote' && (!thoughtText || !thoughtText.trim())) {
                 throw new Error('Thought text is required for quote repost');
             }
 
-            // Step 4: Check duplicate repost
             const alreadyReposted = await Repost.hasUserReposted(originalPostEntryId, repostedBy);
             if (alreadyReposted) throw new Error('You have already reposted this post');
 
-            // Step 5: Create repost record
             const repost = new Repost({
                 repostId: uuidv4(),
                 originalPostEntryId,
@@ -66,18 +61,11 @@ class RepostService {
 
             await repost.save();
 
-            // Step 6: Update original post analytics (reposts count)
-            // Post model me reposts field nahi hai directly,
-            // isliye User stats update karo
             await User.findOneAndUpdate(
                 { userId: originalDoc.userId },
                 { $inc: { 'activityStats.totalReposts': 1 } }
             );
 
-
-
-
-            // ✅ Step 6.5 (NEW): Record share event so shares count / discovery stats update
             try {
                 await AnalyticsService.recordShare(originalDoc.userId, {
                     postId: originalPostEntryId,
@@ -85,37 +73,30 @@ class RepostService {
                     sharerId: repostedBy,
                 });
             } catch (analyticsError: any) {
-                // Analytics failure repost creation ko fail nahi karni chahiye
                 LoggerUtil.error('Failed to record share analytics', {
                     error: analyticsError.message,
                     repostId: repost.repostId,
                 });
             }
 
-            // ✅ NEW: Reposter ka apna feed-cache clear karo — taaki uska naya
-            // repost turant top pe dikhe, 180-sec cache expiry ka wait na ho.
-            // createHomePost() mein bhi yahi pattern hai, repost mein missing tha.
             try {
                 await redisService.deleteByPattern(`feed:v1:${repostedBy}:page:*`);
             } catch (cacheError: any) {
-                // Non-critical — cache invalidation fail hone se repost creation fail nahi honi chahiye
                 LoggerUtil.warn('Feed cache invalidation failed after repost (non-critical)', {
                     error: cacheError.message,
                     repostedBy,
                 });
             }
 
-            // ✅ NEW: Real-time push — reposter ke khule hue tabs/devices ko turant
-            // batao ki naya repost aaya hai, taaki UI bina reload kiye update ho sake.
-            // Payload wahi shape hai jo frontend optimistic-update mein already banata hai.
             try {
                 emitToUser(repostedBy, 'feed:new-post', {
                     feedItemType: 'repost',
                     repostId: repost.repostId,
                     repostType: repost.repostType,
                     thoughtText: repost.thoughtText,
-                    userId: repostedBy, // ✅ FIX: 'repostedBy' nahi — feed API (getHomeFeedPosts) aur
-                    // frontend transformPosts() dono 'userId' field expect karte hain repost ke liye
+                    userId: repostedBy,
+                    likesCount: 0,
+                    isLikedByCurrentUser: false,
                     createdAt: repost.createdAt,
                     originalPost: {
                         entryId: originalEntry.entryId,
@@ -127,6 +108,7 @@ class RepostService {
                         documents: originalEntry.documents || [],
                         likesCount: originalEntry.likesCount,
                         commentsCount: originalEntry.commentsCount,
+                        isLikedByCurrentUser: originalEntry.likedBy?.includes(repostedBy) || false,
                         createdAt: originalEntry.createdAt,
                     },
                 });
@@ -180,14 +162,11 @@ class RepostService {
             repost.deletedAt = new Date();
             await repost.save();
 
-            // Revert analytics
             await User.findOneAndUpdate(
                 { userId: repost.originalPostOwnerId },
                 { $inc: { 'activityStats.totalReposts': -1 } }
             );
 
-            // ✅ NEW: delete karne par bhi apna feed-cache clear karo — taaki
-            // delete hui repost turant feed se gayab ho jaaye
             try {
                 await redisService.deleteByPattern(`feed:v1:${userId}:page:*`);
             } catch (cacheError: any) {
@@ -229,15 +208,21 @@ class RepostService {
 
     /**
      * ✅ Get user's reposts (for profile page)
+     * ✅ FIX: viewerId add kiya — quote-repost ka isLikedByCurrentUser ab
+     * actual dekhne wale user ke against calculate hota hai. Har repost type
+     * ke hisaab se sahi likesCount/isLikedByCurrentUser attach hota hai:
+     *  - 'repost' (simple): sirf original post ka data
+     *  - 'quote': repost ka apna independent likesCount/likedBy
      */
-    static async getUserReposts(userId: string): Promise<any> {
+    static async getUserReposts(profileUserId: string, viewerId?: string): Promise<any> {
         try {
             const reposts = await Repost.find({
-                repostedBy: userId,
+                repostedBy: profileUserId,
                 isDeleted: false,
             }).sort({ createdAt: -1 });
 
-            // Enrich with original post data
+            const effectiveViewerId = viewerId || profileUserId;
+
             const enriched = await Promise.all(
                 reposts.map(async (repost) => {
                     const originalDoc = await Post.findOne({
@@ -253,6 +238,11 @@ class RepostService {
                         thoughtText: repost.thoughtText,
                         repostedBy: repost.repostedBy,
                         createdAt: repost.createdAt,
+                        // ✅ NEW: sirf quote-repost ke liye apna independent like data
+                        likesCount: repost.repostType === 'quote' ? repost.likesCount : 0,
+                        isLikedByCurrentUser: repost.repostType === 'quote'
+                            ? repost.likedBy.includes(effectiveViewerId)
+                            : false,
                         originalPost: originalEntry
                             ? {
                                 entryId: originalEntry.entryId,
@@ -265,6 +255,9 @@ class RepostService {
                                 likesCount: originalEntry.likesCount,
                                 commentsCount: originalEntry.commentsCount,
                                 createdAt: originalEntry.createdAt,
+                                // ✅ FIX: simple repost ke liye yeh field zaroori hai
+                                // taaki purana like state (jo already tha) sahi dikhe
+                                isLikedByCurrentUser: originalEntry.likedBy?.includes(effectiveViewerId) || false,
                             }
                             : null,
                     };
@@ -301,7 +294,6 @@ class RepostService {
 
     /**
      * ✅ Get Feed Reposts (home feed ke liye)
-     * Posts + Reposts combine karke sort karta hai
      */
     static async getFeedReposts(
         currentUserId: string,
@@ -332,6 +324,11 @@ class RepostService {
                         thoughtText: repost.thoughtText || null,
                         repostedBy: repost.repostedBy,
                         createdAt: repost.createdAt,
+                        // ✅ NEW
+                        likesCount: repost.repostType === 'quote' ? repost.likesCount : 0,
+                        isLikedByCurrentUser: repost.repostType === 'quote'
+                            ? repost.likedBy.includes(currentUserId)
+                            : false,
                         originalPost: {
                             entryId: originalEntry.entryId,
                             title: originalEntry.title,
@@ -342,7 +339,7 @@ class RepostService {
                             documents: originalEntry.documents || [],
                             likesCount: originalEntry.likesCount,
                             commentsCount: originalEntry.commentsCount,
-                            isLikedByCurrentUser: originalEntry.likedBy?.includes(currentUserId),
+                            isLikedByCurrentUser: originalEntry.likedBy?.includes(currentUserId) || false,
                             createdAt: originalEntry.createdAt,
                         },
                     };
@@ -358,6 +355,48 @@ class RepostService {
             LoggerUtil.error('Get feed reposts failed', { error: error.message });
             throw error;
         }
+    }
+
+    /**
+     * ✅ NEW: Like a quote-repost (independent like system, sirf quote type ke liye)
+     */
+    static async likeRepost(repostId: string, userId: string): Promise<any> {
+        const repost = await Repost.findOne({ repostId, isDeleted: false });
+        if (!repost) throw new Error('Repost not found');
+        if (repost.repostType !== 'quote') {
+            throw new Error('Only quote reposts can be liked independently');
+        }
+        if (repost.likedBy.includes(userId)) {
+            throw new Error('Already liked');
+        }
+
+        repost.likedBy.push(userId);
+        repost.likesCount = repost.likedBy.length;
+        await repost.save();
+
+        return {
+            repostId: repost.repostId,
+            likesCount: repost.likesCount,
+            isLikedByCurrentUser: true,
+        };
+    }
+
+    /**
+     * ✅ NEW: Unlike a quote-repost
+     */
+    static async unlikeRepost(repostId: string, userId: string): Promise<any> {
+        const repost = await Repost.findOne({ repostId, isDeleted: false });
+        if (!repost) throw new Error('Repost not found');
+
+        repost.likedBy = repost.likedBy.filter((id) => id !== userId);
+        repost.likesCount = repost.likedBy.length;
+        await repost.save();
+
+        return {
+            repostId: repost.repostId,
+            likesCount: repost.likesCount,
+            isLikedByCurrentUser: false,
+        };
     }
 }
 
