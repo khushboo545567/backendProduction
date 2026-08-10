@@ -7,6 +7,8 @@ import { mutualController } from '../controllers/index';
 import { ErrorResponse, HttpStatus } from '@/shared/response.util';
 import environmentConfig from '@/config/environment/environment';
 import { logger } from '@/shared/logger.util';
+import { getBulkMutualConnections } from '@/connections/controllers/mutual.controller';
+
 
 // import { authenticateJWT } from '@/shared/middlewares/auth.middleware';
 /**
@@ -94,6 +96,14 @@ router.use((req: Request, _res: Response, next: NextFunction) => {
     next();
 });
 
+
+router.post(
+    '/bulk',
+    mutualLimiter,   // ya jo bhi limiter already mutual routes pe lagta hai
+    getBulkMutualConnections
+);
+
+
 // Feature 1: Get mutual connections list
 router.get(
     '/:userId1/:userId2',
@@ -176,8 +186,9 @@ router.get(
 );
 
 // Feature 8: Bulk mutual queries (stricter limit)
+// Feature 8: Bulk mutual queries (stricter limit) — pairs-based, alag path
 router.post(
-    '/bulk',
+    '/bulk-pairs',
     // bulkSearchLimiter,
     celebrate({
         body: Joi.object({
