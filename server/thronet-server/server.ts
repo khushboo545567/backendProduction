@@ -48,16 +48,33 @@ async function initializeApp(): Promise<void> {
             nodeVersion: process.version,
         });
 
-        // MongoDB
+        /// MongoDB
         await MongoConnection.connect();
         logger.info('MongoDB connected');
 
-        // Cache (non-blocking)
-        CacheUtil.init().catch((err) => {
+        // Cache — ✅ FIX: ab await kiya, kyunki mutualService.initialize() ko
+        // Redis client ready chahiye. Non-blocking rehne dene se mutualService
+        // race condition mein mock mode mein fix ho sakti thi.
+        try {
+            await CacheUtil.init();
+            logger.info('Cache initialized');
+        } catch (err: any) {
             logger.warn('Cache initialization failed, using in-memory fallback', {
                 error: err.message,
             });
-        });
+        }
+
+        // ✅ FIX: Mutual connections service — Neo4j + Redis se connect karta hai.
+        // Iske bina ye hamesha mock mode mein rehti hai (fake "Mock User 1/2" data).
+        try {
+            const { mutualService } = await import('./src/connections/services/mutual.service');
+            await mutualService.initialize();
+            logger.info('Mutual connections service initialized');
+        } catch (err: any) {
+            logger.warn('Mutual service initialization failed, using mock mode', {
+                error: err.message,
+            });
+        }
 
         // Notification Service
         try {

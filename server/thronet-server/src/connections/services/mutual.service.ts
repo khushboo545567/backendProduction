@@ -503,20 +503,24 @@ export class MutualService {
   private async enrichWithUserProfiles(mutuals: IMutualConnection[]): Promise<IMutualConnection[]> {
     try {
       const userIds = mutuals.map(m => m.userId);
-      const profiles = await userServiceClient.getUsersByIds(userIds);
+      const users = await User.find({ userId: { $in: userIds } })
+        .lean()
+        .select('userId firstName lastName headline avatar company');
+
+      const userMap = new Map(users.map((u: any) => [u.userId, u]));
 
       return mutuals.map(mutual => {
-        const profile = profiles.find((p: any) => p.id === mutual.userId);
+        const profile: any = userMap.get(mutual.userId);
         return {
           ...mutual,
-          name: profile?.name || mutual.name || '',
+          name: profile ? `${profile.firstName || ''} ${profile.lastName || ''}`.trim() : (mutual.name || ''),
           headline: profile?.headline || mutual.headline || '',
-          avatar: profile?.avatarUrl || '',
+          avatar: profile?.avatar || '',
           company: profile?.company || '',
-          profileComplete: Boolean(profile?.name && profile?.headline)
+          profileComplete: Boolean(profile?.firstName && profile?.headline)
         };
       });
-    } catch (error : any) {
+    } catch (error: any) {
       const logMetadata: PublicLogMetadata = {
         error: error instanceof Error ? error.message : String(error)
       };
@@ -586,23 +590,36 @@ export class MutualService {
    * Feature 11: Handle bulk mutual queries
    */
   async handleBulkMutualQueries(pairs: [string, string][]): Promise<Map<string, IMutualConnection[]>> {
-    try {
-      const results = new Map<string, IMutualConnection[]>();
-      for (const [userId1, userId2] of pairs) {
+    const results = new Map<string, IMutualConnection[]>();
+
+    // ✅ FIX: har pair independently — ek pair fail hone se baaki pairs block nahi hote
+    const settled = await Promise.allSettled(
+      pairs.map(async ([userId1, userId2]) => {
         const key = `${userId1}-${userId2}`;
-        results.set(key, await this.findMutualConnections(userId1, userId2));
+        const mutuals = await this.findMutualConnections(userId1, userId2);
+        return { key, mutuals };
+      })
+    );
+
+    settled.forEach((outcome, index) => {
+      const [userId1, userId2] = pairs[index];
+      const key = `${userId1}-${userId2}`;
+      if (outcome.status === 'fulfilled') {
+        results.set(outcome.value.key, outcome.value.mutuals);
+      } else {
+        logger.warn('Skipping failed pair in bulk mutual query', {
+          key,
+          error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+        });
+        results.set(key, []); // safe fallback — ek pair fail hua, empty array de do, poora request mat todo
       }
-      const logMetadata: PublicLogMetadata = { pairCount: pairs.length };
-      logger.info('Bulk mutual queries completed', logMetadata);
-      return results;
-    } catch (error : any) {
-      const logMetadata: PublicLogMetadata = {
-        error: error instanceof Error ? error.message : String(error)
-      };
-      logger.error('Error in bulk mutual queries', logMetadata);
-      throw error;
-    }
+    });
+
+    logger.info('Bulk mutual queries completed', { pairCount: pairs.length, succeeded: settled.filter(s => s.status === 'fulfilled').length });
+    return results;
   }
+
+
 
   /**
    * Feature 12: Search mutual connections with filters
