@@ -3,7 +3,7 @@
  * Architecture: One document per user, posts[] array inside
  *
  * @module services/post.service
- * @version 2.3.0 (reach-based feed + connection status + feed cache invalidation + @mentions)
+ * @version 2.4.0 (+ repostsCount/sendsCount in feed, + recordSend)
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -80,12 +80,10 @@ class PostService {
         try {
             LoggerUtil.info('Creating post', { userId, title: postData.title, correlationId });
 
-            // Step 1: Validate user
             const user = await User.findOne({ userId });
             if (!user) throw new Error('User not found');
             if (user.status !== 'active') throw new Error('User account is not active');
 
-            // Step 2: Validate media counts
             if (images.length > Constants.ACTIVITY_VALIDATION.POST.MAX_IMAGES_PER_POST) {
                 throw new Error(`Maximum ${Constants.ACTIVITY_VALIDATION.POST.MAX_IMAGES_PER_POST} images allowed`);
             }
@@ -96,7 +94,6 @@ class PostService {
                 throw new Error(`Maximum ${Constants.ACTIVITY_VALIDATION.POST.MAX_DOCUMENTS_PER_POST} documents allowed`);
             }
 
-            // Step 2.5: Process Poll Data
             let pollSetup = null;
             if (postData.pollData) {
                 const pollEndsAt = new Date();
@@ -116,7 +113,6 @@ class PostService {
                 };
             }
 
-            // Step 2.6: Process Scheduled Post
             let scheduledSetup: { scheduledFor: Date; isScheduled: boolean } | null = null;
             if (postData.scheduledFor) {
                 const scheduledTime = new Date(postData.scheduledFor);
@@ -127,7 +123,6 @@ class PostService {
                 scheduledSetup = { scheduledFor: scheduledTime, isScheduled: true };
             }
 
-            // Step 2.7: Process Event Data
             let eventSetup = null;
             if (postData.eventData) {
                 const eventStartDateTime = new Date(
@@ -147,10 +142,8 @@ class PostService {
                 };
             }
 
-            // Step 3: Analyze post
             const analysis = await this.analyzePost(postData, userId, images, videos, documents);
 
-            // Step 4: Upload media to Cloudinary
             const uploadedImages = await Promise.all(
                 images.map(async (file) => {
                     const metadata = await sharp(file.buffer).metadata();
@@ -230,7 +223,6 @@ class PostService {
                 })
             );
 
-            // Step 5: Build the new post entry
             const entryId = uuidv4();
             const postUrl = `/posts/${entryId}`;
             const accountType = user.accountType || 'personal';
@@ -249,6 +241,9 @@ class PostService {
 
                 likesCount: 0,
                 commentsCount: 0,
+                // ✅ NEW
+                repostsCount: 0,
+                sendsCount: 0,
                 likedBy: [],
                 isPinned: false,
                 isSaved: false,
@@ -279,7 +274,6 @@ class PostService {
                 isShadowbanned: false,
             };
 
-            // Step 6: Upsert — user ka document dhundo ya naya banao
             let userPostDoc = await Post.findOne({ userId });
 
             if (userPostDoc) {
@@ -298,7 +292,6 @@ class PostService {
                 await userPostDoc.save();
             }
 
-            // Step 7: User stats update
             await User.findOneAndUpdate(
                 { userId },
                 {
@@ -308,13 +301,8 @@ class PostService {
                 { new: true }
             );
 
-            // ✅ Apna khud ka feed cache invalidate karo taaki naya post turant
-            // apni feed mein dikhe (non-blocking — cache clear fail ho to bhi
-            // post-creation flow fail nahi hona chahiye)
             redisService.deleteByPattern(`feed:v1:${userId}:page:*`).catch(() => {});
 
-            // ✅ @mentions — content se mentioned userIds nikalo aur notify karo
-            // Format: @[Display Name](userId) — regex se sirf userId (group 2) extract hota hai
             const mentionRegex = /@\[([^\]]+)\]\(([^)]+)\)/g;
             const mentionedUserIds = [...new Set(
                 Array.from((postData.content || '').matchAll(mentionRegex), m => m[2])
@@ -403,9 +391,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Upload buffer to Cloudinary
-     */
     private static async uploadToCloudinary(
         buffer: Buffer,
         userId: string,
@@ -432,9 +417,6 @@ class PostService {
         });
     }
 
-    /**
-     * ✅ Vote on a poll (entryId se dhundo)
-     */
     static async votePoll(entryId: string, userId: string, optionId: string): Promise<any> {
         const doc = await Post.findOne({ 'posts.entryId': entryId });
         if (!doc) throw new Error('Poll not found');
@@ -458,8 +440,6 @@ class PostService {
 
         await doc.save();
 
-        // ✅ Post-owner ka feed cache invalidate karo — poll vote count feed
-        // score ko bhi affect karta hai
         redisService.deleteByPattern(`feed:v1:${doc.userId}:page:*`).catch(() => {});
 
         return {
@@ -543,20 +523,15 @@ class PostService {
         }
     }
 
-    // ==================== ✅ NEW: FEED SCORING (reach-based, LinkedIn style) ====================
+    // ==================== FEED SCORING (reach-based, LinkedIn style) ====================
 
-    /**
-     * Feed score calculate karta hai — engagement / age-decay + fatigue penalty
-     */
-   private static calculateFeedScore(
+    private static calculateFeedScore(
         post: any,
         currentUserId: string,
         connectionDegree: 1 | 2 | 3 | null = null
     ): number {
         const ageInHours = (Date.now() - new Date(post.createdAt).getTime()) / (1000 * 60 * 60);
 
-        // ✅ FIX: reposts ka likesCount/commentsCount top-level pe nahi hota —
-        // originalPost se fallback lo taaki reposts hamesha 0 score na paayein
         const likes = post.likesCount ?? post.originalPost?.likesCount ?? 0;
         const comments = post.commentsCount ?? post.originalPost?.commentsCount ?? 0;
         const pollVotes = post.pollData?.totalVotes || 0;
@@ -566,7 +541,6 @@ class PostService {
 
         let score = engagementScore / decay;
 
-        // ✅ NEW: Connection degree boost — LinkedIn jaisa, 1st degree ko sabse zyada weight
         if (connectionDegree === 1) score += 40;
         else if (connectionDegree === 2) score += 15;
         else if (connectionDegree === 3) score += 5;
@@ -583,9 +557,6 @@ class PostService {
         return score;
     }
 
-    /**
-     * ✅ Connection status batch fetch — current user vs sab post-authors
-     */
     private static async getConnectionStatusMap(
         currentUserId: string,
         authorIds: string[]
@@ -631,11 +602,6 @@ class PostService {
         return statusMap;
     }
 
-    /**
-     * ✅ Connection DEGREE batch fetch — 1st/2nd/3rd, BFS over the same Connection collection
-     * used by getConnectionStatusMap (Mongo-based, not Neo4j — keeps this consistent
-     * with what's already working for connectionStatus).
-     */
     private static async getConnectionDegreeMap(
         currentUserId: string,
         authorIds: string[]
@@ -736,7 +702,7 @@ class PostService {
             allPosts.push(...entries);
         });
 
-        // ✅ Reposts bhi feed mein merge karo — YAHIN, forEach ke turant baad
+        // ✅ Reposts bhi feed mein merge karo
         const { default: Repost } = await import('@/Profile/models/Repost.model');
         const allReposts = await Repost.find({ isDeleted: false }).lean();
 
@@ -748,7 +714,7 @@ class PostService {
         const originalEntry = originalDoc?.posts.find(
             (p: any) => p.entryId === repost.originalPostEntryId && !p.isDeleted
         );
-        if (!originalEntry || !originalDoc) return null;   // 👈 yahan originalDoc bhi check karo
+        if (!originalEntry || !originalDoc) return null;
 
         authorIds.push(repost.repostedBy);
 
@@ -764,12 +730,17 @@ class PostService {
                 entryId: originalEntry.entryId,
                 title: originalEntry.title,
                 content: originalEntry.content,
-                userId: originalDoc.userId,   // 👈 ab TypeScript ko pata hai yeh defined hai
+                userId: originalDoc.userId,
                 images: originalEntry.images || [],
                 videos: originalEntry.videos || [],
                 documents: originalEntry.documents || [],
                 likesCount: originalEntry.likesCount,
                 commentsCount: originalEntry.commentsCount,
+                // ✅ FIX: yeh do fields missing thi — isi wajah se feed pe
+                // "X reposts" / "X sends" kabhi nahi dikhta tha, kyunki
+                // frontend ko yeh data mil hi nahi raha tha.
+                repostsCount: originalEntry.repostsCount || 0,
+                sendsCount: originalEntry.sendsCount || 0,
                 isLikedByCurrentUser: (originalEntry.likedBy || []).includes(currentUserId),
                 createdAt: originalEntry.createdAt,
             },
@@ -779,9 +750,7 @@ class PostService {
 
         allPosts.push(...repostEntries.filter(Boolean));
 
-        // ── Ab yahan se aage sab same hai ──
-
-       const connectionStatusMap = await this.getConnectionStatusMap(currentUserId, authorIds);
+        const connectionStatusMap = await this.getConnectionStatusMap(currentUserId, authorIds);
         const connectionDegreeMap = await this.getConnectionDegreeMap(currentUserId, authorIds);
 
         allPosts = allPosts.map((post) => {
@@ -822,9 +791,6 @@ class PostService {
     }
 }
 
-    /**
-     * ✅ Get single post entry by entryId
-     */
     static async getPostById(entryId: string, userId: string): Promise<any> {
         const correlationId = uuidv4();
 
@@ -865,9 +831,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Update post entry
-     */
     static async updatePost(
         entryId: string,
         userId: string,
@@ -895,7 +858,6 @@ class PostService {
 
             await doc.save();
 
-            // ✅ Feed cache invalidate — updated title/content feed mein turant reflect ho
             redisService.deleteByPattern(`feed:v1:${userId}:page:*`).catch(() => {});
 
             LoggerUtil.info('Post updated successfully', { entryId, userId, correlationId });
@@ -912,9 +874,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Delete post entry (soft or permanent)
-     */
     static async deletePost(
         entryId: string,
         userId: string,
@@ -950,7 +909,6 @@ class PostService {
                 doc.totalPosts = Math.max(0, doc.totalPosts - 1);
                 await doc.save();
 
-                // ✅ Feed cache invalidate — deleted post feed se turant hat jaye
                 redisService.deleteByPattern(`feed:v1:${userId}:page:*`).catch(() => {});
 
                 LoggerUtil.info('Post permanently deleted', { entryId, userId, correlationId });
@@ -960,7 +918,6 @@ class PostService {
                 entry.deletedAt = new Date();
                 await doc.save();
 
-                // ✅ Feed cache invalidate
                 redisService.deleteByPattern(`feed:v1:${userId}:page:*`).catch(() => {});
 
                 LoggerUtil.info('Post soft deleted', { entryId, userId, correlationId });
@@ -973,9 +930,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Archive post entry
-     */
     static async archivePost(entryId: string, userId: string): Promise<any> {
         const correlationId = uuidv4();
 
@@ -993,7 +947,6 @@ class PostService {
             entry.archivedAt = new Date();
             await doc.save();
 
-            // ✅ Feed cache invalidate — archived post feed se turant hat jaye
             redisService.deleteByPattern(`feed:v1:${doc.userId}:page:*`).catch(() => {});
 
             LoggerUtil.info('Post archived', { entryId, userId, correlationId });
@@ -1011,9 +964,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Restore post entry (archived or soft-deleted)
-     */
     static async restorePost(entryId: string, userId: string): Promise<any> {
         const correlationId = uuidv4();
 
@@ -1030,7 +980,6 @@ class PostService {
             entry.deletedAt = undefined;
             await doc.save();
 
-            // ✅ Feed cache invalidate — restored post feed mein turant wapas aa jaye
             redisService.deleteByPattern(`feed:v1:${userId}:page:*`).catch(() => {});
 
             LoggerUtil.info('Post restored', { entryId, userId, correlationId });
@@ -1048,9 +997,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Pin/Unpin post entry
-     */
     static async pinPost(entryId: string, userId: string, isPinned: boolean): Promise<any> {
         const correlationId = uuidv4();
 
@@ -1072,9 +1018,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Save/Unsave post entry
-     */
     static async savePost(entryId: string, userId: string, isSaved: boolean): Promise<any> {
         const correlationId = uuidv4();
 
@@ -1096,9 +1039,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Get recent posts performance for a user
-     */
     static async getRecentPostsPerformance(userId: string, limit: number = 10): Promise<any> {
         const correlationId = uuidv4();
 
@@ -1174,9 +1114,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Track post view analytics
-     */
     static async trackPostView(
         entryId: string,
         userId: string,
@@ -1233,16 +1170,12 @@ class PostService {
         }
     }
 
-    /* Changed Modified
-     * ✅ Like a post entry
-     */
-   static async likePost(entryId: string, userId: string): Promise<any> {
+    static async likePost(entryId: string, userId: string): Promise<any> {
     const correlationId = uuidv4();
 
     try {
         LoggerUtil.info('Liking post', { entryId, userId, correlationId });
 
-        // ✅ Need the post owner before incrementing, to know who to notify
         const doc = await Post.findOne({ 'posts.entryId': entryId });
         if (!doc) throw new Error('Post not found');
 
@@ -1251,15 +1184,10 @@ class PostService {
 
         const entry = await Post.incrementLikes(entryId, userId);
 
-        // ✅ Post-owner ka feed cache invalidate karo taaki nayi like count
-        // unki apni feed refresh pe turant dikhe. Baaki users ka cache 3-min
-        // TTL se apne aap expire ho jayega — poore platform-wide invalidation
-        // avoid kiya kyunki wo bahut expensive hoga har single like pe.
         if (postOwnerId) {
             redisService.deleteByPattern(`feed:v1:${postOwnerId}:page:*`).catch(() => {});
         }
 
-        // ✅ Notify the post owner — but not if they liked their own post
         if (postOwnerId && postOwnerId !== userId) {
             setImmediate(async () => {
                 try {
@@ -1275,8 +1203,6 @@ class PostService {
                 }
             });
 
-
-            // ✅ NEW: Record engagement for analytics
             setImmediate(async () => {
                 try {
                     await AnalyticsService.recordEngagement(postOwnerId, {
@@ -1309,22 +1235,17 @@ class PostService {
     }
 }
 
-    /**
-     * ✅ Unlike a post entry
-     */
     static async unlikePost(entryId: string, userId: string): Promise<any> {
         const correlationId = uuidv4();
 
         try {
             LoggerUtil.info('Unliking post', { entryId, userId, correlationId });
 
-            // ✅ Post owner nikalne ke liye pehle doc dhoondo (cache invalidation ke liye)
             const doc = await Post.findOne({ 'posts.entryId': entryId });
             const postOwnerId = doc?.userId;
 
             const entry = await Post.decrementLikes(entryId, userId);
 
-            // ✅ Post-owner ka feed cache invalidate
             if (postOwnerId) {
                 redisService.deleteByPattern(`feed:v1:${postOwnerId}:page:*`).catch(() => {});
             }
@@ -1348,9 +1269,7 @@ class PostService {
             throw error;
         }
     }
-    /**
-     * ✅ React to a post (like/celebrate/support/love/insightful/funny)
-     */
+
     static async reactToPost(entryId: string, userId: string, type: string): Promise<any> {
         const correlationId = uuidv4();
         const validTypes = ['like', 'celebrate', 'support', 'love', 'insightful', 'funny'];
@@ -1369,12 +1288,10 @@ class PostService {
 
             const entry = await Post.addReaction(entryId, userId, type as any);
 
-            // ✅ Post-owner ka feed cache invalidate karo
             if (postOwnerId) {
                 redisService.deleteByPattern(`feed:v1:${postOwnerId}:page:*`).catch(() => {});
             }
 
-            // Notify post owner (skip self-reactions)
             if (postOwnerId && postOwnerId !== userId) {
                 setImmediate(async () => {
                     try {
@@ -1402,22 +1319,17 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Remove reaction from a post
-     */
     static async removeReaction(entryId: string, userId: string): Promise<any> {
         const correlationId = uuidv4();
 
         try {
             LoggerUtil.info('Removing reaction', { entryId, userId, correlationId });
 
-            // ✅ Post owner nikalne ke liye pehle doc dhoondo (cache invalidation ke liye)
             const doc = await Post.findOne({ 'posts.entryId': entryId });
             const postOwnerId = doc?.userId;
 
             const entry = await Post.removeReaction(entryId, userId);
 
-            // ✅ Post-owner ka feed cache invalidate karo
             if (postOwnerId) {
                 redisService.deleteByPattern(`feed:v1:${postOwnerId}:page:*`).catch(() => {});
             }
@@ -1437,11 +1349,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ Get all posts a user has reacted to (for "Reactions" activity tab)
-     * Scans ALL Post documents (all users), finds entries where this userId
-     * has a reaction, returns those post entries grouped with reaction type.
-     */
     static async getUserReactions(userId: string): Promise<any> {
         const correlationId = uuidv4();
 
@@ -1468,9 +1375,9 @@ class PostService {
                         likesCount: entry.likesCount,
                         commentsCount: entry.commentsCount,
                         reactionCounts: entry.reactionCounts || {},
-                        userId: doc.userId,          // post owner
+                        userId: doc.userId,
                         createdAt: entry.createdAt,
-                        reactionType: userReaction.type,   // ✅ jo type is user ne diya
+                        reactionType: userReaction.type,
                         reactedAt: userReaction.reactedAt,
                     });
                 });
@@ -1488,13 +1395,6 @@ class PostService {
         }
     }
 
-    /**
-     * ✅ NEW: Get everyone who reacted to a specific post (for Reactions modal)
-     * Merges the full `reactions[]` array (multi-type) with legacy `likedBy[]`
-     * (users who liked via the old simple like endpoint before reactions
-     * existed, or liked without ever hitting the /react endpoint) so no
-     * likers are missed.
-     */
     static async getPostReactors(entryId: string): Promise<any> {
         const correlationId = uuidv4();
 
@@ -1510,7 +1410,6 @@ class PostService {
             const reactions = entry.reactions || [];
             const reactedUserIds = new Set(reactions.map((r: any) => r.userId));
 
-            // ✅ Merge: reactions[] (has real type) + likedBy fallback (type='like')
             const merged = [...reactions];
             (entry.likedBy || []).forEach((uid: string) => {
                 if (!reactedUserIds.has(uid)) {
@@ -1527,7 +1426,7 @@ class PostService {
             return {
                 total: merged.length,
                 countsByType: entry.reactionCounts || {},
-                reactions: merged, // [{ userId, type, reactedAt }]
+                reactions: merged,
             };
 
         } catch (error: any) {
@@ -1535,6 +1434,44 @@ class PostService {
             throw error;
         }
     }
+
+    /**
+     * ✅ NEW: Record a "send" event — called when the SendPostModal sends a
+     * post link to one or more connections via chat. `recipientCount` is how
+     * many people it was sent to in this single action (so sending to 5
+     * people at once bumps sendsCount by 5, matching "total sent count").
+     */
+    static async recordSend(entryId: string, userId: string, recipientCount: number = 1): Promise<any> {
+        const correlationId = uuidv4();
+
+        try {
+            LoggerUtil.info('Recording post send', { entryId, userId, recipientCount, correlationId });
+
+            const doc = await Post.findOne({ 'posts.entryId': entryId });
+            if (!doc) throw new Error('Post not found');
+
+            const entry = await Post.incrementSendsCount(entryId, recipientCount);
+
+            // Post-owner feed cache invalidate — naya sendsCount unki apni
+            // feed pe turant dikhe
+            redisService.deleteByPattern(`feed:v1:${doc.userId}:page:*`).catch(() => {});
+
+            LoggerUtil.info('Post send recorded successfully', {
+                entryId, sendsCount: entry.sendsCount, correlationId,
+            });
+
+            return {
+                entryId: entry.entryId,
+                sendsCount: entry.sendsCount,
+                message: 'Send recorded successfully',
+            };
+
+        } catch (error: any) {
+            LoggerUtil.error('Record send failed', { error: error.message, entryId, userId, correlationId });
+            throw error;
+        }
+    }
+
     // ==================== PRIVATE HELPERS ====================
 
     private static async analyzePost(

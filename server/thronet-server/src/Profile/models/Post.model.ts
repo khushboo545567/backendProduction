@@ -1,7 +1,7 @@
 ﻿/**
  * Post Model - Activity System
  * @module models/Post.model
- * @version 1.1.0 (added multi-type reactions: like/celebrate/support/love/insightful/funny)
+ * @version 1.2.0 (added repostsCount/sendsCount + incrementSendsCount static)
  */
 
 import mongoose, { Schema, Document, Model } from 'mongoose';
@@ -42,6 +42,8 @@ export interface IPostEntry {
     documents: IMediaItem[];
     likesCount: number;
     commentsCount: number;
+    repostsCount: number;   // ✅ ADDED
+    sendsCount: number;     // ✅ ADDED
     likedBy: string[];
     // ✅ ADDED: reactions live alongside likedBy/likesCount (kept in sync
     // for 'like' type so existing like button / likesCount stays working)
@@ -167,6 +169,7 @@ export interface IPostModel extends Model<IPost> {
     decrementLikes(entryId: string, userId: string): Promise<IPostEntry>;
     incrementComments(entryId: string): Promise<IPostEntry>;
     decrementComments(entryId: string): Promise<IPostEntry>;
+    incrementSendsCount(entryId: string, count: number): Promise<IPostEntry>;   // ✅ ADDED
     // ✅ ADDED: reaction statics
     addReaction(entryId: string, userId: string, type: ReactionType): Promise<IPostEntry>;
     removeReaction(entryId: string, userId: string): Promise<IPostEntry>;
@@ -218,6 +221,8 @@ const PostEntrySchema = new Schema<IPostEntry>(
         documents: { type: [MediaItemSchema], default: undefined },
         likesCount: { type: Number, default: 0, min: 0 },
         commentsCount: { type: Number, default: 0, min: 0 },
+        repostsCount: { type: Number, default: 0, min: 0 },   // ✅ ADDED
+        sendsCount: { type: Number, default: 0, min: 0 },     // ✅ ADDED
         likedBy: [{ type: String }],
         // ✅ ADDED: Reactions system (parallel to likedBy — kept in sync for
         // 'like' type only, so the existing single-like button and
@@ -519,6 +524,20 @@ PostSchema.statics.decrementComments = async function (entryId: string): Promise
     const entry = doc.posts.find((p: IPostEntry) => p.entryId === entryId && !p.isDeleted);
     if (!entry) throw new Error('Post entry not found');
     entry.commentsCount = Math.max(0, entry.commentsCount - 1);
+    await doc.save();
+    return entry;
+};
+
+// ✅ ADDED: increment sendsCount by `count` (batched send to multiple recipients)
+PostSchema.statics.incrementSendsCount = async function (
+    entryId: string,
+    count: number
+): Promise<IPostEntry> {
+    const doc = await this.findOne({ 'posts.entryId': entryId });
+    if (!doc) throw new Error('Post not found');
+    const entry = doc.posts.find((p: IPostEntry) => p.entryId === entryId && !p.isDeleted);
+    if (!entry) throw new Error('Post entry not found');
+    entry.sendsCount = (entry.sendsCount || 0) + count;
     await doc.save();
     return entry;
 };

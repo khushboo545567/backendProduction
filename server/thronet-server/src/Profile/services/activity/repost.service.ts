@@ -66,6 +66,13 @@ class RepostService {
                 { $inc: { 'activityStats.totalReposts': 1 } }
             );
 
+            // ✅ FIX: yeh missing tha — originalEntry.repostsCount kabhi
+            // increment hi nahi ho raha tha, isliye feed pe repost count
+            // kabhi dikhta hi nahi tha. Same document (originalDoc) pe
+            // mutate + save karo taaki subdocument change persist ho.
+            originalEntry.repostsCount = (originalEntry.repostsCount || 0) + 1;
+            await originalDoc.save();
+
             try {
                 await AnalyticsService.recordShare(originalDoc.userId, {
                     postId: originalPostEntryId,
@@ -81,6 +88,12 @@ class RepostService {
 
             try {
                 await redisService.deleteByPattern(`feed:v1:${repostedBy}:page:*`);
+                // ✅ FIX: original post owner ka feed cache bhi invalidate
+                // karo — unki feed pe bhi naya repostsCount turant dikhna
+                // chahiye, na ki 3-min TTL expire hone ka wait
+                if (originalDoc.userId !== repostedBy) {
+                    await redisService.deleteByPattern(`feed:v1:${originalDoc.userId}:page:*`);
+                }
             } catch (cacheError: any) {
                 LoggerUtil.warn('Feed cache invalidation failed after repost (non-critical)', {
                     error: cacheError.message,
@@ -108,6 +121,9 @@ class RepostService {
                         documents: originalEntry.documents || [],
                         likesCount: originalEntry.likesCount,
                         commentsCount: originalEntry.commentsCount,
+                        // ✅ NEW
+                        repostsCount: originalEntry.repostsCount || 0,
+                        sendsCount: originalEntry.sendsCount || 0,
                         isLikedByCurrentUser: originalEntry.likedBy?.includes(repostedBy) || false,
                         createdAt: originalEntry.createdAt,
                     },
@@ -134,6 +150,7 @@ class RepostService {
                 thoughtText: repost.thoughtText,
                 visibility: repost.visibility,
                 createdAt: repost.createdAt,
+                repostsCount: originalEntry.repostsCount,
                 message: repostType === 'quote'
                     ? 'Quote repost created successfully'
                     : 'Repost created successfully',
@@ -167,8 +184,28 @@ class RepostService {
                 { $inc: { 'activityStats.totalReposts': -1 } }
             );
 
+            // ✅ FIX: matching decrement — repostsCount originally increment
+            // hota hi nahi tha, ab delete pe symmetric decrement bhi hai
+            try {
+                const originalDoc = await Post.findOne({ 'posts.entryId': repost.originalPostEntryId });
+                if (originalDoc) {
+                    const originalEntry = originalDoc.posts.find(
+                        (p: IPostEntry) => p.entryId === repost.originalPostEntryId
+                    );
+                    if (originalEntry) {
+                        originalEntry.repostsCount = Math.max(0, (originalEntry.repostsCount || 0) - 1);
+                        await originalDoc.save();
+                    }
+                }
+            } catch (decErr: any) {
+                LoggerUtil.warn('repostsCount decrement failed (non-critical)', { error: decErr.message, repostId });
+            }
+
             try {
                 await redisService.deleteByPattern(`feed:v1:${userId}:page:*`);
+                if (repost.originalPostOwnerId !== userId) {
+                    await redisService.deleteByPattern(`feed:v1:${repost.originalPostOwnerId}:page:*`);
+                }
             } catch (cacheError: any) {
                 LoggerUtil.warn('Feed cache invalidation failed after repost delete (non-critical)', {
                     error: cacheError.message,
@@ -208,11 +245,6 @@ class RepostService {
 
     /**
      * ✅ Get user's reposts (for profile page)
-     * ✅ FIX: viewerId add kiya — quote-repost ka isLikedByCurrentUser ab
-     * actual dekhne wale user ke against calculate hota hai. Har repost type
-     * ke hisaab se sahi likesCount/isLikedByCurrentUser attach hota hai:
-     *  - 'repost' (simple): sirf original post ka data
-     *  - 'quote': repost ka apna independent likesCount/likedBy
      */
     static async getUserReposts(profileUserId: string, viewerId?: string): Promise<any> {
         try {
@@ -238,7 +270,6 @@ class RepostService {
                         thoughtText: repost.thoughtText,
                         repostedBy: repost.repostedBy,
                         createdAt: repost.createdAt,
-                        // ✅ NEW: sirf quote-repost ke liye apna independent like data
                         likesCount: repost.repostType === 'quote' ? repost.likesCount : 0,
                         isLikedByCurrentUser: repost.repostType === 'quote'
                             ? repost.likedBy.includes(effectiveViewerId)
@@ -254,9 +285,10 @@ class RepostService {
                                 documents: originalEntry.documents,
                                 likesCount: originalEntry.likesCount,
                                 commentsCount: originalEntry.commentsCount,
+                                // ✅ NEW
+                                repostsCount: originalEntry.repostsCount || 0,
+                                sendsCount: originalEntry.sendsCount || 0,
                                 createdAt: originalEntry.createdAt,
-                                // ✅ FIX: simple repost ke liye yeh field zaroori hai
-                                // taaki purana like state (jo already tha) sahi dikhe
                                 isLikedByCurrentUser: originalEntry.likedBy?.includes(effectiveViewerId) || false,
                             }
                             : null,
@@ -324,7 +356,6 @@ class RepostService {
                         thoughtText: repost.thoughtText || null,
                         repostedBy: repost.repostedBy,
                         createdAt: repost.createdAt,
-                        // ✅ NEW
                         likesCount: repost.repostType === 'quote' ? repost.likesCount : 0,
                         isLikedByCurrentUser: repost.repostType === 'quote'
                             ? repost.likedBy.includes(currentUserId)
@@ -339,6 +370,9 @@ class RepostService {
                             documents: originalEntry.documents || [],
                             likesCount: originalEntry.likesCount,
                             commentsCount: originalEntry.commentsCount,
+                            // ✅ NEW
+                            repostsCount: originalEntry.repostsCount || 0,
+                            sendsCount: originalEntry.sendsCount || 0,
                             isLikedByCurrentUser: originalEntry.likedBy?.includes(currentUserId) || false,
                             createdAt: originalEntry.createdAt,
                         },
@@ -358,7 +392,7 @@ class RepostService {
     }
 
     /**
-     * ✅ NEW: Like a quote-repost (independent like system, sirf quote type ke liye)
+     * ✅ Like a quote-repost (independent like system, sirf quote type ke liye)
      */
     static async likeRepost(repostId: string, userId: string): Promise<any> {
         const repost = await Repost.findOne({ repostId, isDeleted: false });
@@ -382,7 +416,7 @@ class RepostService {
     }
 
     /**
-     * ✅ NEW: Unlike a quote-repost
+     * ✅ Unlike a quote-repost
      */
     static async unlikeRepost(repostId: string, userId: string): Promise<any> {
         const repost = await Repost.findOne({ repostId, isDeleted: false });
