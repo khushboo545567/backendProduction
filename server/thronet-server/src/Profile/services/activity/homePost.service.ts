@@ -664,6 +664,8 @@ class HomePostService {
                             documents: originalEntry.documents || [],
                             likesCount: originalEntry.likesCount,
                             commentsCount: originalEntry.commentsCount,
+                            repostsCount: originalEntry.repostsCount || 0,   // ✅ FIX: missing tha
+                            sendsCount: originalEntry.sendsCount || 0,       // ✅ FIX: missing tha
                             isLikedByCurrentUser: (originalEntry.likedBy || []).includes(currentUserId),
                             createdAt: originalEntry.createdAt,
                             analytics: originalEntry.analytics || null, // ✅ NEW: dwell time score ke liye chahiye
