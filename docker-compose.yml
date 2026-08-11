@@ -1,4 +1,5 @@
 services:
+
   redis-node-1:
     image: redis:7.2-alpine
     container_name: redis-node-1
@@ -7,11 +8,24 @@ services:
       - "7001:7001"
       - "17001:17001"
     command: >
-      redis-server --port 7001 --cluster-enabled yes --cluster-config-file /data/nodes-7001.conf --cluster-node-timeout 5000 --cluster-announce-port 7001 --cluster-announce-bus-port 17001 --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --protected-mode no --bind 0.0.0.0 --loglevel notice --save "" --requirepass ${REDIS_PASSWORD}
+      redis-server --port 7001
+      --cluster-enabled yes
+      --cluster-config-file /data/nodes-7001.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 7001
+      --cluster-announce-bus-port 17001
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --protected-mode no
+      --bind 0.0.0.0
+      --loglevel notice
+      --save ""
+      --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis-1-data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "-p", "7001", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping" ]
+      test: ["CMD", "redis-cli", "-p", "7001", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -35,11 +49,24 @@ services:
       - "7002:7002"
       - "17002:17002"
     command: >
-     redis-server --port 7002 --cluster-enabled yes --cluster-config-file /data/nodes-7002.conf --cluster-node-timeout 5000 --cluster-announce-port 7002 --cluster-announce-bus-port 17002 --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --protected-mode no --bind 0.0.0.0 --loglevel notice --save "" --requirepass ${REDIS_PASSWORD}
+      redis-server --port 7002
+      --cluster-enabled yes
+      --cluster-config-file /data/nodes-7002.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 7002
+      --cluster-announce-bus-port 17002
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --protected-mode no
+      --bind 0.0.0.0
+      --loglevel notice
+      --save ""
+      --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis-2-data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "-p", "7002", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping" ]
+      test: ["CMD", "redis-cli", "-p", "7002", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -63,11 +90,24 @@ services:
       - "7003:7003"
       - "17003:17003"
     command: >
-      redis-server --port 7003 --cluster-enabled yes --cluster-config-file /data/nodes-7003.conf --cluster-node-timeout 5000 --cluster-announce-port 7003 --cluster-announce-bus-port 17003 --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --protected-mode no --bind 0.0.0.0 --loglevel notice --save "" --requirepass ${REDIS_PASSWORD}
+      redis-server --port 7003
+      --cluster-enabled yes
+      --cluster-config-file /data/nodes-7003.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 7003
+      --cluster-announce-bus-port 17003
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --protected-mode no
+      --bind 0.0.0.0
+      --loglevel notice
+      --save ""
+      --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis-3-data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "-p", "7003", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping" ]
+      test: ["CMD", "redis-cli", "-p", "7003", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -86,33 +126,33 @@ services:
   redis-cluster-init:
     image: redis:7.2-alpine
     container_name: redis-cluster-init
-    entrypoint: [ "/bin/sh" ]
+    entrypoint: ["/bin/sh"]
     environment:
-      - REDISCLI_AUTH=${REDIS_PASSWORD}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     command:
       - -c
       - |
-        echo "⏳ Waiting for Redis nodes to be ready..."
+        echo "Waiting for Redis nodes to be ready..."
         sleep 10
 
         for i in 1 2 3 4 5; do
           if redis-cli -h redis-node-1 -p 7001 --no-auth-warning ping && \
              redis-cli -h redis-node-2 -p 7002 --no-auth-warning ping && \
              redis-cli -h redis-node-3 -p 7003 --no-auth-warning ping; then
-            echo "✅ All 3 Redis nodes are responding"
+            echo "All 3 Redis nodes are responding"
             break
           fi
-          echo "⏳ Attempt $$i: Waiting for nodes..."
+          echo "Attempt $$i: Waiting for nodes..."
           sleep 5
         done
 
         if redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster info 2>/dev/null | grep -q "cluster_state:ok"; then
-          echo "✅ Redis cluster already exists and is healthy"
+          echo "Redis cluster already exists and is healthy"
           redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster nodes
           exit 0
         fi
 
-        echo "🔧 Creating Redis 3-node cluster..."
+        echo "Creating Redis 3-node cluster..."
         redis-cli --no-auth-warning --cluster create \
           redis-node-1:7001 \
           redis-node-2:7002 \
@@ -121,15 +161,14 @@ services:
           --cluster-yes
 
         if [ $? -eq 0 ]; then
-          echo "✅ Redis cluster created successfully"
+          echo "Redis cluster created successfully"
           sleep 3
-          echo "📊 Cluster Info:"
+          echo "Cluster Info:"
           redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster info
-          echo ""
-          echo "📋 Cluster Nodes:"
+          echo "Cluster Nodes:"
           redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster nodes
         else
-          echo "❌ Cluster creation failed!"
+          echo "Cluster creation failed!"
           exit 1
         fi
     depends_on:
@@ -142,8 +181,6 @@ services:
     networks:
       - app-network
     restart: "no"
-
-  # ==================== THRONET SERVER ====================  
 
   thronet-server:
     build:
@@ -162,12 +199,13 @@ services:
     volumes:
       - ./server/thronet-server/src:/app/src:ro
       - ./server/thronet-server/server.ts:/app/server.ts:ro
-      - server_logs:/app/logs          # ⬅ CHANGED: named volume instead of ./logs bind mount
+      - server_logs:/app/logs
       - /app/node_modules
 
-    command: npm run dev
+    command: ["npx", "tsx", "server.ts"]
+
     healthcheck:
-      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:4000/api/v1/health || exit 1" ]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:4000/api/v1/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -210,7 +248,7 @@ services:
       - app-network
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health" ]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -230,5 +268,5 @@ volumes:
     driver: local
   redis-3-data:
     driver: local
-  server_logs:                          # ⬅ ADDED: named volume for winston logs
+  server_logs:
     driver: local

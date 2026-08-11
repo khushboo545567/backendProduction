@@ -4,8 +4,95 @@ import { getIO } from '@/socket';
 import { LoggerUtil as logger } from '@/shared/logger.util';
 import Connection from '@/connections/models/Connection';
 import User from '@/auth/models/User.model';
+import { Follow } from '@/connections/models/Follow';
 
 class NotificationService {
+
+    /**
+     * Called after a post is created.
+     * Finds all followers of the poster and sends them a real-time notification.
+     */
+    static async notifyFollowersOnPost(
+        posterId: string,
+        entryId: string,
+        postTitle: string
+    ): Promise<void> {
+        try {
+            // 1. Get poster's profile
+            const poster = await User.findOne({ userId: posterId }).select('firstName lastName profilePhotoId').lean();
+            if (!poster) return;
+
+            const posterName = `${poster.firstName} ${poster.lastName || ''}`.trim();
+            const posterPhoto = (poster as any).profilePhotoId || null;
+
+            // 2. Get all active followers of the poster
+            const followers = await Follow.find({
+                followingId: posterId,
+                status: 'active',
+                isBlocked: false,
+            }).select('followerId').lean();
+
+            if (!followers.length) return;
+
+            // 3. Extract follower user IDs
+            const recipientIds = followers.map((f: any) => f.followerId);
+
+            const message = `${posterName} created a new post.`;
+
+            // 4. Bulk insert notifications into DB
+            const docs = recipientIds.map((recipientId: string) => ({
+                notificationId: uuidv4(),
+                recipientId,
+                senderId: posterId,
+                senderName: posterName,
+                senderPhoto: posterPhoto,
+                type: 'post_created' as const,
+                entityId: entryId,
+                entityType: 'post' as const,
+                message,
+                isRead: false,
+            }));
+
+            await Notification.insertMany(docs, { ordered: false });
+
+            // 5. Emit real-time events via Socket.IO
+            try {
+                const io = getIO();
+                recipientIds.forEach((recipientId: string) => {
+                    const payload = {
+                        notificationId: docs.find((d: any) => d.recipientId === recipientId)?.notificationId,
+                        type: 'post_created',
+                        senderId: posterId,
+                        senderName: posterName,
+                        senderPhoto: posterPhoto,
+                        entityId: entryId,
+                        entityType: 'post',
+                        message,
+                        isRead: false,
+                        createdAt: new Date().toISOString(),
+                    };
+                    io.to(`user:${recipientId}`).emit('notification:new', payload);
+                });
+            } catch (socketErr) {
+                // Socket not critical — DB record already saved
+                logger.warn('Socket emit failed for follower post notifications', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Follower post notifications sent', {
+                posterId,
+                entryId,
+                recipientCount: recipientIds.length,
+            });
+        } catch (err) {
+            logger.error('notifyFollowersOnPost failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                posterId,
+                entryId,
+            });
+        }
+    }
 
     /**
      * Called after a post is created.

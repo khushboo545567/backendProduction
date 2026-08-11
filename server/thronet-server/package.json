@@ -137,7 +137,7 @@
     "@types/kafkajs": "^1.8.2",
     "@types/luxon": "^3.7.1",
     "@types/multer": "^2.0.0",
-    "@types/node": "^22.19.3",
+    "@types/node": "^22.20.1",
     "@types/node-geocoder": "^4.2.6",
     "@types/nodemailer": "^7.0.4",
     "@types/opossum": "^8.1.9",
