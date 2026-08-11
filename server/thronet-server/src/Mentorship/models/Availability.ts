@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 interface SlotType {
@@ -60,6 +60,7 @@ const AvailabilitySchema = new Schema<AvailabilityDocument>(
       type: String,
       required: true,
       unique: true,
+      index: true,
       default: () => uuidv4(),
       validate: {
         validator: (v: string) =>
@@ -70,10 +71,12 @@ const AvailabilitySchema = new Schema<AvailabilityDocument>(
     mentorId: {
       type: String,
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     date: {
       type: Date,
       required: [true, 'Date is required'],
+      index: true,
     },
     slots: { type: [SlotSchema], required: true },
     dayOfWeek: {
@@ -89,7 +92,7 @@ const AvailabilitySchema = new Schema<AvailabilityDocument>(
       default: 'UTC',
     },
     overrideReason: String,
-    isDeleted: { type: Boolean, default: false },
+    isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date },
   },
   {

@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START package.routes.ts');
 // src/routes/package.routes.ts
 import express from 'express';
 import {
@@ -124,5 +123,3 @@ router.put(
 );
 
 export default router;
-console.log('TRACE_END package.routes.ts');
-

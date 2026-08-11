@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IPortfolioProject {
   title: string;
@@ -92,6 +92,7 @@ const PortfolioSchema = new Schema<PortfolioDocument>(
     userId: {
       type: String,
       required: [true, 'User ID is required'],
+      index: true,
     },
     portfolioUrl: {
       type: String,
@@ -109,9 +110,11 @@ const PortfolioSchema = new Schema<PortfolioDocument>(
       type: String,
       enum: ['pending_review', 'under_review', 'reviewed', 'archived'],
       default: 'pending_review',
+      index: true,
     },
     sessionId: {
       type: String,
+      index: true,
     },
     analysis: PortfolioAnalysisSchema,
     mentorFeedback: {

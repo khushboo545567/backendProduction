@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START search.routes.ts');
 import { Router } from 'express';
 import { searchController } from '@/shared/controllers/index.controllers';
 import { rateLimitSearch } from '@/Mentorship/middlewares/rateLimit.middleware';
@@ -76,5 +75,3 @@ router.post(
 );
 
 export default router;
-console.log('TRACE_END search.routes.ts');
-

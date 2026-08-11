@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 export enum PackageType {
@@ -69,12 +69,14 @@ const PackageSchema = new Schema<IPackage>(
       type: String,
       required: true,
       unique: true,
+      index: true,
       default: () => uuidv4(),
     },
     packageType: {
       type: String,
       enum: Object.values(PackageType),
       required: [true, 'Package type is required'],
+      index: true,
     },
     name: {
       type: String,
@@ -111,15 +113,16 @@ const PackageSchema = new Schema<IPackage>(
       min: [1, 'Validity must be at least 1 day'],
       default: 180,
     },
-    expiresAt: { type: Date }, // set by pre-save
+    expiresAt: { type: Date, index: true }, // set by pre-save
     status: {
       type: String,
       enum: Object.values(PackageStatus),
       default: PackageStatus.ACTIVE,
+      index: true,
     },
     features: [{ type: String, trim: true }],
-    userId:   { type: String, required: [true, 'User ID is required'] },
-    mentorId: { type: String },
+    userId:   { type: String, required: [true, 'User ID is required'], index: true },
+    mentorId: { type: String, index: true },
     payment: {
       transactionId: String,
       paymentMethod: { type: String, required: true },

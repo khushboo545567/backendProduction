@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { Domain } from '@/shared/constants/domains';
 import { ExperienceLevel, IMentor, MentorStatus } from '@/Mentorship/interface/mentor.types';
@@ -11,6 +11,7 @@ const MentorSchema = new Schema<MentorDocument>(
       type: String,
       required: true,
       unique: true,
+      index: true,
       default: () => uuidv4(),
       validate: {
         validator: (v: string) =>
@@ -22,14 +23,17 @@ const MentorSchema = new Schema<MentorDocument>(
       type: String,
       required: [true, 'User ID is required'],
       unique: true,
+      index: true,
     },
     profilePic: { type: String, trim: true },
+    bannerImage: { type: String, trim: true },
     cloudinaryPublicId: { type: String, trim: true },
-    companyId: { type: String },
+    companyId: { type: String, index: true },
     status: {
       type: String,
       enum: Object.values(MentorStatus),
       default: MentorStatus.PENDING_APPROVAL,
+      index: true,
     },
     title: {
       type: String,
@@ -57,6 +61,7 @@ const MentorSchema = new Schema<MentorDocument>(
         validator: (v: string[]) => v.length > 0 && v.length <= 5,
         message: 'Must have 1-5 domains',
       },
+      index: true,
     },
     skills: {
       type: [String],
@@ -141,11 +146,28 @@ const MentorSchema = new Schema<MentorDocument>(
       verificationDocuments:[String],
     },
     featured: {
-      isFeatured:    { type: Boolean, default: false },
+      isFeatured:    { type: Boolean, default: false, index: true },
       featuredUntil: { type: Date },
       featuredOrder: { type: Number, default: 0 },
     },
-    isDeleted: { type: Boolean, default: false },
+    trustScore: {
+      overall: { type: Number, default: 0 },
+      breakdown: {
+        profileCompleteness: { type: Number, default: 0 },
+        reliability: { type: Number, default: 0 },
+        studentSatisfaction: { type: Number, default: 0 },
+        engagement: { type: Number, default: 0 }
+      },
+      metrics: {
+        totalCompletedSessions: { type: Number, default: 0 },
+        totalCancelledSessions: { type: Number, default: 0 },
+        averageRating: { type: Number, default: 0 },
+        reviewCount: { type: Number, default: 0 }
+      },
+      version: { type: String, default: "1.0" },
+      lastCalculatedAt: { type: Date }
+    },
+    isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date },
   },
   {

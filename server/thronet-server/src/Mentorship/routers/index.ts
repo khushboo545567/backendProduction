@@ -1,5 +1,3 @@
-console.log('🔍 Mentorship/routers/index.ts LOADING START');
-
 // src/routes/index.ts
 import { Router } from 'express';
 import ReminderCron from '@/jobs/reminderCron';
@@ -62,5 +60,3 @@ router.use('/admin', adminRoutes);
 router.use('/notifications', notificationRoutes);
 
 export default router;
-
-console.log('🔍 Mentorship/routers/index.ts LOADING END');
