@@ -32,26 +32,32 @@ class NotificationService {
                 isBlocked: false,
             }).select('followerId').lean();
 
+            console.log(`[NOTIF DEBUG] Found ${followers.length} followers for posterId ${posterId}`);
+
             if (!followers.length) return;
 
             // 3. Extract follower user IDs
             const recipientIds = followers.map((f: any) => f.followerId);
+            console.log(`[NOTIF DEBUG] recipientIds:`, recipientIds);
 
             const message = `${posterName} created a new post.`;
 
             // 4. Bulk insert notifications into DB
-            const docs = recipientIds.map((recipientId: string) => ({
-                notificationId: uuidv4(),
-                recipientId,
-                senderId: posterId,
-                senderName: posterName,
-                senderPhoto: posterPhoto,
-                type: 'post_created' as const,
-                entityId: entryId,
-                entityType: 'post' as const,
-                message,
-                isRead: false,
-            }));
+            const docs = recipientIds.map((recipientId: string) => {
+                const doc: any = {
+                    notificationId: uuidv4(),
+                    recipientId,
+                    senderId: posterId,
+                    senderName: posterName,
+                    type: 'post_created',
+                    entityId: entryId,
+                    entityType: 'post',
+                    message,
+                    isRead: false,
+                };
+                if (posterPhoto) doc.senderPhoto = posterPhoto;
+                return doc;
+            });
 
             await Notification.insertMany(docs, { ordered: false });
 
