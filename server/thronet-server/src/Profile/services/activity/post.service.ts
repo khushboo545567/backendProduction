@@ -309,7 +309,7 @@ class PostService {
             )].filter(id => id !== userId);
 
             if (mentionedUserIds.length > 0) {
-                setImmediate(async () => {
+                setTimeout(async () => {
                     try {
                         for (const mentionedUserId of mentionedUserIds) {
                             await NotificationService.notifyMentioned(mentionedUserId, userId, entryId, postData.title, 'post');
@@ -318,21 +318,21 @@ class PostService {
                     } catch (err: any) {
                         console.warn('⚠️ [NOTIF] Mention notification failed (non-blocking):', err.message);
                     }
-                });
+                }, 0);
             }
 
-            setImmediate(async () => {
+            setTimeout(async () => {
                 try {
-                    await NotificationService.notifyConnectionsOnPost(
+                    await NotificationService.notifyFollowersOnPost(
                         userId,
                         entryId,
                         postData.title
                     );
-                    console.log('✅ [NOTIF] Connections notified for post:', entryId);
+                    console.log('✅ [NOTIF] Followers notified for post:', entryId);
                 } catch (err: any) {
                     console.warn('⚠️ [NOTIF] Notification failed (non-blocking):', err.message);
                 }
-            });
+            }, 0);
 
             if (user.trackActivityTime) {
                 await user.trackActivityTime();
