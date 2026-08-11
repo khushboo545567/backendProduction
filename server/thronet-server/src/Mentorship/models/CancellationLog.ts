@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 /**
  * Interface for CancellationLog document
@@ -57,29 +57,34 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
     sessionId: {
       type: String,
       required: [true, 'Session ID is required'],
+      index: true,
       ref: 'Session',
     },
     
     cancelledBy: {
       type: String,
       required: [true, 'Cancelled by user ID is required'],
+      index: true,
     },
     
     cancelledByRole: {
       type: String,
       enum: ['mentor', 'mentee', 'system', 'admin'],
       required: [true, 'Cancelled by role is required'],
+      index: true,
     },
     
     // Session details
     sessionType: {
       type: String,
       required: [true, 'Session type is required'],
+      index: true,
     },
     
     scheduledAt: {
       type: Date,
       required: [true, 'Scheduled time is required'],
+      index: true,
     },
     
     timezone: {
@@ -105,6 +110,7 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
     cancellationCategory: {
       type: String,
       enum: ['personal', 'emergency', 'scheduling_conflict', 'technical', 'other'],
+      index: true,
     },
     
     additionalNotes: {
@@ -124,6 +130,7 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
       type: Boolean,
       required: true,
       default: false,
+      index: true,
     },
     
     // Refund details
@@ -131,6 +138,7 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
       type: Boolean,
       required: true,
       default: false,
+      index: true,
     },
     
     refundPercentage: {
@@ -152,6 +160,7 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
       type: String,
       enum: ['pending', 'processing', 'completed', 'failed', 'not_applicable'],
       default: 'not_applicable',
+      index: true,
     },
     
     refundProcessedAt: {
@@ -161,6 +170,7 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
     refundTransactionId: {
       type: String,
       trim: true,
+      index: true,
     },
     
     // Notifications
@@ -193,6 +203,7 @@ const CancellationLogSchema = new Schema<CancellationLogDocument>(
       type: Date,
       default: Date.now,
       required: true,
+      index: true,
     },
   },
   {

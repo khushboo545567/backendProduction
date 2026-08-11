@@ -5,6 +5,9 @@ import { GroupSession } from "../models";
 import { generateSecureId } from "@/shared/security";
 import groupRepository from "../repositories/group.repository";
 import mentorRepository from "../repositories/mentor.repository";
+import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
+import mongoose from 'mongoose';
+import { TrustScoreEvents } from '../events/trustScore.events';
 
 
 
@@ -25,11 +28,34 @@ interface CreateGroupSessionInput {
 }
 
 class GroupService {
+  private async uploadImageToCloudinary(buffer: Buffer, identifier: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'group-session-thumbnails',
+          public_id: `group_session_${identifier}_${Date.now()}`,
+          resource_type: 'image',
+          transformation: [
+            { width: 1200, height: 1200, crop: 'limit' },
+            { quality: 'auto:good' },
+          ],
+          overwrite: true,
+        },
+        (error: any, result: any) => {
+          if (error) return reject(error);
+          resolve(result.secure_url);
+        }
+      );
+      uploadStream.end(buffer);
+    });
+  }
+
   /**
    * Create a new group session
    */
   async createGroupSession(
     input: CreateGroupSessionInput,
+    file?: any,
     authToken?: string
   ): Promise<any> {
     try {
@@ -49,12 +75,18 @@ class GroupService {
         );
       }
 
+      let thumbnailUrl: string | undefined = undefined;
+      if (file) {
+        thumbnailUrl = await this.uploadImageToCloudinary(file.buffer, input.mentorId);
+      }
+
       // Create group session
       const session = new GroupSession({
         sessionId: generateSecureId(),
         mentorId: mentor.mentorId,
         title: input.title,
         description: input.description,
+        thumbnailImage: thumbnailUrl,
         topic: input.topic,
         category: input.category,
         scheduledAt: scheduledDate,
@@ -415,6 +447,12 @@ class GroupService {
 
       await session.completeSession(actualDuration);
 
+      TrustScoreEvents.emit('GroupSessionCompleted', {
+        mentorId: session.mentorId,
+        sessionId,
+        timestamp: new Date()
+      });
+
       logger.info(`Group session completed: ${sessionId}`);
 
       // TODO: Send feedback request to attendees
@@ -449,6 +487,12 @@ class GroupService {
 
       await session.cancelSession(reason);
 
+      TrustScoreEvents.emit('GroupSessionCancelled', {
+        mentorId: session.mentorId,
+        sessionId,
+        timestamp: new Date()
+      });
+
       logger.info(`Group session cancelled: ${sessionId}`);
 
       // TODO: Process refunds for all participants
@@ -456,7 +500,61 @@ class GroupService {
 
       return session;
     } catch (error: any) {
-      logger.error(`Failed to cancel group session: ${error}`);
+      logger.error(`Failed to cancel group session:${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Update an existing group session
+   */
+  async updateGroupSession(
+    sessionId: string,
+    userId: string,
+    updates: Partial<CreateGroupSessionInput>,
+    file?: any,
+    authToken?: string
+  ): Promise<any> {
+    try {
+      logger.info(`Updating group session ${sessionId} by user ${userId}`);
+
+      const isObjectId = mongoose.isValidObjectId(sessionId);
+      const query = isObjectId ? { $or: [{ _id: sessionId }, { sessionId }] } : { sessionId };
+      const session = await GroupSession.findOne(query);
+
+      if (!session) {
+        throw new NotFoundError('Group session not found');
+      }
+
+      const mentor = await mentorRepository.findByUserId(userId);
+      if (!mentor || session.mentorId !== mentor.mentorId) {
+        throw new ForbiddenError('Only the host mentor can update this session');
+      }
+
+      if (file) {
+        session.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, sessionId);
+      }
+
+      if (updates.title) session.title = updates.title;
+      if (updates.description) session.description = updates.description;
+      if (updates.topic) session.topic = updates.topic;
+      if (updates.category) session.category = updates.category;
+      if (updates.scheduledAt) session.scheduledAt = new Date(updates.scheduledAt);
+      if (updates.duration) session.duration = updates.duration;
+      if (updates.timezone) session.timezone = updates.timezone;
+      if (updates.maxParticipants) session.maxParticipants = updates.maxParticipants;
+      if (updates.minParticipants) session.minParticipants = updates.minParticipants;
+      if (updates.pricePerPerson !== undefined && session.pricing) {
+        session.pricing.pricePerPerson = updates.pricePerPerson;
+      }
+      if (updates.agenda) session.agenda = updates.agenda;
+      if (updates.outcomes) session.outcomes = updates.outcomes;
+
+      await session.save();
+      logger.info(`Group session updated successfully: ${session.sessionId}`);
+      return session;
+    } catch (error: any) {
+      logger.error(`Failed to update group session: ${error.message}`);
       throw error;
     }
   }
@@ -511,23 +609,14 @@ class GroupService {
     _authToken?: string
   ): Promise<any[]> {
     try {
-      let sessions;
-
-      // if (role === 'mentor') {
-      //   sessions = await GroupSession.find({ mentorId: userId })
-      //     .sort({ scheduledAt: -1 })
-      //     .lean();
-      // } else {
-      //   sessions = await GroupSession.find({
-      //     'participants.menteeId': userId,
-      //   })
-      //     .sort({ scheduledAt: -1 })
-      //     .lean();
-      // }
-
+      if (role === 'mentor') {
+        const mentor = await mentorRepository.findByUserId(userId);
+        const mentorIdQuery = mentor ? [mentor.mentorId, userId] : [userId];
+        return await GroupSession.find({ mentorId: { $in: mentorIdQuery } })
+          .sort({ scheduledAt: -1 })
+          .lean();
+      }
       return await groupRepository.findByUserId(userId, role);
-
-      // return sessions;
     } catch (error: any) {
       logger.error(`Failed to fetch my group sessions: ${error}`);
       throw error;

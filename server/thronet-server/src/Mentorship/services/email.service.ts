@@ -1,13 +1,7 @@
 import nodemailer, { Transporter } from 'nodemailer';
-import sgMail from '@sendgrid/mail';
 import emailConfig from '@/config/cache/email.confg';
 import { logger } from '@/shared/logger.util';
 
-// Initialize SendGrid HTTP API client (bypasses SMTP, which Railway blocks)
-const rawConfig = emailConfig.getConfig();
-if (rawConfig.service === 'sendgrid' && process.env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-}
 
 interface EmailOptions {
   to: string | string[];
@@ -59,7 +53,6 @@ interface CancellationData {
 class EmailService {
   private transporter: Transporter | null = null;
   private isConfigured: boolean = false;
-  private useSendGridApi: boolean = false;
 
   constructor() {
     this.initialize();
@@ -72,22 +65,6 @@ class EmailService {
         return;
       }
 
-      const cfg = emailConfig.getConfig();
-
-      // SendGrid uses the HTTP API (port 443) instead of SMTP, since Railway
-      // blocks outbound SMTP ports (25/465/587).
-      if (cfg.service === 'sendgrid') {
-        if (!process.env.SENDGRID_API_KEY) {
-          logger.warn('📧 SENDGRID_API_KEY missing - email service disabled');
-          return;
-        }
-        this.useSendGridApi = true;
-        this.isConfigured = true;
-        logger.info('✅ Email service ready (SendGrid HTTP API)');
-        return;
-      }
-
-      // Gmail / generic SMTP path (unchanged)
       this.transporter = nodemailer.createTransport(emailConfig.getTransporterOptions());
 
       this.transporter.verify((error) => {
@@ -106,48 +83,14 @@ class EmailService {
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    if (!this.isConfigured) {
-      logger.warn('📧 Email not sent - service not configured');
-      return false;
-    }
-
-    const fromAddress = emailConfig.getFromAddress();
-
-    // ==================== SENDGRID VIA HTTP API ====================
-    if (this.useSendGridApi) {
-      try {
-        const toList = Array.isArray(options.to) ? options.to : [options.to];
-
-        await sgMail.send({
-          to: toList,
-          from: { email: fromAddress.address, name: fromAddress.name },
-          subject: options.subject,
-          html: options.html || options.text || '',
-          text: options.text,
-          cc: options.cc
-            ? (Array.isArray(options.cc) ? options.cc : [options.cc])
-            : undefined,
-          bcc: options.bcc
-            ? (Array.isArray(options.bcc) ? options.bcc : [options.bcc])
-            : undefined,
-          replyTo: options.replyTo,
-        } as any);
-
-        logger.info(`📧 Email sent successfully via SendGrid API to ${options.to}`);
-        return true;
-      } catch (error: any) {
-        logger.error(`📧 SendGrid API send failed: ${error.message}`, error.response?.body);
-        return false;
-      }
-    }
-    // ==================== END SENDGRID BLOCK ====================
-
-    if (!this.transporter) {
+    if (!this.isConfigured || !this.transporter) {
       logger.warn('📧 Email not sent - service not configured');
       return false;
     }
 
     try {
+      const fromAddress = emailConfig.getFromAddress();
+
       const mailOptions = {
         from: `"${fromAddress.name}" <${fromAddress.address}>`,
         to: Array.isArray(options.to) ? options.to.join(', ') : options.to,

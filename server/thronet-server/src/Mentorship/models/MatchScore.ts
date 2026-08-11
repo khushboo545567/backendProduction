@@ -1,4 +1,4 @@
-﻿// src/models/MatchScore.ts
+// src/models/MatchScore.ts
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface MatchFactors {
@@ -31,17 +31,20 @@ const MatchScoreSchema = new Schema<MatchScoreDocument>(
     userId: {
       type: String,
       required: [true, 'User ID is required'],
+      index: true,
     },
     mentorId: {
       type: Schema.Types.ObjectId,
       ref: 'Mentor',
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     overallScore: {
       type: Number,
       required: [true, 'Overall score is required'],
       min: [0, 'Score cannot be negative'],
       max: [100, 'Score cannot exceed 100'],
+      index: true,
     },
     factors: {
       domainMatch: {
@@ -100,6 +103,7 @@ const MatchScoreSchema = new Schema<MatchScoreDocument>(
     expiresAt: {
       type: Date,
       default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      index: true,
     },
   },
   {

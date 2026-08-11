@@ -238,7 +238,16 @@ class BookingService {
     try {
       logger.info(`❌ Cancelling booking: ${sessionId}`);
 
-      const session = await SessionMentor.findById(sessionId);
+      /**
+       * TEMP FIX (UUID Lookup)
+       *
+       * Frontend passes the public UUID (sessionId),
+       * not the MongoDB ObjectId.
+       *
+       * Query by sessionId to prevent ObjectId cast errors
+       * while preserving the existing backend architecture.
+       */
+      const session = await SessionMentor.findOne({ sessionId });
       if (!session) {
         throw new Error('Session not found');
       }
@@ -260,8 +269,9 @@ class BookingService {
       }
 
       // Get user details for calendar deletion
+      const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
       const [mentee, mentor] = await Promise.all([
-        User.findByUserId(session.menteeId),
+        actualMenteeId ? User.findByUserId(actualMenteeId) : null,
         User.findByUserId(session.mentorId),
       ]);
 
@@ -313,14 +323,14 @@ class BookingService {
     try {
       logger.info(`🔄 Rescheduling booking: ${sessionId}`);
 
-      const session = await SessionMentor.findById(sessionId);
+      const session = await SessionMentor.findOne({ sessionId });
       if (!session) {
         throw new Error('Session not found');
       }
 
       const oldScheduledAt = session.scheduledAt;
 
-      await sessionService.rescheduleSession(
+      const updatedSession = await sessionService.rescheduleSession(
         sessionId,
         userId,
         newScheduledAt,
@@ -328,25 +338,26 @@ class BookingService {
         authToken
       );
 
+      const actualMenteeId = updatedSession.menteeId || (updatedSession.bookings && updatedSession.bookings[0]?.menteeId);
       const [mentee, mentor] = await Promise.all([
-        User.findByUserId(session.menteeId),
-        User.findByUserId(session.mentorId),
+        actualMenteeId ? User.findByUserId(actualMenteeId) : null,
+        User.findByUserId(updatedSession.mentorId),
       ]);
 
       if (!mentee || !mentor) {
         logger.warn('Mentee or Mentor not found for reschedule notifications', { sessionId });
-        return;
+        return updatedSession;
       }
 
       // Update calendar event (non-critical)
       try {
         await calendarService.updateCalendarEvent(sessionId, {
           startTime: newScheduledAt,
-          title: session.title,
-          description: session.description,
-          duration: session.duration,
-          timezone: session.timezone,
-          meetingUrl: session.meeting?.meetingUrl || '',
+          title: updatedSession.title,
+          description: updatedSession.description,
+          duration: updatedSession.duration,
+          timezone: updatedSession.timezone,
+          meetingUrl: updatedSession.meeting?.meetingUrl || '',
         });
       } catch (error: any) {
         // ✅ FIX: Correct template literal
@@ -355,13 +366,13 @@ class BookingService {
 
       const oldTimeFormatted = TimezoneUtils.formatInTimezone(
         oldScheduledAt,
-        session.timezone,
+        updatedSession.timezone,
         'MMMM dd, yyyy hh:mm a'
       );
 
       const newTimeFormatted = TimezoneUtils.formatInTimezone(
         newScheduledAt,
-        session.timezone,
+        updatedSession.timezone,
         'MMMM dd, yyyy hh:mm a'
       );
 
@@ -369,11 +380,11 @@ class BookingService {
         mentee.email,
         mentee.fullName || mentee.email,
         mentor.fullName || mentor.email,
-        session.sessionType,
+        updatedSession.sessionType,
         oldTimeFormatted,
         newTimeFormatted,
-        session.timezone,
-        session.meeting?.meetingUrl || ''
+        updatedSession.timezone,
+        updatedSession.meeting?.meetingUrl || ''
       );
 
       if (mentee.phoneNumber) {
@@ -385,7 +396,7 @@ class BookingService {
       }
 
       logger.info(`✅ Booking rescheduled successfully: ${sessionId}`);
-      return session;
+      return updatedSession;
     } catch (error: any) {
       // ✅ FIX: Correct template literal
       logger.error(`❌ Booking reschedule failed: ${error.message}`);
@@ -398,11 +409,12 @@ class BookingService {
    */
   async sendSessionReminder(sessionId: string, hoursUntil: number): Promise<void> {
     try {
-      const session = await SessionMentor.findById(sessionId);
+      const session = await SessionMentor.findOne({ sessionId });
       if (!session) return;
 
+      const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
       const [mentee, mentor] = await Promise.all([
-        User.findByUserId(session.menteeId),
+        actualMenteeId ? User.findByUserId(actualMenteeId) : null,
         User.findByUserId(session.mentorId),
       ]);
 
@@ -450,10 +462,11 @@ class BookingService {
     try {
       const session = await sessionService.getSessionById(sessionId, undefined, authToken);
 
+      const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
       const [menteeUser, mentorUser, menteeProfile, mentorProfile] = await Promise.all([
-        User.findByUserId(session.menteeId),
+        actualMenteeId ? User.findByUserId(actualMenteeId) : null,
         User.findByUserId(session.mentorId),
-        UserProfile.findByUserIdCached(session.menteeId),
+        actualMenteeId ? UserProfile.findByUserIdCached(actualMenteeId) : null,
         UserProfile.findByUserIdCached(session.mentorId),
       ]);
 

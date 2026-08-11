@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START waitlist.routes.ts');
 // src/routes/waitlist.routes.ts
 import express from 'express';
 import {
@@ -174,5 +173,3 @@ router.get(
 );
 
 export default router;
-console.log('TRACE_END waitlist.routes.ts');
-

@@ -1,4 +1,4 @@
-﻿// src/models/AdminAction.ts
+// src/models/AdminAction.ts
 
 import mongoose, { Schema, Document } from 'mongoose';
 
@@ -27,6 +27,7 @@ const AdminActionSchema = new Schema<IAdminAction>(
     adminId: {
       type: String,
       required: true,
+      index: true,
     },
     adminEmail: {
       type: String,
@@ -89,6 +90,7 @@ const AdminActionSchema = new Schema<IAdminAction>(
         // Other
         'other',
       ],
+      index: true,
     },
     targetModel: {
       type: String,
@@ -112,6 +114,7 @@ const AdminActionSchema = new Schema<IAdminAction>(
     targetId: {
       type: String,
       required: true,
+      index: true,
     },
     targetDetails: {
       type: Schema.Types.Mixed,
@@ -134,6 +137,7 @@ const AdminActionSchema = new Schema<IAdminAction>(
       type: String,
       enum: ['success', 'failed'],
       default: 'success',
+      index: true,
     },
     errorMessage: {
       type: String,

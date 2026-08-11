@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START review.routes.ts');
 import { Router } from 'express';
 import { mentorshipReviewController } from '../controllers';
 import { validate } from '@/shared/middlewares/validation.middleware';
@@ -221,5 +220,3 @@ router.post(
 );
 
 export default router;
-console.log('TRACE_END review.routes.ts');
-

@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START availability.routes.ts');
 import { Router } from 'express';
 import { body, param, query } from 'express-validator';
 import { availabilityController } from '../controllers';
@@ -169,5 +168,3 @@ router.post(
 );
 
 export default router;  
-console.log('TRACE_END availability.routes.ts');
-

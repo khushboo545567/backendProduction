@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START notification.routes.ts');
 // src/routes/notification.routes.ts
 
 import { Router } from 'express';
@@ -102,5 +101,3 @@ router.post(
 );
 
 export default router;
-console.log('TRACE_END notification.routes.ts');
-

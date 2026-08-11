@@ -1,4 +1,4 @@
-﻿// src/models/Waitlist.ts
+// src/models/Waitlist.ts
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 /**
@@ -70,16 +70,19 @@ const WaitlistSchema = new Schema<IWaitlist>(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
     userId: {
       type: String,
       ref: 'User',
       required: [true, 'User ID is required'],
+      index: true,
     },
     mentorId: {
       type: String,
       ref: 'Mentor',
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     preferredDates: [
       {
@@ -111,10 +114,12 @@ const WaitlistSchema = new Schema<IWaitlist>(
       type: String,
       enum: Object.values(WaitlistStatus),
       default: WaitlistStatus.ACTIVE,
+      index: true,
     },
     priority: {
       type: Number,
       default: 0,
+      index: true,
     },
     notifiedAt: Date,
     notificationSent: {
@@ -132,6 +137,7 @@ const WaitlistSchema = new Schema<IWaitlist>(
     expiresAt: {
       type: Date,
       required: true,
+      index: true,
     },
   },
   {

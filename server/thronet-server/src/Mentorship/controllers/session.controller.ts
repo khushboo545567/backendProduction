@@ -20,7 +20,9 @@ class SessionController {
         return;
       }
 
-      const session = await mentorshipSessionService.createMentorSession(mentorUserId, req.body);
+      const payload = { ...req.body };
+      const file = req.file as Express.Multer.File | undefined;
+      const session = await mentorshipSessionService.createMentorSession(mentorUserId, payload, file);
       ResponseHandler.created(res, 'Session assigned successfully', session);
     } catch (error: any) {
       logger.error('Failed to create mentor session:', error);
@@ -263,7 +265,9 @@ class SessionController {
       }
 
       const authToken = getAuthToken(req) || undefined;
-      const session = await mentorshipSessionService.updateSession(id, userId, req.body, authToken);
+      const payload = { ...req.body };
+      const file = req.file as Express.Multer.File | undefined;
+      const session = await mentorshipSessionService.updateSession(id, userId, payload, authToken, file);
       ResponseHandler.success(res, 'Session updated successfully', session);
     } catch (error: any) {
       logger.error('Failed to update session:', error);
@@ -402,7 +406,7 @@ class SessionController {
         return;
       }
 
-      const session = await SessionMentor.findById(id);
+      const session = await SessionMentor.findOne({ sessionId: id });
       if (!session) {
         ResponseHandler.notFound(res, 'Session not found');
         return;
@@ -461,7 +465,7 @@ class SessionController {
         return;
       }
 
-      const session = await SessionMentor.findById(id);
+      const session = await SessionMentor.findOne({ sessionId: id });
       if (!session) {
         ResponseHandler.notFound(res, 'Session not found');
         return;

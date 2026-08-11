@@ -1,4 +1,4 @@
-﻿// src/models/Coupon.ts
+// src/models/Coupon.ts
 
 import mongoose, { Schema, Document } from 'mongoose';
 
@@ -53,6 +53,7 @@ const CouponSchema = new Schema<ICoupon>(
       unique: true,
       uppercase: true,
       trim: true,
+      index: true,
     },
     description: {
       type: String,
@@ -102,6 +103,7 @@ const CouponSchema = new Schema<ICoupon>(
     isActive: {
       type: Boolean,
       default: true,
+      index: true,
     },
     applicableTo: {
       sessionTypes: [String],

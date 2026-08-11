@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IReview {
   _id: string;
@@ -54,26 +54,31 @@ reviewId: {
   type: String,
   required: true,
   unique: true,
+  index: true,
 },
     sessionId: {
       type: String,
       ref: 'Session',
       required: [true, 'Session ID is required'],
       unique: true,
+      index: true,
     },
     mentorId: {
       type: String,
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     menteeId: {
       type: String,
       required: [true, 'Mentee ID is required'],
+      index: true,
     },
     rating: {
       type: Number,
       required: [true, 'Rating is required'],
       min: [1, 'Rating must be at least 1'],
       max: [5, 'Rating cannot exceed 5'],
+      index: true,
     },
     comment: {
       type: String,
@@ -95,6 +100,7 @@ reviewId: {
     isVerified: {
       type: Boolean,
       default: true,
+      index: true,
     },
     mentorResponse: {
       comment: {
@@ -122,10 +128,12 @@ reviewId: {
     isPublic: {
       type: Boolean,
       default: true,
+      index: true,
     },
     isDeleted: {
       type: Boolean,
       default: false,
+      index: true,
     },
     deletedAt: { type: Date },
   },

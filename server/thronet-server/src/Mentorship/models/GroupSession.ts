@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IParticipant {
   sessionId: string;
@@ -98,6 +98,7 @@ const ParticipantSchema = new Schema<IParticipant>(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
     menteeId: { type: String, required: true },
     registeredAt: { type: Date, default: Date.now },
@@ -128,10 +129,12 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
     mentorId: {
       type: String,
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     title: {
       type: String,
@@ -145,6 +148,10 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
       trim: true,
       maxlength: [2000, 'Description cannot exceed 2000 characters'],
     },
+    thumbnailImage: {
+      type: String,
+      trim: true,
+    },
     topic: {
       type: String,
       required: [true, 'Topic is required'],
@@ -157,6 +164,7 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     scheduledAt: {
       type: Date,
       required: [true, 'Scheduled time is required'],
+      index: true,
     },
     duration: {
       type: Number,
@@ -173,6 +181,7 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
       type: String,
       enum: ['draft', 'open', 'full', 'in_progress', 'completed', 'cancelled'],
       default: 'draft',
+      index: true,
     },
     maxParticipants: {
       type: Number,

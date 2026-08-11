@@ -1,4 +1,4 @@
-﻿// src/models/MentorshipAnalytics.ts
+// src/models/MentorshipAnalytics.ts
 
 import mongoose, { Schema, Document } from 'mongoose';
 
@@ -49,19 +49,23 @@ const MentorshipAnalyticsSchema = new Schema<IMentorshipAnalytics>(
         'search_analytics',
         'conversion_analytics',
       ],
+      index: true,
     },
     entityType: {
       type: String,
       required: true,
       enum: ['mentor', 'user', 'session', 'platform', 'search', 'revenue'],
+      index: true,
     },
     entityId: {
       type: String,
       required: true,
+      index: true,
     },
     date: {
       type: Date,
       required: true,
+      index: true,
     },
     metrics: {
       views: { type: Number, default: 0 },

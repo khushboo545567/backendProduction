@@ -1,4 +1,4 @@
-﻿// src/models/Notification.ts
+// src/models/Notification.ts
 
 import mongoose, { Schema, Document } from 'mongoose';
 
@@ -45,10 +45,12 @@ const NotificationSchema = new Schema<INotification>(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
     userId: {
       type: String,
       required: true,
+      index: true,
     },
     type: {
       type: String,
@@ -102,6 +104,7 @@ const NotificationSchema = new Schema<INotification>(
         // Other
         'custom',
       ],
+      index: true,
     },
     category: {
       type: String,
@@ -116,6 +119,7 @@ const NotificationSchema = new Schema<INotification>(
         'reminder',
         'alert',
       ],
+      index: true,
     },
     title: {
       type: String,
@@ -141,6 +145,7 @@ const NotificationSchema = new Schema<INotification>(
       type: String,
       enum: ['low', 'medium', 'high', 'urgent'],
       default: 'medium',
+      index: true,
     },
     channels: {
       inApp: {
@@ -164,10 +169,12 @@ const NotificationSchema = new Schema<INotification>(
       sent: {
         type: Boolean,
         default: false,
+        index: true,
       },
       read: {
         type: Boolean,
         default: false,
+        index: true,
       },
       clicked: {
         type: Boolean,
@@ -185,6 +192,7 @@ const NotificationSchema = new Schema<INotification>(
     },
     expiresAt: {
       type: Date,
+      index: true,
     },
   },
   // ✅ Replace with
