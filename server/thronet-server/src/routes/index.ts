@@ -1,7 +1,7 @@
 /**
  * src/routes/index.ts
  * Central API Router — mounts all feature routers under /api/v1
- * @version 2.1.0
+ * @version 2.2.0
  */
 
 import { Router, Request, Response } from 'express';
@@ -23,17 +23,18 @@ router.get('/', (_req: Request, res: Response) => {
         version: 'v1',
         timestamp: new Date().toISOString(),
         endpoints: {
-    health: '/api/v1/health',
-    auth: '/api/v1/auth',
-    profile: '/api/v1/profile',
-    connections: '/api/v1/connections',
-    mentorship: '/api/v1/mentorship',
-    company: '/api/v1/company',
-    studyGroup: '/api/v1/study-group',
-    messaging: '/api/v1/messaging',
-    notifications: '/api/v1/notifications',
-    jobService: '/api/v1/job-service',
-},
+            health: '/api/v1/health',
+            auth: '/api/v1/auth',
+            profile: '/api/v1/profile',
+            connections: '/api/v1/connections',
+            follow: '/api/v1/connections/follow',
+            mentorship: '/api/v1/mentorship',
+            company: '/api/v1/company',
+            studyGroup: '/api/v1/study-group',
+            messaging: '/api/v1/messaging',
+            notifications: '/api/v1/notifications',
+            jobService: '/api/v1/job-service',
+        },
     });
 });
 
