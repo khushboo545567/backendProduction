@@ -83,8 +83,13 @@ class MentorController {
         if (updates[key] === undefined) delete updates[key];
       });
 
+      // Extract uploaded files if any
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+      const profilePicFile = files?.['profilePic']?.[0];
+      const bannerImageFile = files?.['bannerImage']?.[0];
+
       const authToken = req.headers.authorization?.split(' ')[1];
-      const mentor = await mentorService.updateMentor(id, updates, req.user!.id, authToken);
+      const mentor = await mentorService.updateMentor(id, updates, req.user!.id, authToken, profilePicFile, bannerImageFile);
 
       logger.info(`Mentor profile updated: ${id}`);
       ResponseHandler.success(res, 'Mentor profile updated successfully', mentor);
@@ -140,6 +145,27 @@ class MentorController {
       ResponseHandler.success(res, 'Your mentor profile fetched successfully', mentor);
     } catch (error: any) {
       logger.error('Error fetching own mentor profile:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/v1/mentorship/me/trust-score
+   * @access  Private
+   */
+  async getTrustScore(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authToken = req.headers.authorization?.split(' ')[1];
+      const mentor = await mentorService.getMentorByUserId(req.user!.id, authToken);
+
+      if (!mentor) {
+        res.status(404).json({ success: false, message: 'Mentor profile not found' });
+        return;
+      }
+
+      ResponseHandler.success(res, 'Trust Score fetched successfully', mentor.trustScore || null);
+    } catch (error: any) {
+      logger.error('Error fetching trust score:', error);
       next(error);
     }
   }

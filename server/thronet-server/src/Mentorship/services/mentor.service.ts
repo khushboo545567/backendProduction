@@ -22,6 +22,7 @@ import PaginationHelper from '@/Mentorship/utils/pagination';
 import { ICompany } from '@/Mentorship/interface/company.types';
 import mentorRepository from '../repositories/mentor.repository';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
+import { TrustScoreEvents } from '../events/trustScore.events';
 
 class MentorService {
   /**
@@ -181,9 +182,11 @@ class MentorService {
    */
   async updateMentor(
     mentorId: string,
-    updates: UpdateMentorInput,
+    updates: UpdateMentorInput & { profilePic?: string; bannerImage?: string },
     userId: string,
-    authToken?: string
+    authToken?: string,
+    profilePicFile?: Express.Multer.File,
+    bannerImageFile?: Express.Multer.File
   ): Promise<MentorWithRelations> {
     try {
       logger.info(`Updating mentor: ${mentorId}`);
@@ -195,6 +198,17 @@ class MentorService {
 
       if (mentor.userId !== userId) {
         throw new ForbiddenError('Not authorized to update this profile');
+      }
+
+      // Handle image uploads if present
+      if (profilePicFile) {
+        const profilePicUrl = await this.uploadImageToCloudinary(profilePicFile.buffer, userId);
+        updates.profilePic = profilePicUrl;
+      }
+
+      if (bannerImageFile) {
+        const bannerImageUrl = await this.uploadImageToCloudinary(bannerImageFile.buffer, userId);
+        updates.bannerImage = bannerImageUrl;
       }
 
       if (updates.pricing) {
@@ -213,6 +227,12 @@ class MentorService {
       }
 
       logger.info(`Mentor updated: ${mentorId}`);
+
+      TrustScoreEvents.emit('ProfileUpdated', {
+        mentorId,
+        timestamp: new Date()
+      });
+
       return await this.enrichMentorWithRelations(updatedMentor, authToken);
     } catch (error: any) {
       logger.error(`Failed to update mentor ${mentorId}: ${error.message}`);

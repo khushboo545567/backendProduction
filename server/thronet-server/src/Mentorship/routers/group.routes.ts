@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START group.routes.ts');
 import { Router } from 'express';
 import { groupController } from '../controllers';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
@@ -7,6 +6,30 @@ import { validateJoi, validateQueryJoi } from '@/shared/middlewares/validation.m
 import logger from '@/shared/utils/company/logger';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 import queryValidator from '../validations/query.validator';
+import { uploadSingle } from '@/shared/upload/upload';
+import { NextFunction, Request, Response } from 'express';
+
+const parseFormDataFields = (req: Request, res: Response, next: NextFunction): void => {
+  const fieldsToParse = ['outcomes', 'resources'];
+  const numberFields = ['duration', 'maxParticipants', 'minParticipants', 'pricePerPerson'];
+  const body = req.body as Record<string, any>;
+
+  for (const field of fieldsToParse) {
+    if (body[field] && typeof body[field] === 'string') {
+      try {
+        body[field] = JSON.parse(body[field]);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+  for (const field of numberFields) {
+    if (body[field] !== undefined && typeof body[field] === 'string' && !isNaN(Number(body[field]))) {
+      body[field] = Number(body[field]);
+    }
+  }
+  next();
+};
 
 const router = Router();
 
@@ -52,14 +75,14 @@ const addFeedbackValidator = Joi.object({
   comment: Joi.string().max(1000).optional().allow(''),
 });
 
-// âœ… listGroupSessionsValidator mein add karo
+// ✅ listGroupSessionsValidator mein add karo
 const listGroupSessionsValidator = Joi.object({
   page: Joi.number().integer().min(1).optional().default(1),
   limit: Joi.number().integer().min(1).max(100).optional().default(10),
   status: Joi.string().optional().allow(''),
   topic: Joi.string().optional().allow(''),
   mentorId: Joi.string().optional().allow(''),
-}).options({ convert: true });  // â† ADD KARO
+}).options({ convert: true });  // ← ADD KARO
 
 
 // All routes require authentication
@@ -71,7 +94,9 @@ router.use(AuthMiddleware.authenticate as any);
  * @access  Private (Mentor)
  */
 router.post(
-  '/create',
+  ['/create', '/'],
+  uploadSingle('thumbnailImage'),
+  parseFormDataFields,
   validateJoi(createGroupSessionValidator),
   groupController.createGroupSession
 );
@@ -134,6 +159,8 @@ router.get('/:id', groupController.getGroupSessionById);
  */
 router.put(
   '/:id',
+  uploadSingle('thumbnailImage'),
+  parseFormDataFields,
   validateJoi(updateGroupSessionValidator),
   groupController.updateGroupSession
 );
@@ -197,5 +224,3 @@ router.post(
 );
 
 export default router;
-console.log('TRACE_END group.routes.ts');
-

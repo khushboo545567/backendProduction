@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START analytics.routes.ts');
 import { Router } from 'express';
 import {mentorshipAnalyticsController} from '../controllers';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
@@ -130,5 +129,3 @@ router.get(
 );
 
 export default router;
-console.log('TRACE_END analytics.routes.ts');
-

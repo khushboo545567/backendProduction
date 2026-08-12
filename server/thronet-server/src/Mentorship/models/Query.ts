@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IQuery {
   _id: string;
@@ -43,15 +43,18 @@ const QuerySchema = new Schema<QueryDocument>(
       type: String,
       required: true,
       unique: true,
+      index: true,
       // default: () => uuidv4(),
     },
     mentorId: {
       type: String,
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     menteeId: {
       type: String,
       required: [true, 'Mentee ID is required'],
+      index: true,
     },
     question: {
       type: String,
@@ -76,6 +79,7 @@ const QuerySchema = new Schema<QueryDocument>(
       type: String,
       enum: ['pending', 'answered', 'expired'],
       default: 'pending',
+      index: true,
     },
     priority: {
       type: String,

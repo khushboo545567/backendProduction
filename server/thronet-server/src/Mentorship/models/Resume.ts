@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IResume {
   _id: string;
@@ -10,11 +10,11 @@ export interface IResume {
   fileKey: string;
   fileSize: number;
   mimeType: string;
-
+  
   analysis: {
     atsScore: number;
     scannedAt: Date;
-
+    
     sections: {
       contactInfo: boolean;
       summary: boolean;
@@ -24,26 +24,26 @@ export interface IResume {
       certifications: boolean;
       projects: boolean;
     };
-
+    
     keywords: string[];
     missingKeywords: string[];
-
+    
     strengths: string[];
     weaknesses: string[];
     suggestions: string[];
-
+    
     formatting: {
       score: number;
       issues: string[];
     };
-
+    
     content: {
       score: number;
       wordCount: number;
       pageCount: number;
     };
   };
-
+  
   mentorFeedback?: {
     mentorId: string;
     rating: number;
@@ -58,7 +58,7 @@ export interface IResume {
     actionItems: string[];
     submittedAt: Date;
   };
-
+  
   version: number;
   isLatest: boolean;
   isDeleted: boolean;
@@ -69,7 +69,7 @@ export interface IResume {
 // // export interface ResumeDocument extends Omit<IResume, '_id'>, Document {
 //   needsImprovement: boolean;
 //   isGoodQuality: boolean;
-
+  
 //   markAsDeleted(): Promise<ResumeDocument>;
 //   addMentorFeedback(
 //     mentorId: string,
@@ -91,7 +91,7 @@ export interface IResume {
 export interface ResumeDocument extends Omit<IResume, '_id'>, Document {
   needsImprovement: boolean;
   isGoodQuality: boolean;
-
+  
   markAsDeleted(): Promise<ResumeDocument>;
   addMentorFeedback(
     mentorId: string,
@@ -119,9 +119,11 @@ const ResumeSchema = new Schema<ResumeDocument>(
     userId: {
       type: String,
       required: [true, 'User ID is required'],
+      index: true,
     },
     sessionId: {
       type: String,
+      index: true,
     },
     filename: {
       type: String,
@@ -147,7 +149,7 @@ const ResumeSchema = new Schema<ResumeDocument>(
       type: String,
       required: true,
     },
-
+    
     analysis: {
       atsScore: {
         type: Number,
@@ -159,7 +161,7 @@ const ResumeSchema = new Schema<ResumeDocument>(
         type: Date,
         default: Date.now,
       },
-
+      
       sections: {
         contactInfo: { type: Boolean, default: false },
         summary: { type: Boolean, default: false },
@@ -169,14 +171,14 @@ const ResumeSchema = new Schema<ResumeDocument>(
         certifications: { type: Boolean, default: false },
         projects: { type: Boolean, default: false },
       },
-
+      
       keywords: [String],
       missingKeywords: [String],
-
+      
       strengths: [String],
       weaknesses: [String],
       suggestions: [String],
-
+      
       formatting: {
         score: {
           type: Number,
@@ -185,7 +187,7 @@ const ResumeSchema = new Schema<ResumeDocument>(
         },
         issues: [String],
       },
-
+      
       content: {
         score: {
           type: Number,
@@ -196,7 +198,7 @@ const ResumeSchema = new Schema<ResumeDocument>(
         pageCount: Number,
       },
     },
-
+    
     mentorFeedback: {
       mentorId: String,
       rating: {
@@ -215,7 +217,7 @@ const ResumeSchema = new Schema<ResumeDocument>(
       actionItems: [String],
       submittedAt: Date,
     },
-
+    
     version: {
       type: Number,
       default: 1,
@@ -223,10 +225,12 @@ const ResumeSchema = new Schema<ResumeDocument>(
     isLatest: {
       type: Boolean,
       default: true,
+      index: true,
     },
     isDeleted: {
       type: Boolean,
       default: false,
+      index: true,
     },
   },
   {
@@ -253,7 +257,7 @@ ResumeSchema.virtual('isGoodQuality').get(function () {
 // Pre-save: Mark previous versions as not latest
 ResumeSchema.pre('save', async function (next) {
   if (this.isNew && this.isLatest) {
-    await (mongoose.models['Resume'] as ResumeModel).updateMany(
+    await mongoose.model('Resume').updateMany(
       {
         userId: this.userId,
         _id: { $ne: this._id },
@@ -288,7 +292,7 @@ ResumeSchema.methods.addMentorFeedback = async function (
     actionItems,
     submittedAt: new Date(),
   };
-
+  
   return await this.save();
 };
 
@@ -310,14 +314,14 @@ ResumeSchema.statics.getAllVersions = function (userId: string) {
 
 ResumeSchema.statics.getResumeStats = async function (userId: string) {
   const resumes = await this.find({ userId, isDeleted: false });
-
+  
   if (resumes.length === 0) {
     return null;
   }
-
+  
   const avgScore = resumes.reduce((sum: number, r: any) => sum + r.analysis.atsScore, 0) / resumes.length;
   const latestScore = resumes.find((r: any) => r.isLatest)?.analysis.atsScore || 0;
-
+  
   return {
     totalVersions: resumes.length,
     averageScore: Math.round(avgScore),
@@ -326,8 +330,6 @@ ResumeSchema.statics.getResumeStats = async function (userId: string) {
   };
 };
 
-export default (mongoose.models['Resume'] as ResumeModel) ||
-  mongoose.model<ResumeDocument, ResumeModel>('Resume', ResumeSchema);
-
+export default mongoose.model<ResumeDocument , ResumeModel>('Resume', ResumeSchema);
 
 

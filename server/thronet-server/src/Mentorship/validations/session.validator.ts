@@ -69,31 +69,52 @@ class SessionValidator {
   /**
    * Validate session update
    */
+
+  /**
+ * Validation Update
+ *
+ * Replaced the previous permissive `.unknown(true)` approach with an explicit
+ * optional schema for all supported update fields.
+ *
+ * Benefits:
+ * - Maintains strict input validation.
+ * - Prevents unexpected or arbitrary payload properties.
+ * - Preserves backward compatibility for partial updates.
+ * - Supports both JSON and multipart/form-data requests (provided
+ *   parseFormDataFields executes before validation).
+ *
+ * Note:
+ * Any new updatable field must be explicitly added here to keep the
+ * validation layer secure and predictable.
+ */
+
   updateSession = Joi.object({
-    title: Joi.string()
-      .min(5)
-      .max(200)
-      .optional()
-      .messages({
-        'string.min': 'Title must be at least 5 characters',
-        'string.max': 'Title cannot exceed 200 characters',
-      }),
-
-    description: Joi.string()
-      .max(1000)
-      .optional()
-      .allow('')
-      .messages({
-        'string.max': 'Description cannot exceed 1000 characters',
-      }),
-
-    notes: Joi.string()
-      .max(2000)
-      .optional()
-      .allow('')
-      .messages({
-        'string.max': 'Notes cannot exceed 2000 characters',
-      }),
+    sessionType: Joi.string().valid(...Object.values(SessionType)).optional(),
+    title: Joi.string().min(5).max(200).optional().messages({
+      'string.min': 'Title must be at least 5 characters',
+      'string.max': 'Title cannot exceed 200 characters',
+    }),
+    description: Joi.string().max(1000).optional().allow('').messages({
+      'string.max': 'Description cannot exceed 1000 characters',
+    }),
+    pricing: Joi.object({
+      basePrice: Joi.number().min(0).required(),
+      platformFee: Joi.number().min(0).default(0),
+      totalAmount: Joi.number().min(0).required(),
+      currency: Joi.string().default('INR'),
+    }).optional(),
+    paymentMethod: Joi.string().valid(...Object.values(PaymentMethod)).optional(),
+    duration: Joi.number().min(5).max(480).optional(),
+    scheduledAt: Joi.date().iso().optional(),
+    timezone: Joi.string().optional(),
+    followUp: Joi.object({
+      allowed: Joi.boolean().default(false),
+      periodDays: Joi.number().min(0).max(30).default(0),
+    }).optional(),
+    bufferTimeMinutes: Joi.number().min(0).max(60).optional(),
+    notes: Joi.string().max(2000).optional().allow('').messages({
+      'string.max': 'Notes cannot exceed 2000 characters',
+    }),
   });
 
   /**
@@ -155,12 +176,12 @@ class SessionValidator {
       }),
 
     reason: Joi.string()
-      .min(10)
+      .min(3)
       .max(500)
       .optional()
       .allow('')
       .messages({
-        'string.min': 'Reason must be at least 10 characters',
+        'string.min': 'Reason must be at least 3 characters',
         'string.max': 'Reason cannot exceed 500 characters',
       }),
   });

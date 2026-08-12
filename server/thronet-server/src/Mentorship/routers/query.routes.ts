@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START query.routes.ts');
 import { Router } from 'express';
 import {queryController} from '../controllers';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
@@ -29,7 +28,7 @@ router.post(
  * @route   GET /api/v1/queries/pending
  * @desc    Get pending queries (for mentors)
  * @access  Private (Mentor)
- * ðŸ”´ MUST BE BEFORE /:id
+ * 🔴 MUST BE BEFORE /:id
  */
 router.get('/pending', queryController.getPendingQueries);
 
@@ -37,7 +36,7 @@ router.get('/pending', queryController.getPendingQueries);
  * @route   GET /api/v1/queries/stats
  * @desc    Get query statistics
  * @access  Private
- * ðŸ”´ MUST BE BEFORE /:id
+ * 🔴 MUST BE BEFORE /:id
  */
 router.get('/stats', queryController.getQueryStats);
 
@@ -45,7 +44,7 @@ router.get('/stats', queryController.getQueryStats);
  * @route   GET /api/v1/queries
  * @desc    Get all queries for current user
  * @access  Private
- * ðŸ”´ Query params don't conflict with path params
+ * 🔴 Query params don't conflict with path params
  */
 router.get(
   '/',
@@ -75,7 +74,7 @@ router.get(
  * @route   GET /api/v1/queries/:id
  * @desc    Get query details by ID
  * @access  Private
- * ðŸ”´ MUST BE AFTER ALL SPECIFIC ROUTES
+ * 🔴 MUST BE AFTER ALL SPECIFIC ROUTES
  */
 router.get('/:id', queryController.getQueryById);
 
@@ -124,5 +123,3 @@ router.post(
 );
 
 export default router;    
-console.log('TRACE_END query.routes.ts');
-

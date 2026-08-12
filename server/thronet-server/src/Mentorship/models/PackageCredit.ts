@@ -1,4 +1,4 @@
-﻿// src/models/PackageCredit.ts
+// src/models/PackageCredit.ts
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 /**
@@ -60,18 +60,22 @@ const PackageCreditSchema = new Schema<IPackageCredit>(
       type: String,
       ref: 'Package',
       required: [true, 'Package ID is required'],
+      index: true,
     },
     userId: {
       type: String,
       required: [true, 'User ID is required'],
+      index: true,
     },
     sessionId: {
       type: String,
       ref: 'Session',
 
+      index: true,
     },
     mentorId: {
       type: String,
+      index: true,
     },
     creditNumber: {
       type: Number,
@@ -82,11 +86,13 @@ const PackageCreditSchema = new Schema<IPackageCredit>(
       type: String,
       enum: Object.values(CreditStatus),
       default: CreditStatus.AVAILABLE,
+      index: true,
     },
     usedAt: Date,
     expiresAt: {
       type: Date,
       required: [true, 'Expiry date is required'],
+      index: true,
     },
     sessionType: String,
     sessionDate: Date,

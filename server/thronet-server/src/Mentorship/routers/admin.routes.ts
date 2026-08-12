@@ -1,4 +1,3 @@
-﻿console.log('TRACE_START admin.routes.ts');
 import { Router } from 'express';
 import { adminController } from '../controllers';
 import { body, param, query } from 'express-validator';
@@ -8,7 +7,7 @@ import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 
 const router = Router();
 
-// routes mein add karo â€” sabse upar
+// routes mein add karo — sabse upar
 router.use(AuthMiddleware.authenticate as any);
 router.use((req, res, next) => {
   if (req.user?.role !== 'admin') {
@@ -55,7 +54,7 @@ router.get(
  * @desc    Get all mentors with filters
  * @access  Private (Admin)
  */
-// / âœ… Replace with
+// / ✅ Replace with
 router.get(
   '/mentors',
   AuthMiddleware.authenticate as any,
@@ -175,5 +174,3 @@ router.get(
 );
 
 export default router;
-console.log('TRACE_END admin.routes.ts');
-

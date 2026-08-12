@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ITimeSlot {
   _id: string;
@@ -50,10 +50,12 @@ const TimeSlotSchema = new Schema<TimeSlotDocument>(
     mentorId: {
       type: String,
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     date: {
       type: Date,
       required: [true, 'Date is required'],
+      index: true,
     },
     startTime: {
       type: String,
@@ -75,13 +77,16 @@ const TimeSlotSchema = new Schema<TimeSlotDocument>(
       type: String,
       enum: ['available', 'booked', 'blocked', 'expired'],
       default: 'available',
+      index: true,
     },
     sessionId: {
       type: String,
+      index: true,
       sparse: true,
     },
     sessionType: {
       type: String,
+      index: true,
     },
     price: {
       type: Number,

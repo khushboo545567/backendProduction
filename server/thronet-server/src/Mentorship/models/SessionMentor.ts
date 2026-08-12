@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { SessionType } from '@/shared/constants/sessionTypes';
 import { BookingStatus } from '@/shared/constants/bookingStatus';
@@ -12,6 +12,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       type: String,
       required: true,
       unique: true,
+      index: true,
       default: () => uuidv4(),
       validate: {
         validator: (v: string) =>
@@ -22,24 +23,29 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
     mentorId: {
       type: String,
       required: [true, 'Mentor ID is required'],
+      index: true,
     },
     menteeId: {
       type: String,
       default: null,
+      index: true,
     },
     sessionType: {
       type: String,
       enum: Object.values(SessionType),
       required: [true, 'Session type is required'],
+      index: true,
     },
     status: {
       type: String,
       enum: Object.values(BookingStatus),
       default: BookingStatus.PENDING,
+      index: true,
     },
     scheduledAt: {
       type: Date,
       required: [true, 'Scheduled time is required'],
+      index: true,
     },
     duration: {
       type: Number,
@@ -66,6 +72,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
     },
     notes:       { type: String, trim: true },
     attachments: [String],
+    thumbnailImage: { type: String },
     pricing: {
       basePrice:    { type: Number, required: true, min: 0 },
       platformFee:  { type: Number, required: true, min: 0 },
@@ -97,11 +104,11 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         },
       },
     ],
-    isBooked:       { type: Boolean, default: false },
+    isBooked:       { type: Boolean, default: false, index: true },
     bookedBy:       { type: String, default: null },
     bookedAt:       { type: Date, default: null },
     slotTime:       { type: String },
-    availabilityId: { type: String },
+    availabilityId: { type: String, index: true },
     progress: {
       totalSessionsBooked: { type: Number, default: 0 },
       completedSessions:   { type: Number, default: 0 },
@@ -113,13 +120,14 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         type: String,
         enum: Object.values(PaymentStatus),
         default: PaymentStatus.PENDING,
+        index: true,
       },
       method: {
         type: String,
         enum: Object.values(PaymentMethod),
         required: true,
       },
-      transactionId: { type: String },
+      transactionId: { type: String, index: true },
       paidAt:        { type: Date },
       refundAmount:  { type: Number, min: 0 },
       refundedAt:    { type: Date },
@@ -143,6 +151,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       lastRescheduledAt:  { type: Date },
       previousDates:      [Date],
       rescheduledBy:      { type: String },
+      reason:             { type: String },
     },
     review: {
       mentorReview: { type: String },
@@ -150,6 +159,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       rating:       { type: Number, min: 1, max: 5 },
       reviewedAt:   { type: Date },
     },
+
     completion: {
       completedAt:      { type: Date },
       actualDuration:   { type: Number },
@@ -255,20 +265,28 @@ SessionMentorSchema.methods.cancelSession = async function (
   refundEligible = false
 ) {
   this.status = BookingStatus.CANCELLED;
+  if (this.bookings && this.bookings.length > 0) {
+    this.bookings[0].status = 'cancelled';
+  }
   this.cancellation = { cancelledBy, cancelledAt: new Date(), reason, refundEligible };
   return await this.save();
 };
 
 SessionMentorSchema.methods.rescheduleSession = async function (
   newScheduledAt: Date,
-  rescheduledBy: string
+  rescheduledBy: string,
+  reason: string
 ) {
   if (this.reschedule.count >= 2) throw new Error('Maximum reschedule limit reached');
   this.reschedule.previousDates.push(this.scheduledAt);
   this.scheduledAt = newScheduledAt;
+  if (this.bookings && this.bookings.length > 0) {
+    this.bookings[0].scheduledAt = newScheduledAt;
+  }
   this.reschedule.count += 1;
   this.reschedule.lastRescheduledAt = new Date();
   this.reschedule.rescheduledBy = rescheduledBy;
+  this.reschedule.reason = reason;
   this.status = BookingStatus.RESCHEDULED;
   return await this.save();
 };

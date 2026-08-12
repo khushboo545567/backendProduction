@@ -9,7 +9,7 @@ import calendarSyncService from "./calendarSync.service";
 import cronService from "./cron.service";
 import emailService from "./email.service";
 import groupService from "./group.service";
-// import healthService from "./health.service";
+import healthService from "./health.service";
 import mentorService from "./mentor.service";
 import notificationService from "./notification.service";
 import packageService from "./package.service";
@@ -29,6 +29,6 @@ import waitlistService from "./waitlist.service";
 
 export {
     //mentorship servicees
-    mentorshipanalyticsService, aiService, availabilityService, bookingService, calendarService, calendarSyncService, cronService, emailService, groupService,  mentorService, notificationService, packageService, portfolioService, queryService, recommendationService, refundService, reportService, resumeService, mentorshipReviewService, searchService, mentorshipSessionService, smsService, timezoneService, videoService, waitlistService,
+    mentorshipanalyticsService, aiService, availabilityService, bookingService, calendarService, calendarSyncService, cronService, emailService, groupService, healthService, mentorService, notificationService, packageService, portfolioService, queryService, recommendationService, refundService, reportService, resumeService, mentorshipReviewService, searchService, mentorshipSessionService, smsService, timezoneService, videoService, waitlistService,
    
 }

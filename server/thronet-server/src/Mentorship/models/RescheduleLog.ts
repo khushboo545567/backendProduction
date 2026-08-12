@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 /**
  * Interface for RescheduleLog document
@@ -49,18 +49,21 @@ const RescheduleLogSchema = new Schema<RescheduleLogDocument>(
     sessionId: {
       type: String,
       required: [true, 'Session ID is required'],
+      index: true,
       ref: 'Session',
     },
     
     rescheduledBy: {
       type: String,
       required: [true, 'Rescheduled by user ID is required'],
+      index: true,
     },
     
     rescheduledByRole: {
       type: String,
       enum: ['mentor', 'mentee'],
       required: [true, 'Rescheduled by role is required'],
+      index: true,
     },
     
     // Old schedule
@@ -79,6 +82,7 @@ const RescheduleLogSchema = new Schema<RescheduleLogDocument>(
     newScheduledAt: {
       type: Date,
       required: [true, 'New scheduled time is required'],
+      index: true,
     },
     
     newTimezone: {
@@ -139,6 +143,7 @@ const RescheduleLogSchema = new Schema<RescheduleLogDocument>(
       type: Date,
       default: Date.now,
       required: true,
+      index: true,
     },
   },
   {

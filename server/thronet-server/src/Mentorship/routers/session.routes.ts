@@ -1,11 +1,27 @@
-﻿console.log('TRACE_START session.routes.ts');
 import { Router } from 'express';
 import { sessionController } from '../controllers';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { validateJoi } from '@/shared/middlewares/validation.middleware';
 import sessionValidator from '../validations/session.validator';
+import { uploadSingle } from '@/shared/upload/upload';
+import { NextFunction, Request, Response } from 'express';
 
 const router = Router();
+
+const parseFormDataFields = (req: Request, res: Response, next: NextFunction): void => {
+  const fieldsToParse = ['pricing', 'followUp', 'meeting'];
+  for (const field of fieldsToParse) {
+    const body = req.body as Record<string, any>;
+    if (body[field] && typeof body[field] === 'string') {
+      try {
+        body[field] = JSON.parse(body[field]);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+  next();
+};
 
 // All routes require authentication
 router.use(AuthMiddleware.authenticate as any);
@@ -19,10 +35,12 @@ router.use(AuthMiddleware.authenticate as any);
  * @desc    Naya session assign hoga (mentor karta hai)
  * @body    sessionType, session name, price assign per min or hrs, scheduledAt date + time wise, timezone, paymentMethod, duration, Follow-up Period, Follow-up Allowed, Buffer Time
  * @access  Private (Mentor)
- * @flow    Validation â†’ pricing given by body â†’ mentor DB me update â†’ session create
+ * @flow    Validation → pricing given by body → mentor DB me update → session create
  */
 router.post(
   '/create',
+  uploadSingle('thumbnailImage'),
+  parseFormDataFields,
   validateJoi(sessionValidator.createSession),
   sessionController.createSession
 );
@@ -50,13 +68,13 @@ router.get('/get-all-db', sessionController.getAllSessionsFromDB);
  * @desc    Current user ke saare sessions lo (mentor ya mentee dono ke liye)
  * @query   role=mentee|mentor, page=1, limit=10, status, sessionType, startDate, endDate
  * @access  Private
- * @flow    userId + role se filter karo â†’ paginated list return karo
+ * @flow    userId + role se filter karo → paginated list return karo
  */
 router.get('/get-all', sessionController.getAllSessions);
 
 /**
  * @route   POST /api/v1/sessions/book
- * @desc    Full booking â€” slot select + availability mark + session create
+ * @desc    Full booking — slot select + availability mark + session create
  * @body    mentorId, sessionType, scheduledAt, slotTime, timezone, title, pricing, paymentMethod, availabilityId
  * @access  Private (Mentee)
  */
@@ -64,7 +82,7 @@ router.post('/book', validateJoi(sessionValidator.bookSession), sessionControlle
 
 /**
  * @route   GET /api/v1/sessions/:id/progress
- * @desc    Mentee ka session progress â€” completed, left, total
+ * @desc    Mentee ka session progress — completed, left, total
  * @access  Private
  */
 router.get('/:id/progress', sessionController.getSessionProgress);
@@ -126,7 +144,7 @@ router.get('/past', sessionController.getPastSessions);
 
 
 /**
- * ðŸ†• PHASE 10: Get refund estimate
+ * 🆕 PHASE 10: Get refund estimate
  * @route   GET /api/v1/sessions/:id/refund-estimate
  * @desc    Get refund estimate before cancellation
  * @access  Private
@@ -140,13 +158,15 @@ router.get('/:id/refund-estimate', sessionController.getRefundEstimate);
  */
 router.put(
   '/:id',
+  uploadSingle('thumbnailImage'),
+  parseFormDataFields,
   validateJoi(sessionValidator.updateSession),
   sessionController.updateSession
 );
 
 
 /**
- * ðŸ†• PHASE 10: Cancel session
+ * 🆕 PHASE 10: Cancel session
  * @route   POST /api/v1/sessions/:id/cancel
  * @desc    Cancel a session with refund
  * @access  Private
@@ -158,7 +178,7 @@ router.post(
 );
 
 /**
- * ðŸ†• PHASE 10: Reschedule session
+ * 🆕 PHASE 10: Reschedule session
  * @route   POST /api/v1/sessions/:id/reschedule
  * @desc    Reschedule a session to new date/time
  * @access  Private
@@ -181,5 +201,3 @@ router.post(
 );
 
 export default router;
-console.log('TRACE_END session.routes.ts');
-
