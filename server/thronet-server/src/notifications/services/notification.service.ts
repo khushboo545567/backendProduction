@@ -5,44 +5,93 @@ import { LoggerUtil as logger } from '@/shared/logger.util';
 import Connection from '@/connections/models/Connection';
 import User from '@/auth/models/User.model';
 import { Follow } from '@/connections/models/Follow';
+import ProfilePhoto from '@/Profile/models/ProfilePhoto.model';
 
 class NotificationService {
 
     /**
-     * Called after a post is created.
-     * Finds all followers of the poster and sends them a real-time notification.
+     * Unified post notification.
+     * Notifies ALL followers + ALL accepted connections of the poster.
+     * Recipients who belong to both groups receive only ONE notification.
      */
-    static async notifyFollowersOnPost(
+    static async notifyPostRecipients(
         posterId: string,
         entryId: string,
-        postTitle: string
+        _postTitle: string
     ): Promise<void> {
         try {
-            // 1. Get poster's profile
-            const poster = await User.findOne({ userId: posterId }).select('firstName lastName profilePhotoId').lean();
+            // ── 1. Poster profile ──────────────────────────────────────────
+            const poster = await User.findOne({ userId: posterId })
+                .select('firstName lastName profilePhotoId')
+                .lean();
             if (!poster) return;
 
-            const posterName = `${poster.firstName} ${poster.lastName || ''}`.trim();
-            const posterPhoto = (poster as any).profilePhotoId || null;
+            const posterName = `${poster.firstName} ${(poster as any).lastName || ''}`.trim();
 
-            // 2. Get all active followers of the poster
-            const followers = await Follow.find({
-                followingId: posterId,
-                status: 'active',
-                isBlocked: false,
-            }).select('followerId').lean();
+            // Resolve real Cloudinary URL (profilePhotoId is a UUID reference, not a URL)
+            let posterPhoto: string | null = null;
+            if ((poster as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (poster as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                posterPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
 
-            console.log(`[NOTIF DEBUG] Found ${followers.length} followers for posterId ${posterId}`);
+            // ── 2. Fetch followers + connections in parallel ───────────────
+            const [followers, connections] = await Promise.all([
+                Follow.find({
+                    followingId: posterId,
+                    status: 'active',
+                    isBlocked: false,
+                }).select('followerId').lean(),
 
-            if (!followers.length) return;
+                Connection.find({
+                    $or: [{ fromUserId: posterId }, { toUserId: posterId }],
+                    status: 'active',
+                    isArchived: false,
+                }).select('fromUserId toUserId').lean(),
+            ]);
 
-            // 3. Extract follower user IDs
-            const recipientIds = followers.map((f: any) => f.followerId);
-            console.log(`[NOTIF DEBUG] recipientIds:`, recipientIds);
+            const followerIds: string[] = followers.map((f: any) => f.followerId);
+            const connectionIds: string[] = connections.map((c: any) =>
+                c.fromUserId === posterId ? c.toUserId : c.fromUserId
+            );
 
+            console.log(`[POST NOTIFICATION] Post ID: ${entryId}`);
+            console.log(`[POST NOTIFICATION] Post Author ID: ${posterId}`);
+            console.log(`[FOLLOWERS] Followers found: ${followerIds.length}`);
+            console.log(`[FOLLOWERS] Follower IDs: ${JSON.stringify(followerIds)}`);
+            console.log(`[CONNECTIONS] Connections found: ${connectionIds.length}`);
+            console.log(`[CONNECTIONS] Connected User IDs: ${JSON.stringify(connectionIds)}`);
+
+            // ── 3. Merge + deduplicate across both groups ──────────────────
+            const allRecipientIds = [...new Set([...followerIds, ...connectionIds])];
+
+            // Remove the poster themselves from recipients (safety guard)
+            const candidateIds = allRecipientIds.filter((id) => id !== posterId);
+
+            console.log(`[RECIPIENTS] Total recipients (after dedup): ${candidateIds.length}`);
+
+            if (!candidateIds.length) return;
+
+            // ── 4. Guard against re-insertion (e.g. retry) ────────────────
+            const existingNotifs = await Notification.find({
+                entityId: entryId,
+                type: 'post_created',
+                recipientId: { $in: candidateIds },
+            }).select('recipientId').lean();
+
+            const alreadyNotified = new Set(existingNotifs.map((n: any) => n.recipientId));
+            const recipientIds = candidateIds.filter((id) => !alreadyNotified.has(id));
+
+            console.log(`[NOTIFICATION] Already notified: ${alreadyNotified.size}`);
+            console.log(`[NOTIFICATION] New notifications to create: ${recipientIds.length}`);
+
+            if (!recipientIds.length) return;
+
+            // ── 5. Build and insert notification documents ────────────────
             const message = `${posterName} created a new post.`;
 
-            // 4. Bulk insert notifications into DB
             const docs = recipientIds.map((recipientId: string) => {
                 const doc: any = {
                     notificationId: uuidv4(),
@@ -60,8 +109,9 @@ class NotificationService {
             });
 
             await Notification.insertMany(docs, { ordered: false });
+            console.log(`[NOTIFICATION] Notifications saved: ${docs.length}`);
 
-            // 5. Emit real-time events via Socket.IO
+            // ── 6. Real-time Socket.IO emit ────────────────────────────────
             try {
                 const io = getIO();
                 recipientIds.forEach((recipientId: string) => {
@@ -77,98 +127,12 @@ class NotificationService {
                         isRead: false,
                         createdAt: new Date().toISOString(),
                     };
+                    console.log(`[SOCKET] Emitting notification:new → user:${recipientId}`);
                     io.to(`user:${recipientId}`).emit('notification:new', payload);
                 });
+                console.log(`[SOCKET] notification:new emitted to ${recipientIds.length} recipients`);
             } catch (socketErr) {
-                // Socket not critical — DB record already saved
-                logger.warn('Socket emit failed for follower post notifications', {
-                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
-                });
-            }
-
-            logger.info('Follower post notifications sent', {
-                posterId,
-                entryId,
-                recipientCount: recipientIds.length,
-            });
-        } catch (err) {
-            logger.error('notifyFollowersOnPost failed', {
-                error: err instanceof Error ? err.message : 'unknown',
-                posterId,
-                entryId,
-            });
-        }
-    }
-
-    /**
-     * Called after a post is created.
-     * Finds all connections of the poster and sends them a real-time notification.
-     */
-    static async notifyConnectionsOnPost(
-        posterId: string,
-        entryId: string,
-        postTitle: string
-    ): Promise<void> {
-        try {
-            // 1. Get poster's profile
-            const poster = await User.findOne({ userId: posterId }).select('firstName lastName profilePhotoId').lean();
-            if (!poster) return;
-
-            const posterName = `${poster.firstName} ${poster.lastName || ''}`.trim();
-            const posterPhoto = poster.profilePhotoId || null;
-
-            // 2. Get all active connections of the poster
-            const connections = await Connection.find({
-                $or: [{ fromUserId: posterId }, { toUserId: posterId }],
-                status: 'active',
-                isArchived: false,
-            }).select('fromUserId toUserId').lean();
-
-            if (!connections.length) return;
-
-            // 3. Extract the "other" user in each connection
-            const recipientIds = connections.map((conn) =>
-                conn.fromUserId === posterId ? conn.toUserId : conn.fromUserId
-            );
-
-            const message = `${posterName} shared a new post: "${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"`;
-
-            // 4. Bulk insert notifications into DB
-            const docs = recipientIds.map((recipientId) => ({
-                notificationId: uuidv4(),
-                recipientId,
-                senderId: posterId,
-                senderName: posterName,
-                senderPhoto: posterPhoto,
-                type: 'post_created' as const,
-                entityId: entryId,
-                entityType: 'post' as const,
-                message,
-                isRead: false,
-            }));
-
-            await Notification.insertMany(docs, { ordered: false });
-
-            // 5. Emit real-time events via Socket.IO
-            try {
-                const io = getIO();
-                recipientIds.forEach((recipientId) => {
-                    const payload = {
-                        notificationId: docs.find((d) => d.recipientId === recipientId)?.notificationId,
-                        type: 'post_created',
-                        senderId: posterId,
-                        senderName: posterName,
-                        senderPhoto: posterPhoto,
-                        entityId: entryId,
-                        entityType: 'post',
-                        message,
-                        isRead: false,
-                        createdAt: new Date().toISOString(),
-                    };
-                    io.to(`user:${recipientId}`).emit('notification:new', payload);
-                });
-            } catch (socketErr) {
-                // Socket not critical — DB record already saved
+                // Socket is non-critical — DB record already saved
                 logger.warn('Socket emit failed for post notifications', {
                     error: socketErr instanceof Error ? socketErr.message : 'unknown',
                 });
@@ -177,15 +141,41 @@ class NotificationService {
             logger.info('Post notifications sent', {
                 posterId,
                 entryId,
-                recipientCount: recipientIds.length,
+                followerCount: followerIds.length,
+                connectionCount: connectionIds.length,
+                uniqueRecipientCount: recipientIds.length,
             });
         } catch (err) {
-            logger.error('notifyConnectionsOnPost failed', {
+            logger.error('notifyPostRecipients failed', {
                 error: err instanceof Error ? err.message : 'unknown',
                 posterId,
                 entryId,
             });
         }
+    }
+
+    /**
+     * @deprecated Use notifyPostRecipients instead.
+     * Kept for backward compatibility — delegates to the unified function.
+     */
+    static async notifyFollowersOnPost(
+        posterId: string,
+        entryId: string,
+        postTitle: string
+    ): Promise<void> {
+        return NotificationService.notifyPostRecipients(posterId, entryId, postTitle);
+    }
+
+    /**
+     * @deprecated Use notifyPostRecipients instead.
+     * Kept for backward compatibility — delegates to the unified function.
+     */
+    static async notifyConnectionsOnPost(
+        posterId: string,
+        entryId: string,
+        postTitle: string
+    ): Promise<void> {
+        return NotificationService.notifyPostRecipients(posterId, entryId, postTitle);
     }
 
     ////////Changed Modified

@@ -1264,7 +1264,7 @@ class AnalyticsService {
     ): Promise<any> {
         try {
             const analytics = await Analytics.findOne({ userId });
-
+    
             if (!analytics) {
                 return {
                     postId,
@@ -1280,20 +1280,27 @@ class AnalyticsService {
                     },
                 };
             }
-
+    
             const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-            // ✅ FILTER BY POST ID + DATE
+    
             const postImpressions = analytics.postImpressions.impressions.filter(
                 i => i.postId === postId && i.viewedAt >= cutoffDate
             );
-
-
+    
+            // ✅ NEW: total VIEW EVENTS count karo (repeat views included via viewCount),
+            // na ki sirf unique-viewer entries. Har impression ka apna viewCount hota
+            // hai (default 1, aur 10+ min baad dobara dekhne pe increment hota hai) —
+            // isse denominator realistic rehta hai aur engagement % genuinely <=100% ke
+            // range mein aata hai.
+            const totalViewCount = postImpressions.reduce(
+                (sum, imp: any) => sum + (imp.viewCount || 1),
+                0
+            );
+    
             const postShares = (analytics.shares?.shares || []).filter(
                 (s: any) => s.postId === postId && s.sharedAt >= cutoffDate
             );
-
-            // ✅ DAILY BREAKDOWN
+    
             const dailyBreakdown = postImpressions.reduce((acc: any, imp) => {
                 const date = imp.viewedAt.toISOString().split('T')[0];
                 if (!acc[date]) {
@@ -1302,14 +1309,12 @@ class AnalyticsService {
                 acc[date].count++;
                 return acc;
             }, {});
-
-            // ✅ SOURCE BREAKDOWN
+    
             const sourceBreakdown = postImpressions.reduce((acc: any, imp) => {
                 acc[imp.source] = (acc[imp.source] || 0) + 1;
                 return acc;
             }, {});
-
-            // ✅ ENGAGEMENT BREAKDOWN
+    
             const engagementBreakdown = postImpressions.reduce((acc: any, imp: any) => {
                 const types: string[] = (imp.engagementTypes && imp.engagementTypes.length > 0)
                     ? imp.engagementTypes
@@ -1320,24 +1325,20 @@ class AnalyticsService {
                     acc[t] = (acc[t] || 0) + 1;
                 });
                 return acc;
-            }, { views: postImpressions.length });
-
-
-
+            }, { views: totalViewCount }); // ✅ CHANGED: postImpressions.length → totalViewCount
+    
             return {
                 postId,
-                totalImpressions: postImpressions.length,
+                totalImpressions: totalViewCount,   // ✅ CHANGED
                 dailyImpressions: Object.values(dailyBreakdown).sort((a: any, b: any) =>
                     a.date.localeCompare(b.date)
                 ),
                 sourceBreakdown,
                 engagement: {
-                    views: postImpressions.length,
+                    views: totalViewCount,          // ✅ CHANGED
                     likes: engagementBreakdown.like || 0,
                     comments: engagementBreakdown.comment || 0,
-                    shares: postShares.length,  
-
-                    // shares: engagementBreakdown.share || 0,
+                    shares: postShares.length,
                     saves: engagementBreakdown.save || 0,
                 },
                 timeRange: {
@@ -3549,21 +3550,7 @@ static async getSearchAppearancesChange(
 
 
 
-    // /**
-    //  * 📊 GET POST ANALYTICS (impressions, engagement breakdown, daily data for one post)
-    //  * GET /profile/analytics/post/:postId
-    //  */
-    // static async getPostAnalytics(postId: string, days: number = 30): Promise<any> {
-    //     try {
-    //         const { data } = await api.get(`/profile/analytics/post/${postId}`, {
-    //             params: { days }
-    //         });
-    //         return data;
-    //     } catch (error: any) {
-    //         console.error('❌ [ANALYTICS] Failed to fetch post analytics:', error);
-    //         throw error;
-    //     }
-    // }
+
 
 }
 

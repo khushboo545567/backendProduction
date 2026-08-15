@@ -323,14 +323,20 @@ class PostService {
 
             setTimeout(async () => {
                 try {
-                    await NotificationService.notifyFollowersOnPost(
+                    console.log('--- NOTIF TRACE: Post created ---');
+                    console.log(`--- NOTIF TRACE: Post author identified (userId: ${userId}) ---`);
+                    await NotificationService.notifyPostRecipients(
                         userId,
                         entryId,
                         postData.title
                     );
-                    console.log('✅ [NOTIF] Followers notified for post:', entryId);
+                    console.log('✅ [NOTIF] Recipients notified for post:', entryId);
                 } catch (err: any) {
-                    console.warn('⚠️ [NOTIF] Notification failed (non-blocking):', err.message);
+                    console.error('⚠️ [NOTIF] Notification failed:', {
+                        name: err?.name,
+                        message: err?.message,
+                        stack: err?.stack,
+                    });
                 }
             }, 0);
 
