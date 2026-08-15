@@ -325,12 +325,12 @@ class PostService {
                 try {
                     console.log('--- NOTIF TRACE: Post created ---');
                     console.log(`--- NOTIF TRACE: Post author identified (userId: ${userId}) ---`);
-                    await NotificationService.notifyFollowersOnPost(
+                    await NotificationService.notifyPostRecipients(
                         userId,
                         entryId,
                         postData.title
                     );
-                    console.log('✅ [NOTIF] Followers notified for post:', entryId);
+                    console.log('✅ [NOTIF] Recipients notified for post:', entryId);
                 } catch (err: any) {
                     console.error('⚠️ [NOTIF] Notification failed:', {
                         name: err?.name,
