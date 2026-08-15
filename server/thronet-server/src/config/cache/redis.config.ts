@@ -38,14 +38,14 @@ class RedisConfigManager {
                 host: process.env.REDIS_HOST || 'redis',
                 port: parseInt(process.env.REDIS_PORT || '6379')
             },
-            // {
-            //     host: process.env.REDIS_NODE_2_HOST || 'redis-node-2',
-            //     port: parseInt(process.env.REDIS_NODE_2_PORT || '7002')
-            // },
-            // {
-            //     host: process.env.REDIS_NODE_3_HOST || 'redis-node-3',
-            //     port: parseInt(process.env.REDIS_NODE_3_PORT || '7003')
-            // }
+            {
+                host: process.env.REDIS_NODE_2_HOST || 'redis-node-2',
+                port: parseInt(process.env.REDIS_NODE_2_PORT || '7002')
+            },
+            {
+                host: process.env.REDIS_NODE_3_HOST || 'redis-node-3',
+                port: parseInt(process.env.REDIS_NODE_3_PORT || '7003')
+            }
         ];
 
         // ==================== PRODUCTION-GRADE OPTIONS ====================
