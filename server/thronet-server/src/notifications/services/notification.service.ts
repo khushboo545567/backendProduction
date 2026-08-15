@@ -5,6 +5,7 @@ import { LoggerUtil as logger } from '@/shared/logger.util';
 import Connection from '@/connections/models/Connection';
 import User from '@/auth/models/User.model';
 import { Follow } from '@/connections/models/Follow';
+import ProfilePhoto from '@/Profile/models/ProfilePhoto.model';
 
 class NotificationService {
 
@@ -23,7 +24,15 @@ class NotificationService {
             if (!poster) return;
 
             const posterName = `${poster.firstName} ${poster.lastName || ''}`.trim();
-            const posterPhoto = (poster as any).profilePhotoId || null;
+
+            // Resolve actual Cloudinary URL from profilePhotoId UUID
+            let posterPhoto: string | null = null;
+            if ((poster as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (poster as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                posterPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
 
             // 2. Get all active followers of the poster
             const followers = await Follow.find({
@@ -32,13 +41,25 @@ class NotificationService {
                 isBlocked: false,
             }).select('followerId').lean();
 
-            console.log(`[NOTIF DEBUG] Found ${followers.length} followers for posterId ${posterId}`);
+            console.log(`--- NOTIF TRACE: Followers found: ${followers.length} ---`);
 
             if (!followers.length) return;
 
-            // 3. Extract follower user IDs
-            const recipientIds = followers.map((f: any) => f.followerId);
-            console.log(`[NOTIF DEBUG] recipientIds:`, recipientIds);
+            // 3. Extract follower user IDs and prevent duplicates
+            const allFollowerIds = followers.map((f: any) => f.followerId);
+
+            const existingNotifs = await Notification.find({
+                entityId: entryId,
+                type: 'post_created',
+                recipientId: { $in: allFollowerIds }
+            }).select('recipientId').lean();
+
+            const existingRecipientIds = new Set(existingNotifs.map((n: any) => n.recipientId));
+            const recipientIds = allFollowerIds.filter((id: string) => !existingRecipientIds.has(id));
+
+            console.log(`--- NOTIF TRACE: NEW_POST notifications to create: ${recipientIds.length} ---`);
+
+            if (!recipientIds.length) return;
 
             const message = `${posterName} created a new post.`;
 
