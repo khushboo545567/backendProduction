@@ -409,8 +409,12 @@ PostSchema.statics.setPinned = async function (
     userId: string,
     isPinned: boolean
 ): Promise<IPostEntry> {
-    const doc = await this.findOne({ userId });
-    if (!doc) throw new Error('User post document not found');
+    // ✅ FIX: pehle sirf apne (userId) document me dhoondte the, isliye
+    // doosre user ka post pin/save karte waqt "Post entry not found"
+    // aata tha. Ab incrementLikes jaisa hi — saare documents me entryId
+    // se dhoondte hain, chahe post kisi ka bhi ho.
+    const doc = await this.findOne({ 'posts.entryId': entryId });
+    if (!doc) throw new Error('Post not found');
     const entry = doc.posts.find((p: IPostEntry) => p.entryId === entryId && !p.isDeleted);
     if (!entry) throw new Error('Post entry not found');
     entry.isPinned = isPinned;
@@ -424,8 +428,10 @@ PostSchema.statics.setSaved = async function (
     userId: string,
     isSaved: boolean
 ): Promise<IPostEntry> {
-    const doc = await this.findOne({ userId });
-    if (!doc) throw new Error('User post document not found');
+    // ✅ FIX: same as setPinned — doosre users ke posts bhi save/unsave
+    // ho sakein isliye query saare documents me entryId se search karti hai.
+    const doc = await this.findOne({ 'posts.entryId': entryId });
+    if (!doc) throw new Error('Post not found');
     const entry = doc.posts.find((p: IPostEntry) => p.entryId === entryId && !p.isDeleted);
     if (!entry) throw new Error('Post entry not found');
     entry.isSaved = isSaved;
@@ -433,6 +439,7 @@ PostSchema.statics.setSaved = async function (
     await doc.save();
     return entry;
 };
+
 
 PostSchema.statics.incrementLikes = async function (
     entryId: string,
@@ -488,22 +495,6 @@ PostSchema.statics.decrementLikes = async function (
         }
     }
 
-    await doc.save();
-    return entry;
-};
-
-PostSchema.statics.decrementLikes = async function (
-    entryId: string,
-    userId: string
-): Promise<IPostEntry> {
-    const doc = await this.findOne({ 'posts.entryId': entryId });
-    if (!doc) throw new Error('Post not found');
-    const entry = doc.posts.find((p: IPostEntry) => p.entryId === entryId && !p.isDeleted);
-    if (!entry) throw new Error('Post entry not found');
-    const index = entry.likedBy.indexOf(userId);
-    if (index === -1) throw new Error('Not liked yet');
-    entry.likedBy.splice(index, 1);
-    entry.likesCount = Math.max(0, entry.likesCount - 1);
     await doc.save();
     return entry;
 };
