@@ -864,6 +864,8 @@ class PostService {
 
             await doc.save();
 
+
+
             redisService.deleteByPattern(`feed:v1:${userId}:page:*`).catch(() => {});
 
             LoggerUtil.info('Post updated successfully', { entryId, userId, correlationId });

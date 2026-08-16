@@ -2943,11 +2943,32 @@ static async getSearchAppearancesChange(
                 });
             }
 
+            // ✅ DEDUPE FIX: same sharer + same post ka duplicate call
+            // (double-click / race condition) rokne ke liye — agar last 5
+            // second ke andar isi sharer ne isi post ko share kiya hai,
+            // to naya duplicate entry skip karo
+            const now = new Date();
+            const isDuplicate = analytics.shares.shares.some((s: any) => {
+                if (s.postId !== shareData.postId) return false;
+                if (shareData.sharerId && s.sharerId !== shareData.sharerId) return false;
+                const diffMs = now.getTime() - new Date(s.sharedAt).getTime();
+                return diffMs < 5000;
+            });
+
+            if (isDuplicate) {
+                LoggerUtil.info('Duplicate share ignored', {
+                    userId,
+                    postId: shareData.postId,
+                    correlationId
+                });
+                return;
+            }
+
             analytics.shares.shares.push({
                 shareId: uuidv4(),
                 postId: shareData.postId,
                 shareType: shareData.shareType,
-                sharedAt: new Date(),
+                sharedAt: now,
                 sharerId: shareData.sharerId
             } as any);
 

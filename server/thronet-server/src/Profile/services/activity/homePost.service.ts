@@ -573,6 +573,7 @@ class HomePostService {
             LoggerUtil.info('Fetching home feed posts', { currentUserId, page, limit, correlationId });
 
             const cached = await redisService.get(cacheKey);
+
             if (cached) {
                 LoggerUtil.info('Home feed served from cache', { currentUserId, page, correlationId });
                 return JSON.parse(cached);
