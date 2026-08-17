@@ -245,8 +245,8 @@ class PostService {
                 repostsCount: 0,
                 sendsCount: 0,
                 likedBy: [],
+                savedBy: [],
                 isPinned: false,
-                isSaved: false,
                 isArchived: false,
                 isDeleted: false,
 
@@ -381,11 +381,10 @@ class PostService {
                 ...(savedEntry.videos?.length > 0 && { videos: savedEntry.videos }),
                 ...(savedEntry.documents?.length > 0 && { documents: savedEntry.documents }),
                 isPinned: savedEntry.isPinned,
-                isSaved: savedEntry.isSaved,
+                isSaved: (savedEntry.savedBy || []).includes(userId),
                 isArchived: savedEntry.isArchived,
                 createdAt: savedEntry.createdAt,
             };
-
         } catch (error: any) {
             LoggerUtil.error('Post creation failed', {
                 error: error.message,
@@ -520,7 +519,10 @@ class PostService {
                 posts: postsWithLikeStatus,
                 total: postsWithLikeStatus.length,
                 pinnedPosts: postsWithLikeStatus.filter((p: any) => p.isPinned),
-                savedPosts: postsWithLikeStatus.filter((p: any) => p.isSaved),
+                // NOTE: savedBy ab per-user array hai; "saved by anyone" ka
+                // concept nahi raha. Saved posts fetch karne ke liye
+                // Post.getSavedPostsByUser(currentUserId) use karo, ye field nahi.
+                savedPosts: [],
             };
 
         } catch (error: any) {
@@ -1036,8 +1038,7 @@ class PostService {
 
             return {
                 entryId: entry.entryId,
-                isSaved: entry.isSaved,
-                savedAt: entry.savedAt,
+                isSaved: (entry.savedBy || []).includes(userId),   // ✅ FIX — per-user check
                 message: `Post ${isSaved ? 'saved' : 'unsaved'} successfully`,
             };
 
@@ -1047,6 +1048,36 @@ class PostService {
         }
     }
 
+    // ✅ NEW: current logged-in user ke saare saved posts fetch karo
+    static async getSavedPosts(userId: string): Promise<any> {
+        const correlationId = uuidv4();
+
+        try {
+            LoggerUtil.info('Fetching saved posts', { userId, correlationId });
+
+            const cleanPost = (obj: any): any => {
+                if (!obj.images?.length) delete obj.images;
+                if (!obj.videos?.length) delete obj.videos;
+                if (!obj.documents?.length) delete obj.documents;
+                if (!obj.pollData?.question) delete obj.pollData;
+                if (!obj.eventData?.eventType) delete obj.eventData;
+                return obj;
+            };
+
+            const rawPosts = await Post.getSavedPostsByUser(userId);
+            const posts = rawPosts.map(cleanPost);
+
+            LoggerUtil.info('Saved posts fetched successfully', {
+                userId, count: posts.length, correlationId,
+            });
+
+            return { posts, total: posts.length };
+
+        } catch (error: any) {
+            LoggerUtil.error('Get saved posts failed', { error: error.message, userId, correlationId });
+            throw error;
+        }
+    }    
     static async getRecentPostsPerformance(userId: string, limit: number = 10): Promise<any> {
         const correlationId = uuidv4();
 

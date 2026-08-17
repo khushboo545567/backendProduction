@@ -196,7 +196,13 @@ class NotificationService {
             if (!liker) return;
 
             const likerName = `${liker.firstName} ${liker.lastName || ''}`.trim();
-            const likerPhoto = liker.profilePhotoId || null;
+            let likerPhoto: string | null = null;
+            if (liker.profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: liker.profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                likerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
 
             const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'your post';
             const message = `${likerName} liked ${shortTitle}`;
@@ -266,7 +272,13 @@ class NotificationService {
             if (!commenter) return;
 
             const commenterName = `${commenter.firstName} ${commenter.lastName || ''}`.trim();
-            const commenterPhoto = commenter.profilePhotoId || null;
+            let commenterPhoto: string | null = null;
+            if (commenter.profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: commenter.profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                commenterPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
 
             const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'your post';
             const message = `${commenterName} commented on ${shortTitle}`;
@@ -337,7 +349,13 @@ class NotificationService {
             if (!mentioner) return;
 
             const mentionerName = `${mentioner.firstName} ${mentioner.lastName || ''}`.trim();
-            const mentionerPhoto = mentioner.profilePhotoId || null;
+            let mentionerPhoto: string | null = null;
+            if (mentioner.profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: mentioner.profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                mentionerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
 
             const shortTitle = contextTitle ? `"${contextTitle.slice(0, 60)}${contextTitle.length > 60 ? '...' : ''}"` : 'a post';
             const message = context === 'comment'
@@ -408,7 +426,13 @@ class NotificationService {
             if (!sender) return;
 
             const senderName = `${sender.firstName} ${sender.lastName || ''}`.trim();
-            const senderPhoto = (sender as any).profilePhotoId || null;
+            let senderPhoto: string | null = null;
+            if ((sender as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (sender as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
             const message = `${senderName} sent you a connection request`;
             const notificationId = uuidv4();
 
@@ -474,7 +498,13 @@ class NotificationService {
             if (!acceptor) return;
 
             const acceptorName = `${acceptor.firstName} ${acceptor.lastName || ''}`.trim();
-            const acceptorPhoto = (acceptor as any).profilePhotoId || null;
+            let acceptorPhoto: string | null = null;
+            if ((acceptor as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (acceptor as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                acceptorPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
             const message = `${acceptorName} accepted your connection request`;
             const notificationId = uuidv4();
 
