@@ -728,11 +728,46 @@ class PostController {
         }
     }
 
-    /**
-     * ✅ GET POST ANALYTICS
-     * GET /api/v1/activity/posts/:postId/analytics
+   /**
+     * ✅ NEW: GET SAVED POSTS (current logged-in user ke)
+     * GET /api/v1/activity/posts/saved
      */
-    static async getPostAnalytics(
+   static async getSavedPosts(
+    req: Request & { user?: UserPayload },
+    res: Response
+): Promise<void> {
+    const correlationId = (req as any).correlationId || uuidv4();
+
+    try {
+        if (!req.user?.userId) {
+            ResponseUtil.unauthorized(res, 'Authentication required');
+            return;
+        }
+
+        const userId = req.user.userId;
+        const result = await PostService.getSavedPosts(userId);
+
+        LoggerUtil.info('Saved posts fetched', { userId, count: result.total, correlationId });
+
+        ResponseUtil.success(res, result, 'Saved posts fetched successfully');
+        return;
+
+    } catch (error: any) {
+        LoggerUtil.error('Get saved posts failed', {
+            error: error.message,
+            userId: req.user?.userId,
+            correlationId,
+        });
+        ResponseUtil.internalError(res, error.message, error);
+        return;
+    }
+}
+
+/**
+ * ✅ GET POST ANALYTICS
+ * GET /api/v1/activity/posts/:postId/analytics
+ */
+static async getPostAnalytics(
         req: Request<{ postId: string }> & { user?: UserPayload },
         res: Response
     ): Promise<void> {

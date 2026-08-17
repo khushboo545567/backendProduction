@@ -45,6 +45,7 @@ export interface IPostEntry {
     repostsCount: number;   // ✅ ADDED
     sendsCount: number;     // ✅ ADDED
     likedBy: string[];
+    savedBy: string[];   // ✅ NEW — per-user save tracking (isSaved boolean ki jagah)
     // ✅ ADDED: reactions live alongside likedBy/likesCount (kept in sync
     // for 'like' type so existing like button / likesCount stays working)
     reactions: IReaction[];
@@ -57,11 +58,9 @@ export interface IPostEntry {
         funny: number;
     };
     isPinned: boolean;
-    isSaved: boolean;
     isArchived: boolean;
     isDeleted: boolean;
     pinnedAt?: Date;
-    savedAt?: Date;
     archivedAt?: Date;
     deletedAt?: Date;
     createdAt: Date;
@@ -165,6 +164,7 @@ export interface IPostModel extends Model<IPost> {
     getUserPostCount(userId: string): Promise<number>;
     setPinned(entryId: string, userId: string, isPinned: boolean): Promise<IPostEntry>;
     setSaved(entryId: string, userId: string, isSaved: boolean): Promise<IPostEntry>;
+    getSavedPostsByUser(userId: string): Promise<any[]>;   // ✅ NEW
     incrementLikes(entryId: string, userId: string): Promise<IPostEntry>;
     decrementLikes(entryId: string, userId: string): Promise<IPostEntry>;
     incrementComments(entryId: string): Promise<IPostEntry>;
@@ -224,6 +224,7 @@ const PostEntrySchema = new Schema<IPostEntry>(
         repostsCount: { type: Number, default: 0, min: 0 },   // ✅ ADDED
         sendsCount: { type: Number, default: 0, min: 0 },     // ✅ ADDED
         likedBy: [{ type: String }],
+        savedBy: [{ type: String }],   // ✅ NEW
         // ✅ ADDED: Reactions system (parallel to likedBy — kept in sync for
         // 'like' type only, so the existing single-like button and
         // likesCount keep working exactly as before)
@@ -250,11 +251,9 @@ const PostEntrySchema = new Schema<IPostEntry>(
             funny: { type: Number, default: 0 },
         },
         isPinned: { type: Boolean, default: false },
-        isSaved: { type: Boolean, default: false },
         isArchived: { type: Boolean, default: false },
         isDeleted: { type: Boolean, default: false },
         pinnedAt: Date,
-        savedAt: Date,
         archivedAt: Date,
         deletedAt: Date,
         analytics: {
@@ -422,24 +421,56 @@ PostSchema.statics.setPinned = async function (
     await doc.save();
     return entry;
 };
-
 PostSchema.statics.setSaved = async function (
     entryId: string,
     userId: string,
     isSaved: boolean
 ): Promise<IPostEntry> {
-    // ✅ FIX: same as setPinned — doosre users ke posts bhi save/unsave
-    // ho sakein isliye query saare documents me entryId se search karti hai.
+    // ✅ FIX: likedBy jaisa pattern — per-user tracking, taaki
+    // "kis-kis user ne ye post save ki hai" pata chal sake, na ki
+    // ek hi global flag jo sabke liye same dikhta ho.
     const doc = await this.findOne({ 'posts.entryId': entryId });
     if (!doc) throw new Error('Post not found');
     const entry = doc.posts.find((p: IPostEntry) => p.entryId === entryId && !p.isDeleted);
     if (!entry) throw new Error('Post entry not found');
-    entry.isSaved = isSaved;
-    entry.savedAt = isSaved ? new Date() : undefined;
+
+    if (!entry.savedBy) entry.savedBy = [];
+    const alreadySaved = entry.savedBy.includes(userId);
+
+    if (isSaved && !alreadySaved) {
+        entry.savedBy.push(userId);
+    } else if (!isSaved && alreadySaved) {
+        entry.savedBy = entry.savedBy.filter((id: string) => id !== userId);
+    }
+
     await doc.save();
     return entry;
 };
 
+// ✅ NEW: kisi bhi user ke saare saved posts poore database se dhoondo
+// (likedBy pattern jaisa hi — MongoDB query 'posts.savedBy': userId se)
+PostSchema.statics.getSavedPostsByUser = async function (userId: string): Promise<any[]> {
+    const docs = await this.find({ 'posts.savedBy': userId }).lean();
+
+    const results: any[] = [];
+    docs.forEach((doc: any) => {
+        (doc.posts || []).forEach((entry: any) => {
+            if (entry.isDeleted) return;
+            if (!(entry.savedBy || []).includes(userId)) return;
+
+            results.push({
+                ...entry,
+                userId: doc.userId,
+                documentPostId: doc.postId,
+                isLikedByCurrentUser: (entry.likedBy || []).includes(userId),
+                isSavedByCurrentUser: true,
+            });
+        });
+    });
+
+    results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return results;
+};
 
 PostSchema.statics.incrementLikes = async function (
     entryId: string,

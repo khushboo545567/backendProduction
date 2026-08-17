@@ -220,6 +220,19 @@ router.put(
     PostController.savePost as any
 );
 
+/**
+ * @route   GET /api/v1/activity/posts/saved
+ * @desc    Get all posts saved by the authenticated user
+ * @access  Private
+ */
+router.get(
+    '/posts/saved',
+    AuthMiddleware.authenticate as any,
+    rateLimitMiddleware({ maxRequests: 100, windowMs: 60000 }),
+    PostController.getSavedPosts as any
+);
+
+
 // ==================== POST LIKES ROUTES ====================
 
 /**
