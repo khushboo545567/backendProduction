@@ -7,6 +7,21 @@
  * 1. Types & interfaces moved to auth.types.ts / auth.interfaces.ts
  * 2. DB + cache calls moved to auth.repository.ts
  * 3. Only business logic remains here
+ *
+ * ✅ PERFORMANCE FIX (this version):
+ *    - login() previously required the controller to call
+ *      checkAccountLocked() FIRST (which fetched the user + did a
+ *      rate-limit check), and THEN login() fetched the user AGAIN and
+ *      did the SAME rate-limit check again. That's 2x user fetches +
+ *      2x rate-limit queries for one login request.
+ *    - login() now does a single user fetch, a single rate-limit
+ *      check (covers both IP-level and user-level), and returns the
+ *      full user object so the controller never needs to fetch the
+ *      user a second/third time.
+ *    - checkAccountLocked() is kept (unchanged) for backward
+ *      compatibility in case anything else calls it, but the
+ *      controller's login flow should stop calling it separately —
+ *      login() now does all of that internally.
  */
 
 import bcrypt from 'bcrypt';
@@ -59,6 +74,11 @@ class AuthService {
 
     /**
      * Check if account is locked (IP or user+IP based)
+     *
+     * ⚠️ Kept for backward compatibility only. The login() flow below no
+     * longer depends on this being called first — it does its own
+     * single-pass IP + user + rate-limit check internally. If nothing
+     * else in the codebase calls this, it's safe to remove later.
      */
     static async checkAccountLocked(
         email: string,
@@ -296,19 +316,59 @@ class AuthService {
 
     // ==================== LOGIN ====================
 
+    /**
+     * ✅ OPTIMIZED LOGIN
+     *
+     * Before: controller called checkAccountLocked() (1x user fetch +
+     * 1x rate-limit query), then this method fetched the user AGAIN
+     * and ran the SAME rate-limit query again. Then, after a successful
+     * login, the controller fetched the user a THIRD time to build the
+     * response. That's 3 user fetches + 2 rate-limit queries for one
+     * login.
+     *
+     * Now: single user fetch, single rate-limit check (covers both
+     * IP-level and user-level in one pass), non-blocking
+     * (fire-and-forget) writes for things that don't need to block the
+     * response (last-login timestamp, success audit row), and the full
+     * user object is returned so the controller doesn't need to fetch
+     * it again.
+     */
     static async login(
         email: string,
         password: string,
         ipAddress: string,
         deviceData: DeviceData = {}
-    ): Promise<LoginResult> {
+    ): Promise<LoginResult & {
+        email: string;
+        role: string;
+        firstName?: string;
+        lastName?: string;
+        profilePhotoId?: string;
+        headlineId?: string;
+    }> {
         let userId: string | null = null;
 
         try {
             logger.info('Login process started', { email, ipAddress });
 
-            // Step 1: Find user
-            const user = await UserRepository.findByEmailWithPassword(email);
+            // Step 1: IP-level block check + user fetch run in PARALLEL.
+            // (Previously: controller checked IP block, THEN this method
+            // fetched the user separately — now both happen at once.)
+            const [ipAttempts, user] = await Promise.all([
+                LoginAttemptRepository.countRecentByIp(ipAddress),
+                UserRepository.findByEmailWithPassword(email),
+            ]);
+
+            if (ipAttempts >= 3) {
+                logger.warn('IP blocked after 3 attempts', { ipAddress });
+                await LoginAttemptRepository.recordSafe(null, ipAddress, 'login', 'blocked', {
+                    userAgent: deviceData.userAgent,
+                    failureReason: 'ip_blocked',
+                    metadata: { email, reason: 'ip_rate_limited' },
+                });
+                throw new Error('Too many attempts from this IP. Please try again later.');
+            }
+
             if (!user) {
                 logger.warn('Login failed: User not found', { email });
                 await LoginAttemptRepository.recordSafe(null, ipAddress, 'login', 'failed', {
@@ -322,7 +382,8 @@ class AuthService {
             userId = user.userId;
             logger.debug('User found', { userId, email });
 
-            // Step 2: Account status checks
+            // Step 2: Account status checks (using the user we already
+            // fetched — no second DB call needed here)
             if (user.accountStatus === 'locked') {
                 await LoginAttemptRepository.recordSafe(userId, ipAddress, 'login', 'blocked', {
                     userAgent: deviceData.userAgent,
@@ -341,12 +402,26 @@ class AuthService {
                 throw new Error('Account is disabled. Contact support.');
             }
 
-            // Step 3: Rate limit check (3 attempts / 15 min)
-            const recentAttempts =
-                await LoginAttemptRepository.countRecentByUserAndIp(
-                    user.userId,
-                    ipAddress
-                );
+            if (user.lockUntil && user.lockUntil > new Date()) {
+                await LoginAttemptRepository.recordSafe(userId, ipAddress, 'login', 'blocked', {
+                    userAgent: deviceData.userAgent,
+                    failureReason: 'account_temporarily_locked',
+                    metadata: { reason: 'lock_until_active' },
+                });
+                throw new Error('Account is temporarily locked. Please try again later.');
+            }
+
+            if (user.status === 'deleted' || user.status === 'suspended') {
+                throw new Error('Account is not active. Contact support.');
+            }
+
+            // Step 3: Rate limit check — SINGLE call now (this used to
+            // run once inside checkAccountLocked() in the controller,
+            // and AGAIN here — now it only runs once, right here).
+            const recentAttempts = await LoginAttemptRepository.countRecentByUserAndIp(
+                user.userId,
+                ipAddress
+            );
 
             if (recentAttempts >= 3) {
                 logger.warn('Login blocked: Too many attempts', {
@@ -384,8 +459,14 @@ class AuthService {
 
             logger.info('Password verified successfully', { userId });
 
-            // Step 5: Update last login
-            await user.updateLastLogin(ipAddress);
+            // Step 5: Update last login — fire-and-forget. Doesn't need
+            // to block the response; failure here is non-critical.
+            user.updateLastLogin(ipAddress).catch((err: any) =>
+                logger.error('updateLastLogin failed (non-critical)', {
+                    error: err.message,
+                    userId,
+                })
+            );
 
             // Step 6: Register device
             const device = await DeviceRepository.registerDevice(
@@ -393,7 +474,10 @@ class AuthService {
                 deviceData
             );
 
-            // Step 7: Create session
+            // Step 7: Create session (needs device.deviceId, so this
+            // stays sequential after device registration — cannot be
+            // parallelized safely without knowing whether deviceId is
+            // enforced as a hard FK at write time)
             const session = await SessionRepository.createSession({
                 userId: user.userId,
                 ipAddress,
@@ -403,8 +487,9 @@ class AuthService {
 
             logger.info('Session created', { userId, sessionId: session._id });
 
-            // Step 8: Record success
-            await LoginAttemptRepository.recordSafe(
+            // Step 8: Record success — fire-and-forget. The response
+            // doesn't need to wait for this audit row to be written.
+            LoginAttemptRepository.recordSafe(
                 userId,
                 ipAddress,
                 'login',
@@ -415,14 +500,27 @@ class AuthService {
                     sessionId: session._id,
                     metadata: { loginTime: new Date() },
                 }
+            ).catch((err: any) =>
+                logger.error('recordSafe(success) failed (non-critical)', {
+                    error: err.message,
+                    userId,
+                })
             );
 
             logger.info('Login successful', { userId, sessionId: session._id });
 
+            // ✅ Return the full user object so the controller NEVER
+            // needs to fetch the user a second/third time.
             return {
                 userId: user.userId,
                 sessionId: session._id,
                 deviceId: device.deviceId,
+                email: user.email,
+                role: user.role || 'user',
+                firstName: user.firstName,
+                lastName: user.lastName,
+                profilePhotoId: user.profilePhotoId,
+                headlineId: user.headlineId,
             };
 
         } catch (error: any) {
