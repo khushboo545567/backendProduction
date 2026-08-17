@@ -8,9 +8,8 @@ import { ErrorResponse, HttpStatus } from '@/shared/response.util';
 import environmentConfig from '@/config/environment/environment';
 import { logger } from '@/shared/logger.util';
 import { getBulkMutualConnections } from '@/connections/controllers/mutual.controller';
+import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 
-
-// import { authenticateJWT } from '@/shared/middlewares/auth.middleware';
 /**
  * Mutual Routes
  * Defines Express routes for mutual connections-related API endpoints in the Connection Service.
@@ -82,8 +81,10 @@ const bulkSearchLimiter = rateLimit({
     },
 });
 
-// Apply authentication to all routes
-// router.use(authenticateJWT);
+// ✅ FIX: Authentication ab enable hai — pehle yeh commented tha isliye
+// req.user hamesha undefined aata tha aur "Authentication required" 500 error deta tha
+// connection.routes.ts jaisa hi pattern use kiya hai (AuthMiddleware.authenticate)
+router.use(AuthMiddleware.authenticate as any);
 
 // Request logging middleware (applied after auth)
 router.use((req: Request, _res: Response, next: NextFunction) => {
