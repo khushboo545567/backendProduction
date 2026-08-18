@@ -20,6 +20,7 @@ export interface IUser extends Document {
     passwordSalt?: string;
     firstName: string;
     lastName?: string;
+    dateOfBirth?: Date;
     location?: string;
     currentPosition?: string;
     company?: string;
@@ -176,6 +177,10 @@ interface IUserPreferences {
         sms: boolean;
     };
     theme: 'light' | 'dark' | 'auto';
+    // Controls whether "who viewed your profile" notifications name the viewer
+    // ('named'), hide identity but still track ('public'/'connections' — reserved
+    // for future granularity), or disable view tracking entirely ('private').
+    profileViewVisibility?: 'named' | 'public' | 'connections' | 'private';
 }
 
 interface IUserMetadata {
@@ -277,6 +282,10 @@ const UserSchema = new Schema<IUser, IUserModel>(
             type: String,
             trim: true,
             maxlength: [50, 'Last name cannot exceed 50 characters'],
+        },
+        dateOfBirth: {
+            type: Date,
+            default: null,
         },
         location: {
             type: String,
@@ -646,6 +655,11 @@ const UserSchema = new Schema<IUser, IUserModel>(
                 sms: { type: Boolean, default: false },
             },
             theme: { type: String, enum: ['light', 'dark', 'auto'], default: 'auto' },
+            profileViewVisibility: {
+                type: String,
+                enum: ['named', 'public', 'connections', 'private'],
+                default: 'named',
+            },
         },
         metadata: {
             registrationIp: String,
@@ -707,6 +721,8 @@ const UserSchema = new Schema<IUser, IUserModel>(
 // NOTE: Sirf compound aur unique indexes yahan hain
 // Single-field indexes upar field definition mein  se handle hote hain
 
+UserSchema.index({ dateOfBirth: 1, status: 1 });
+UserSchema.index({ 'onboarding.workingProfile.startDate': 1, status: 1 });
 UserSchema.index({ email: 1, status: 1 });
 UserSchema.index({ userId: 1, emailVerified: 1 });
 UserSchema.index({ createdAt: -1 });

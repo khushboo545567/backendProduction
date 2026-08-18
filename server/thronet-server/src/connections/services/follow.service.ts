@@ -4,6 +4,7 @@ import { Follow } from '../models/index';
 import logger, { LogCategory } from '@/shared/logger.util';
 import { ErrorResponse, HttpStatus } from '@/shared/response.util';
 import constants from '@/shared/constants.util';
+import NotificationService from '@/notifications/services/notification.service';
 
 const ERROR_CODES = constants.ERROR_CODES;
 
@@ -610,6 +611,8 @@ class FollowService {
 
   private async sendFollowNotification(followerId: string, followingId: string): Promise<void> {
     try {
+      await NotificationService.notifyNewFollower(followerId, followingId);
+
       logger.debug('Notification sent for follow', {
         category: LogCategory.FOLLOW,
         followerId,

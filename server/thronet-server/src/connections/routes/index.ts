@@ -16,6 +16,9 @@ import mutualRouter from './mutual.routes';
 import searchRoutes from './search.routes';
 import blockRouter from './block.routes';
 import catchupRoutes from './catchup.routes';
+import profileviewsRoutes from './profileviews.routes';
+import ProfileViewDigestCron from '@/jobs/profileViewDigestCron';
+import BirthdayAnniversaryCron from '@/jobs/birthdayAnniversaryCron';
 
 router.use('/catchup', catchupRoutes);
 router.use('/connection', connectionRouter);
@@ -24,6 +27,13 @@ router.use('/follow', followRouter);
 router.use('/mutual', mutualRouter);
 // router.use('/search', searchRoutes);
 router.use('/block', blockRouter);
+router.use('/profile-views', profileviewsRoutes);
+
+// Start the profile-view digest cron (was written but never initialized anywhere)
+ProfileViewDigestCron.init();
+
+// Start the birthday / work-anniversary cron
+BirthdayAnniversaryCron.init();
 
 export default router;
 console.log('🔍 ConnectionRoutes loaded successfully in routes/connections/index.ts');

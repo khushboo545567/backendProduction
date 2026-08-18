@@ -36,8 +36,14 @@
  */
 
 import { body, query } from 'express-validator';
-import { commonValidators } from './commonValidator'; // Reusable validators (assume exists)
-import { MAX_PAGINATION_LIMIT, VALID_SOURCES, VALID_PRIVACY_LEVELS, VALID_INSIGHT_TYPES } from '../utils/constants';
+import { commonValidators } from './commonValidator';
+
+// Inlined — ../utils/constants does not exist anywhere in this repo, the original
+// import was broken and would have failed at module load time.
+const MAX_PAGINATION_LIMIT = 100;
+const VALID_SOURCES = ['profile', 'search', 'suggestion', 'connection'];
+const VALID_PRIVACY_LEVELS = ['public', 'connections', 'private'];
+const VALID_INSIGHT_TYPES = ['trends', 'patterns', 'predictions'];
 
 export const profileViewValidators = {
   /**
