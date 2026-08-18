@@ -195,14 +195,16 @@ class NotificationService {
             const liker = await User.findOne({ userId: likerId }).select('firstName lastName profilePhotoId').lean();
             if (!liker) return;
 
-            const likerName = `${liker.firstName} ${liker.lastName || ''}`.trim();
-            let likerPhoto: string | null = null;
-            if (liker.profilePhotoId) {
-                const photoDoc = await ProfilePhoto.findOne({
-                    photoId: liker.profilePhotoId,
-                }).select('cloudinarySecureUrl').lean();
-                likerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-            }
+           const likerName = `${liker.firstName} ${liker.lastName || ''}`.trim();
+console.log('🔥🔥🔥 FIXED CODE RUNNING — notifyPostLiked 🔥🔥🔥', { likerProfilePhotoId: liker.profilePhotoId });
+let likerPhoto: string | null = null;
+if (liker.profilePhotoId) {
+    const photoDoc = await ProfilePhoto.findOne({
+        photoId: liker.profilePhotoId,
+    }).select('cloudinarySecureUrl').lean();
+    console.log('🔥🔥🔥 ProfilePhoto lookup result:', photoDoc);
+    likerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+}
 
             const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'your post';
             const message = `${likerName} liked ${shortTitle}`;
@@ -272,6 +274,7 @@ class NotificationService {
             if (!commenter) return;
 
             const commenterName = `${commenter.firstName} ${commenter.lastName || ''}`.trim();
+            console.log('🔥🔥🔥 FIXED CODE RUNNING — notifyPostCommented 🔥🔥🔥', { commenterProfilePhotoId: commenter.profilePhotoId });
             let commenterPhoto: string | null = null;
             if (commenter.profilePhotoId) {
                 const photoDoc = await ProfilePhoto.findOne({
