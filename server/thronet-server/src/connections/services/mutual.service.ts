@@ -156,8 +156,9 @@ export class MutualService {
         return typeof cachedCount === 'number' ? cachedCount : parseInt(cachedCount);
       }
 
-      const rawMutuals = await (Connection as any).findMutualConnections(userId1, userId2, 1000);
-      const count = rawMutuals.length;
+      // ✅ CHANGED — ab sirf aggregation-based count aata hai,
+      // 1000 poore documents pull nahi hote
+      const count = await (Connection as any).countMutualConnections(userId1, userId2);
 
       if (this.redisClient) {
         const ttl = Math.floor((config.MUTUAL_CONNECTIONS_CACHE_TTL || 600) / 2);
@@ -176,7 +177,6 @@ export class MutualService {
       return 0;
     }
   }
-
   /**
    * Feature 3: Get mutual suggestions
    * (Connection.getConnectionRecommendations already MongoDB-based hai, wahi reuse)
