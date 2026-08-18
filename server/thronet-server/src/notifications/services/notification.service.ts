@@ -648,7 +648,7 @@ class NotificationService {
                 senderId: celebrantUserId,
                 senderName: celebrantName,
                 senderPhoto: celebrantPhoto,
-                type: occasion as const,
+                type: occasion ,
                 entityId: celebrantUserId,
                 entityType: 'user' as const,
                 message,
@@ -794,7 +794,7 @@ class NotificationService {
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
-                .lean<INotification>(),
+                .lean<INotification[]>(),
             Notification.countDocuments({ recipientId: userId, isRead: false }),
             Notification.countDocuments({ recipientId: userId }),
         ]);
