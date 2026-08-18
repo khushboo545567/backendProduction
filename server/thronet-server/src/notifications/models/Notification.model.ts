@@ -7,9 +7,9 @@ export interface INotification extends Document {
     senderId: string;          // who triggered it
     senderName: string;
     senderPhoto?: string;
-    type: 'post_created' | 'post_liked' | 'post_commented' | 'connection_request' | 'connection_accepted' | 'mentioned';
+    type: 'post_created' | 'post_liked' | 'post_commented' | 'connection_request' | 'connection_accepted' | 'mentioned' | 'new_follower' | 'profile_viewed' | 'birthday' | 'work_anniversary';
     entityId: string;         
-    entityType: 'post' | 'connection' | 'comment';
+    entityType: 'post' | 'connection' | 'comment' | 'user';
     message: string;
     isRead: boolean;
     createdAt: Date;
@@ -26,11 +26,11 @@ const NotificationSchema = new Schema<INotification, INotificationModel>(
         senderPhoto: { type: String, default: null },
         type: {
             type: String,
-            enum: ['post_created', 'post_liked', 'post_commented', 'connection_request', 'connection_accepted', 'mentioned'],
+            enum: ['post_created', 'post_liked', 'post_commented', 'connection_request', 'connection_accepted', 'mentioned', 'new_follower', 'profile_viewed', 'birthday', 'work_anniversary'],
             required: true,
         },
         entityId: { type: String, required: true },
-        entityType: { type: String, enum: ['post', 'connection', 'comment'], required: true },
+        entityType: { type: String, enum: ['post', 'connection', 'comment', 'user'], required: true },
         message: { type: String, required: true },
         isRead: { type: Boolean, default: false },
     },

@@ -8,7 +8,7 @@ export { followController } from './follow.controller';
 export { mutualController } from './mutual.controller';
 // export { searchController } from './search.controller';
 // export { privacyController } from './privacy.controller';
-// export { profileViewController } from './profileView.controller';
+export { ProfileViewController, healthCheck, batchProfileViewOperations } from './profileView.controller';
 // export { noteController } from './note.controller';
 // export { degreeController } from './degree.controller';
 // export { blockController } from './block.controller';

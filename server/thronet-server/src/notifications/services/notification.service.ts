@@ -195,16 +195,8 @@ class NotificationService {
             const liker = await User.findOne({ userId: likerId }).select('firstName lastName profilePhotoId').lean();
             if (!liker) return;
 
-           const likerName = `${liker.firstName} ${liker.lastName || ''}`.trim();
-console.log('🔥🔥🔥 FIXED CODE RUNNING — notifyPostLiked 🔥🔥🔥', { likerProfilePhotoId: liker.profilePhotoId });
-let likerPhoto: string | null = null;
-if (liker.profilePhotoId) {
-    const photoDoc = await ProfilePhoto.findOne({
-        photoId: liker.profilePhotoId,
-    }).select('cloudinarySecureUrl').lean();
-    console.log('🔥🔥🔥 ProfilePhoto lookup result:', photoDoc);
-    likerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-}
+            const likerName = `${liker.firstName} ${liker.lastName || ''}`.trim();
+            const likerPhoto = liker.profilePhotoId || null;
 
             const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'your post';
             const message = `${likerName} liked ${shortTitle}`;
@@ -274,14 +266,7 @@ if (liker.profilePhotoId) {
             if (!commenter) return;
 
             const commenterName = `${commenter.firstName} ${commenter.lastName || ''}`.trim();
-            console.log('🔥🔥🔥 FIXED CODE RUNNING — notifyPostCommented 🔥🔥🔥', { commenterProfilePhotoId: commenter.profilePhotoId });
-            let commenterPhoto: string | null = null;
-            if (commenter.profilePhotoId) {
-                const photoDoc = await ProfilePhoto.findOne({
-                    photoId: commenter.profilePhotoId,
-                }).select('cloudinarySecureUrl').lean();
-                commenterPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-            }
+            const commenterPhoto = commenter.profilePhotoId || null;
 
             const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'your post';
             const message = `${commenterName} commented on ${shortTitle}`;
@@ -352,13 +337,7 @@ if (liker.profilePhotoId) {
             if (!mentioner) return;
 
             const mentionerName = `${mentioner.firstName} ${mentioner.lastName || ''}`.trim();
-            let mentionerPhoto: string | null = null;
-            if (mentioner.profilePhotoId) {
-                const photoDoc = await ProfilePhoto.findOne({
-                    photoId: mentioner.profilePhotoId,
-                }).select('cloudinarySecureUrl').lean();
-                mentionerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-            }
+            const mentionerPhoto = mentioner.profilePhotoId || null;
 
             const shortTitle = contextTitle ? `"${contextTitle.slice(0, 60)}${contextTitle.length > 60 ? '...' : ''}"` : 'a post';
             const message = context === 'comment'
@@ -429,13 +408,7 @@ if (liker.profilePhotoId) {
             if (!sender) return;
 
             const senderName = `${sender.firstName} ${sender.lastName || ''}`.trim();
-            let senderPhoto: string | null = null;
-            if ((sender as any).profilePhotoId) {
-                const photoDoc = await ProfilePhoto.findOne({
-                    photoId: (sender as any).profilePhotoId,
-                }).select('cloudinarySecureUrl').lean();
-                senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-            }
+            const senderPhoto = (sender as any).profilePhotoId || null;
             const message = `${senderName} sent you a connection request`;
             const notificationId = uuidv4();
 
@@ -501,13 +474,7 @@ if (liker.profilePhotoId) {
             if (!acceptor) return;
 
             const acceptorName = `${acceptor.firstName} ${acceptor.lastName || ''}`.trim();
-            let acceptorPhoto: string | null = null;
-            if ((acceptor as any).profilePhotoId) {
-                const photoDoc = await ProfilePhoto.findOne({
-                    photoId: (acceptor as any).profilePhotoId,
-                }).select('cloudinarySecureUrl').lean();
-                acceptorPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-            }
+            const acceptorPhoto = (acceptor as any).profilePhotoId || null;
             const message = `${acceptorName} accepted your connection request`;
             const notificationId = uuidv4();
 
@@ -551,6 +518,265 @@ if (liker.profilePhotoId) {
                 acceptedByUserId,
                 originalSenderId,
                 connectionId,
+            });
+        }
+    }
+
+    /**
+     * Called when User A follows User B (new follow, or reactivation of a
+     * previously-unfollowed relationship — follow.service.ts calls this from
+     * both followUser() paths). Notifies User B (unless following themselves).
+     */
+    static async notifyNewFollower(
+        followerId: string,
+        followingId: string
+    ): Promise<void> {
+        try {
+            if (followerId === followingId) return;
+
+            const follower = await User.findOne({ userId: followerId })
+                .select('firstName lastName profilePhotoId')
+                .lean();
+            if (!follower) return;
+
+            const followerName = `${follower.firstName} ${(follower as any).lastName || ''}`.trim();
+
+            let followerPhoto: string | null = null;
+            if ((follower as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (follower as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                followerPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            const message = `${followerName} started following you`;
+            const notificationId = uuidv4();
+
+            // Guard against duplicate notifications on rapid unfollow/refollow —
+            // only notify once per (follower, followingId) pair per rolling day.
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const existing = await Notification.findOne({
+                recipientId: followingId,
+                senderId: followerId,
+                type: 'new_follower',
+                createdAt: { $gte: oneDayAgo },
+            }).select('_id').lean();
+            if (existing) return;
+
+            await Notification.create({
+                notificationId,
+                recipientId: followingId,
+                senderId: followerId,
+                senderName: followerName,
+                senderPhoto: followerPhoto,
+                type: 'new_follower' as const,
+                entityId: followerId,
+                entityType: 'user' as const,
+                message,
+                isRead: false,
+            });
+
+            try {
+                const io = getIO();
+                io.to(`user:${followingId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'new_follower',
+                    senderId: followerId,
+                    senderName: followerName,
+                    senderPhoto: followerPhoto,
+                    entityId: followerId,
+                    entityType: 'user',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for new_follower notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('New follower notification sent', { followerId, followingId });
+        } catch (err) {
+            logger.error('notifyNewFollower failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                followerId,
+                followingId,
+            });
+        }
+    }
+
+    /**
+     * Called by the birthday/work-anniversary cron. Notifies every active
+     * connection of `userId` that it's their birthday or work anniversary today.
+     * One notification per (recipient, celebrant, occasion, day) — the cron
+     * itself is responsible for only calling this once per user per day.
+     */
+    static async notifyBirthdayOrAnniversary(
+        celebrantUserId: string,
+        occasion: 'birthday' | 'work_anniversary',
+        recipientIds: string[]
+    ): Promise<void> {
+        try {
+            if (!recipientIds.length) return;
+
+            const celebrant = await User.findOne({ userId: celebrantUserId })
+                .select('firstName lastName profilePhotoId')
+                .lean();
+            if (!celebrant) return;
+
+            const celebrantName = `${celebrant.firstName} ${(celebrant as any).lastName || ''}`.trim();
+
+            let celebrantPhoto: string | null = null;
+            if ((celebrant as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (celebrant as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                celebrantPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            const message = occasion === 'birthday'
+                ? `Today is ${celebrantName}'s birthday`
+                : `Today is ${celebrantName}'s work anniversary`;
+
+            const ids = recipientIds.filter((id) => id !== celebrantUserId);
+            if (!ids.length) return;
+
+            const docs = ids.map((recipientId: string) => ({
+                notificationId: uuidv4(),
+                recipientId,
+                senderId: celebrantUserId,
+                senderName: celebrantName,
+                senderPhoto: celebrantPhoto,
+                type: occasion as const,
+                entityId: celebrantUserId,
+                entityType: 'user' as const,
+                message,
+                isRead: false,
+            }));
+
+            await Notification.insertMany(docs, { ordered: false });
+
+            try {
+                const io = getIO();
+                ids.forEach((recipientId: string) => {
+                    const doc = docs.find((d) => d.recipientId === recipientId);
+                    io.to(`user:${recipientId}`).emit('notification:new', {
+                        notificationId: doc?.notificationId,
+                        type: occasion,
+                        senderId: celebrantUserId,
+                        senderName: celebrantName,
+                        senderPhoto: celebrantPhoto,
+                        entityId: celebrantUserId,
+                        entityType: 'user',
+                        message,
+                        isRead: false,
+                        createdAt: new Date().toISOString(),
+                    });
+                });
+            } catch (socketErr) {
+                logger.warn(`Socket emit failed for ${occasion} notifications`, {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info(`${occasion} notifications sent`, {
+                celebrantUserId,
+                recipientCount: ids.length,
+            });
+        } catch (err) {
+            logger.error('notifyBirthdayOrAnniversary failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                celebrantUserId,
+                occasion,
+            });
+        }
+    }
+
+    /**
+     * Called by the profile-view digest cron. Notifies a user that their profile
+     * was viewed, summarizing the batch rather than sending one notification per view.
+     * If there's exactly one named viewer, the notification names them; otherwise
+     * it's a count-based summary. Anonymous/private views are excluded from viewerIds
+     * by the caller (profileView.service.ts) before this is invoked.
+     */
+    static async notifyProfileViewed(
+        recipientId: string,
+        namedViewerIds: string[],
+        totalViewCount: number
+    ): Promise<void> {
+        try {
+            let senderId = 'system';
+            let senderName = 'Someone';
+            let senderPhoto: string | null = null;
+            let message: string;
+
+            if (namedViewerIds.length === 1) {
+                const viewer = await User.findOne({ userId: namedViewerIds[0] })
+                    .select('firstName lastName profilePhotoId')
+                    .lean();
+                if (viewer) {
+                    senderId = namedViewerIds[0];
+                    senderName = `${viewer.firstName} ${viewer.lastName || ''}`.trim();
+                    if ((viewer as any).profilePhotoId) {
+                        const photoDoc = await ProfilePhoto.findOne({
+                            photoId: (viewer as any).profilePhotoId,
+                        }).select('cloudinarySecureUrl').lean();
+                        senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+                    }
+                }
+                message = `${senderName} viewed your profile`;
+            } else {
+                message =
+                    totalViewCount === 1
+                        ? 'Someone viewed your profile'
+                        : `${totalViewCount} people viewed your profile`;
+            }
+
+            const notificationId = uuidv4();
+
+            await Notification.create({
+                notificationId,
+                recipientId,
+                senderId,
+                senderName,
+                senderPhoto,
+                type: 'profile_viewed' as const,
+                entityId: recipientId, // no single entity — links back to the viewed profile itself
+                entityType: 'user' as const,
+                message,
+                isRead: false,
+            });
+
+            try {
+                const io = getIO();
+                io.to(`user:${recipientId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'profile_viewed',
+                    senderId,
+                    senderName,
+                    senderPhoto,
+                    entityId: recipientId,
+                    entityType: 'user',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for profile_viewed notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Profile viewed notification sent', {
+                recipientId,
+                namedViewerCount: namedViewerIds.length,
+                totalViewCount,
+            });
+        } catch (err) {
+            logger.error('notifyProfileViewed failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                recipientId,
             });
         }
     }

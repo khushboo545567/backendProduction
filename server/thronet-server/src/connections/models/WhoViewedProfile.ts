@@ -30,8 +30,8 @@ import environmentConfig from '@/config/environment/environment';
 
 export interface IWhoViewedProfile extends Document {
   viewId: string;
-  viewerId: Types.ObjectId;
-  viewedId: Types.ObjectId;
+  viewerId: string; // UUID — matches User.userId convention used across the app
+  viewedId: string; // UUID — matches User.userId convention used across the app
   timestamp: Date;
   visibility: 'public' | 'connections' | 'private';
   isNotified: boolean;
@@ -89,11 +89,11 @@ const WhoViewedProfileSchema = new Schema<IWhoViewedProfile, IWhoViewedProfileMo
       default: () => uuidv4(),
     },
     viewerId: {
-      type: Schema.Types.ObjectId,
+      type: String,
       required: [true, 'Viewer ID is required'],
     },
     viewedId: {
-      type: Schema.Types.ObjectId,
+      type: String,
       required: [true, 'Viewed ID is required'],
     },
     timestamp: {
@@ -126,7 +126,7 @@ const WhoViewedProfileSchema = new Schema<IWhoViewedProfile, IWhoViewedProfileMo
       type: String,
       required: true,
       default: function (this: IWhoViewedProfile) {
-        const userIds = [this.viewerId?.toString(), this.viewedId?.toString()].sort();
+        const userIds = [this.viewerId, this.viewedId].sort();
         return `${userIds[0]}_${userIds[1]}_${this.region || 'global'}`;
       },
     },
@@ -204,16 +204,16 @@ WhoViewedProfileSchema.post(/^find/, function (this: ExtendedQuery<any, IWhoView
 });
 
 WhoViewedProfileSchema.pre('validate', function (next) {
-  if (this.viewerId?.equals(this.viewedId)) {
+  if (this.viewerId === this.viewedId) {
     logger.error('Validation failed: Users cannot view their own profile', {
       category: LogCategory.CONNECTION,
-      data: { viewId: this.viewId, viewerId: this.viewerId?.toString() }
+      data: { viewId: this.viewId, viewerId: this.viewerId }
     } as unknown as PublicLogMetadata);
     next(new Error('Users cannot view their own profile'));
     return;
   }
   if (!this.shardKey && this.viewerId && this.viewedId) {
-    const userIds = [this.viewerId.toString(), this.viewedId.toString()].sort();
+    const userIds = [this.viewerId, this.viewedId].sort();
     this.shardKey = `${userIds[0]}_${userIds[1]}_${this.region || 'global'}`;
   }
   next();
@@ -282,7 +282,7 @@ WhoViewedProfileSchema.statics.findUserViewsPaginated = async function (
   options: { page?: number; limit?: number; projection?: string; useEstimatedCount?: boolean; region?: string } = {}
 ): Promise<IPaginationResult<IWhoViewedProfile>> {
   const { page = 1, limit = environmentConfig.PAGINATION_DEFAULT_LIMIT || 20, projection, useEstimatedCount = false, region = 'global' } = options;
-  let query = this.find({ viewedId: new Types.ObjectId(userId), region }).sort({ timestamp: -1 }).hint('user_views');
+  let query = this.find({ viewedId: userId, region }).sort({ timestamp: -1 }).hint('user_views');
   if (projection) query = query.select(projection);
   return paginateQuery(query, page, limit, useEstimatedCount);
 };
@@ -292,7 +292,7 @@ WhoViewedProfileSchema.statics.bulkMarkAsNotified = async function (
   userId: string
 ): Promise<any> {
   const result = await this.updateMany(
-    { viewId: { $in: viewIds }, viewedId: new Types.ObjectId(userId), isNotified: false },
+    { viewId: { $in: viewIds }, viewedId: userId, isNotified: false },
     { $set: { isNotified: true, updatedAt: new Date() }, $inc: { cacheVersion: 1 } },
     { writeConcern: { w: 'majority' } }
   );
@@ -306,7 +306,7 @@ WhoViewedProfileSchema.statics.bulkMarkAsNotified = async function (
 
 WhoViewedProfileSchema.statics.getViewStats = async function (userId: string): Promise<any> {
   const pipeline = [
-    { $match: { viewedId: new Types.ObjectId(userId) } },
+    { $match: { viewedId: userId } },
     {
       $group: {
         _id: '$isNotified',
