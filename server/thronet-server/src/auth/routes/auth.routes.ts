@@ -735,9 +735,9 @@ router.get('/health', (req: Request, res: Response) => {
  */
 router.post(
     '/register',
-    // sanitizeInput,
-    // rateLimitMiddleware(),
-    // validateRegistration,
+    sanitizeInput,
+    rateLimitMiddleware(),
+    validateRegistration,
     async (req, res, next) => {
         try {
             console.log('🎯 REGISTER ROUTE HIT');
@@ -762,9 +762,9 @@ router.post(
  */
 router.post(
     '/login',
-    // sanitizeInput,
-    // rateLimitMiddleware(),
-    // validateLogin,
+    sanitizeInput,
+    rateLimitMiddleware(),
+    validateLogin,
     async (req, res, next) => {
         try {
             console.log('🎯 LOGIN ROUTE HIT');
