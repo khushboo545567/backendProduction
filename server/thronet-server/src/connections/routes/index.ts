@@ -21,9 +21,9 @@ async function loadRoutes() {
     const { default: mutualRouter } = await import('./mutual.routes');
     console.log('🔍 [8] mutual.routes LOADED ✅');
 
-    console.log('🔍 [9] Loading search.routes...');
-    const { default: searchRoutes } = await import('./search.routes');
-    console.log('🔍 [10] search.routes LOADED ✅');
+    // console.log('🔍 [9] Loading search.routes...');
+    // const { default: searchRoutes } = await import('./search.routes');
+    // console.log('🔍 [10] search.routes LOADED ✅');
 
     console.log('🔍 [11] Loading block.routes...');
     const { default: blockRouter } = await import('./block.routes');

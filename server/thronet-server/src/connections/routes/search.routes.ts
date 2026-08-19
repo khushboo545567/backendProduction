@@ -4,7 +4,7 @@ import { Router } from 'express';
 import { param } from 'express-validator';
 // import { authenticateJWT } from '@middleware/auth.middleware';
 
-import * as searchController from '@controllers/searchController';
+import { searchController } from '../controllers/search.controller';
 import { cacheMiddleware } from '../middleware/cache.middleware';
 import { defaultRateLimiter } from '../middleware/rateLimiter.middleware';
 import { roleBasedAccess } from '../middleware/rbca.middleware';
