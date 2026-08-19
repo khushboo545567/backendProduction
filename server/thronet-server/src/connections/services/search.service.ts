@@ -1,10 +1,9 @@
 // src/services/searchService.ts
-
-import { redisManager } from '../config/redis';
-import logger from '@utils/logger';
-import environmentConfig from '../config/environment';
-import User from '@models/mongodb/User';
-import { ErrorResponse, HttpStatus } from '@utils/response';
+import redisManager from '@/config/cache/redis.config';
+import logger from '@/shared/logger.util';
+import environmentConfig from '@/config/environment/environment';
+import { User } from '@/auth/models/User.model';
+import { ErrorResponse, HttpStatus } from '@/shared/response.util';
 
 /**
  * Search Service
@@ -120,7 +119,7 @@ export async function processSearchQueries(
     });
 
     const response: IPaginationResult<ISearchResult> = {
-      data: result.data.map((user) => ({
+      data: result.data.map((user : any) => ({
         userId: user.userId,
         username: user.username,
         firstName: user.firstName,
