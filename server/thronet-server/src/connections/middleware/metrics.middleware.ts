@@ -1,10 +1,9 @@
-// src/middleware/metrics.middleware.ts
+// src/connections/middleware/metrics.middleware.ts
 
 import { Request, Response, NextFunction } from 'express';
 import client from 'prom-client';
-import logger from '../utils/logger';
-import { LogCategory } from '../utils/logger';
-import environmentConfig from '../config/environment';
+import logger, { LogCategory } from '../../shared/logger.util';
+import environmentConfig from '../../config/environment/environment';
 
 // Initialize Prometheus registry
 const register = new client.Registry();
