@@ -22,9 +22,7 @@
     "legacyWatch": true,
     "delay": 1000
   },
-  "overrides": {
-    "undici": "5.28.4"
-  },
+  "overrides": {},
   "keywords": [],
   "author": "",
   "license": "ISC",

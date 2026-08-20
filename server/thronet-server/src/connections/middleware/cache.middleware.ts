@@ -1,6 +1,6 @@
 // src/middleware/cache.middleware.ts
 import { Request, Response, NextFunction } from 'express';
-import Redis from 'ioredis';
+import redisManager from '@/config/cache/redis.config';
 
 interface CacheOptions {
   ttl: number; // Time to live in seconds
@@ -8,13 +8,6 @@ interface CacheOptions {
   varyBy?: string[];
   skipCache?: (req: Request) => boolean;
 }
-
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  // retryDelayOnFailover: 100,
-  // maxRetriesPerRequest: 3,
-});
 
 export const cacheMiddleware = (options: CacheOptions) => {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -26,7 +19,7 @@ export const cacheMiddleware = (options: CacheOptions) => {
 
       // Generate cache key
       const keyParts = [options.prefix || 'cache'];
-      
+
       if (options.varyBy) {
         options.varyBy.forEach(key => {
           if (key === 'userId' && req.user?.id) {
@@ -36,12 +29,17 @@ export const cacheMiddleware = (options: CacheOptions) => {
           }
         });
       }
-      
+
       const cacheKey = keyParts.join(':');
+
+      // ✅ FIXED — use the shared, properly-authenticated Redis client
+      // (was: a raw `new Redis({ host, port })` with NO password, which
+      // caused NOAUTH errors on every request through this middleware)
+      const redis = await redisManager.getRedisClient();
 
       // Try to get cached data
       const cachedData = await redis.get(cacheKey);
-      
+
       if (cachedData) {
         res.setHeader('X-Cache', 'HIT');
         return res.json(JSON.parse(cachedData));
@@ -49,17 +47,20 @@ export const cacheMiddleware = (options: CacheOptions) => {
 
       // Store original json method
       const originalJson = res.json;
-      
+
       // Override json method to cache response
-      res.json = function(data: any) {
-        // Cache the response
-        redis.setex(cacheKey, options.ttl, JSON.stringify(data));
+      res.json = function (data: any) {
+        // Cache the response (fire-and-forget — don't block the response
+        // on a cache write; log if it fails)
+        redis.setex(cacheKey, options.ttl, JSON.stringify(data)).catch((err: Error) => {
+          console.error('Cache middleware: failed to write cache', err.message);
+        });
         res.setHeader('X-Cache', 'MISS');
         return originalJson.call(this, data);
       };
 
       next();
-    } catch (error : any) {
+    } catch (error: any) {
       console.error('Cache middleware error:', error);
       next(); // Continue without caching on error
     }
