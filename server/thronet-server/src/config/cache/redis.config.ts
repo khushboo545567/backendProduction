@@ -1,5 +1,5 @@
 // src/config/cache/redis.config.ts
-import { RedisOptions } from 'ioredis';
+import Redis, { RedisOptions } from 'ioredis';
 import { logger } from "@/shared/logger.util";
 
 // ==================== REDIS SINGLE-NODE CONFIGURATION ====================
@@ -15,6 +15,10 @@ interface RedisSingleConfig {
 class RedisConfigManager {
     private static instance: RedisConfigManager;
     private redisConfig: RedisSingleConfig;
+
+    // ✅ NAYA — singleton ioredis client instance (lazy-created)
+    private client: Redis | null = null;
+    private connectingPromise: Promise<Redis> | null = null;
 
     private constructor() {
         this.redisConfig = this.initializeConfig();
@@ -100,6 +104,80 @@ class RedisConfigManager {
         });
 
         return { options };
+    }
+
+    /**
+     * ✅ NAYA — Get (ya lazily create) the singleton ioredis client.
+     * Concurrent calls ke dauraan multiple clients ban jaane se bachne ke
+     * liye `connectingPromise` use kiya hai — jab tak connect ho raha hai,
+     * baaki callers usi promise ko await karenge instead of spawning a new one.
+     */
+    public async getRedisClient(): Promise<Redis> {
+        // Already connected/ready client hai to seedha return karo
+        if (this.client && (this.client.status === 'ready' || this.client.status === 'connect')) {
+            return this.client;
+        }
+
+        // Connection already in-progress hai to usi promise ko await karo
+        if (this.connectingPromise) {
+            return this.connectingPromise;
+        }
+
+        this.connectingPromise = new Promise<Redis>((resolve, reject) => {
+            try {
+                const client = new Redis(this.redisConfig.options);
+
+                client.on('connect', () => {
+                    logger.info('✅ [REDIS] Client connecting...', {
+                        host: this.redisConfig.options.host,
+                        port: this.redisConfig.options.port,
+                    });
+                });
+
+                client.on('ready', () => {
+                    logger.info('✅ [REDIS] Client ready');
+                    this.connectingPromise = null;
+                    resolve(client);
+                });
+
+                client.on('error', (err: Error) => {
+                    logger.error('❌ [REDIS] Client error', { error: err.message });
+                    // Pehli baar ready hone se pehle error aaye to promise reject karo,
+                    // uske baad ke errors sirf log honge (retryStrategy sambhal lega)
+                    if (this.connectingPromise) {
+                        this.connectingPromise = null;
+                        reject(err);
+                    }
+                });
+
+                client.on('close', () => {
+                    logger.warn('⚠️ [REDIS] Connection closed');
+                });
+
+                client.on('reconnecting', (delay: number) => {
+                    logger.warn('🔄 [REDIS] Reconnecting', { delay });
+                });
+
+                this.client = client;
+            } catch (error: any) {
+                logger.error('❌ [REDIS] Failed to initialize client', { error: error.message });
+                this.connectingPromise = null;
+                reject(error);
+            }
+        });
+
+        return this.connectingPromise;
+    }
+
+    /**
+     * ✅ NAYA — Graceful shutdown ke liye (app.ts / worker.ts se call karo)
+     */
+    public async disconnect(): Promise<void> {
+        if (this.client) {
+            await this.client.quit();
+            this.client = null;
+            logger.info('✅ [REDIS] Client disconnected gracefully');
+        }
     }
 
     /**

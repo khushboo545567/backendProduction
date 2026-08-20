@@ -35,19 +35,20 @@ interface DecodedToken {
 }
 
 export interface ReqUser {
-    id: string;                  // ✅ Primary ID (matches global type)
-    userId: string;              // ✅ Alias for backward compatibility
+    id: string;
+    userId: string;
     _id: string;
-    isAdmin: boolean;            // ✅ Required by global type
-    region?: string;             // ✅ Optional region
-    role: 'user' | 'admin';      // ✅ Strict type instead of string
+    isAdmin: boolean;
+    region?: string;
+    role: 'user' | 'admin';
     email: string;
     deviceId: string | null;
     sessionId: string | null;
 }
 
 export interface AuthRequest extends Request {
-    user?: ReqUser;
+    // ❌ HATA DO: user?: ReqUser;
+    // ✅ Request.user global Express.User se already aa raha hai (shared/types/express/index.d.ts se)
     correlationId?: string;
 }
 
@@ -498,4 +499,5 @@ export const getAuthToken = (req: Request): string | null => {
     return token;
 };
 
-export default AuthMiddleware;
+// ✅ Named alias so routes can do: import { authenticateJWT } from '@/shared/middlewares/auth.middleware'
+export const authenticateJWT = AuthMiddleware.authenticate;
