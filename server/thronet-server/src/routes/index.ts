@@ -1,14 +1,13 @@
 /**
  * src/routes/index.ts
  * Central API Router — mounts all feature routers under /api/v1
- * @version 2.2.0
+ * @version 2.3.0
  */
-
 import { Router, Request, Response } from 'express';
-
 import authRoutes from '@/auth/routes/auth.routes';
 import profileRoutes from '@/Profile/routers/index';
 import connectionRouter from '@/connections/routes/index';
+import companyRouter from '@/company/routers/index';
 import { healthCheck as dbHealthCheck } from '@/database/connection';
 import CacheUtil from '@/shared/cache.util';
 
@@ -44,9 +43,7 @@ router.get('/health', async (_req: Request, res: Response) => {
             dbHealthCheck().catch(() => false),
             CacheUtil.healthCheck?.().catch(() => false) ?? Promise.resolve(false),
         ]);
-
         const allHealthy = dbAlive;
-
         const payload = {
             status: allHealthy ? 'healthy' : 'degraded',
             timestamp: new Date().toISOString(),
@@ -58,7 +55,6 @@ router.get('/health', async (_req: Request, res: Response) => {
                 cache: cacheAlive ? 'operational' : 'degraded',
             },
         };
-
         res.status(allHealthy ? 200 : 503).json({
             success: allHealthy,
             data: payload,
@@ -81,5 +77,9 @@ console.log('🔍 ProfileRoutes mounted successfully in routes/index.ts');
 router.use('/connections', connectionRouter);
 console.log('🔍 ConnectionRoutes mounted successfully in routes/index.ts');
 
+router.use('/company', companyRouter);
+console.log('🔍 CompanyRoutes mounted successfully in routes/index.ts');
+
 export default router;
-console.log('🔍 routes/index.ts LOADING END in routes indexing');
+
+console.log('🔍 routes/index.ts LOADING END');
