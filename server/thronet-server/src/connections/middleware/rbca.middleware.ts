@@ -1,19 +1,13 @@
-// src/middleware/rbac.middleware.ts
+// src/connections/middleware/rbca.middleware.ts
 import { Request, Response, NextFunction, RequestHandler } from 'express';
-import logger, { LogCategory, PublicLogMetadata } from '../utils/logger';
-import { ErrorResponse } from '../utils/response';
-declare global {
-  namespace Express {
-    interface Request {
-      user?: {
-        [key: string]: any;
-        id: string;
-        email?: string;
-        role: 'user' | 'admin';
-      };
-    }
-  }
-}
+import logger, { LogCategory } from '@/shared/logger.util'; // PublicLogMetadata not needed here
+import { ErrorResponse } from '@/shared/response.util';
+
+// ❌ REMOVED the local `declare global { namespace Express { interface Request { user?: {...} } } }` block.
+// Request.user is now declared ONCE, centrally, in connections/types/express.d.ts
+// (via Express.User augmentation) — redeclaring it here with a different shape
+// is exactly what caused the "Subsequent property declarations must have the
+// same type" conflict against @types/passport's own Request.user declaration.
 
 export const rbacMiddleware = (allowedRoles: string[]): RequestHandler => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -24,7 +18,7 @@ export const rbacMiddleware = (allowedRoles: string[]): RequestHandler => {
         logger.warn('Authentication required in RBAC middleware', {
           category: LogCategory.SECURITY,
           data: { url: req.originalUrl },
-        } as PublicLogMetadata);
+        });
         return res.status(401).json(
           new ErrorResponse('Authentication required', 401, 'AUTH_REQUIRED')
         );
@@ -32,11 +26,11 @@ export const rbacMiddleware = (allowedRoles: string[]): RequestHandler => {
 
       // Check if user's role is in allowed roles
       const userRoles = [user.role]; // Convert to array for consistency with example
-if (!allowedRoles.some((role) => userRoles.includes(role as 'user' | 'admin'))) {
-          logger.warn('Access denied due to insufficient permissions', {
+      if (!allowedRoles.some((role) => userRoles.includes(role as 'user' | 'admin'))) {
+        logger.warn('Access denied due to insufficient permissions', {
           category: LogCategory.SECURITY,
           data: { url: req.originalUrl, userId: user.id, userRole: user.role, requiredRoles: allowedRoles },
-        } as PublicLogMetadata);
+        });
         return res.status(403).json(
           new ErrorResponse(
             'Access denied. Insufficient permissions.',
@@ -48,11 +42,11 @@ if (!allowedRoles.some((role) => userRoles.includes(role as 'user' | 'admin'))) 
       }
 
       return next(); // Explicit return for allowed access
-    } catch (error : any) {
+    } catch (error: any) {
       logger.error('RBAC middleware error', {
         category: LogCategory.SECURITY,
         data: { url: req.originalUrl, error: error instanceof Error ? error.message : String(error) },
-      } as PublicLogMetadata);
+      });
       return res.status(500).json(
         new ErrorResponse('Internal server error during authorization', 500, 'AUTH_ERROR')
       );
@@ -60,30 +54,27 @@ if (!allowedRoles.some((role) => userRoles.includes(role as 'user' | 'admin'))) 
   };
 };
 
-
-
-
- export const roleBasedAccess = (allowedRoles: string[]): RequestHandler => {
+export const roleBasedAccess = (allowedRoles: string[]): RequestHandler => {
   return (req: Request, res: Response, next: NextFunction) => {
-   try {
-  const user = req.user;
+    try {
+      const user = req.user;
 
-  if (!user) {
-    logger.warn('Authentication required in RBAC middleware', {
-      category: LogCategory.SECURITY,
-      data: { url: req.originalUrl }
-    } as PublicLogMetadata);
-    return res.status(401).json(
-      new ErrorResponse('Authentication required', 401, 'AUTH_REQUIRED')
-    );
-  }
+      if (!user) {
+        logger.warn('Authentication required in RBAC middleware', {
+          category: LogCategory.SECURITY,
+          data: { url: req.originalUrl }
+        });
+        return res.status(401).json(
+          new ErrorResponse('Authentication required', 401, 'AUTH_REQUIRED')
+        );
+      }
 
       // Check if user's role is in allowed roles
       if (!allowedRoles.includes(user.role)) {
         logger.warn('Access denied due to insufficient permissions', {
           category: LogCategory.SECURITY,
           data: { url: req.originalUrl, userId: user.id, userRole: user.role, requiredRoles: allowedRoles }
-        } as PublicLogMetadata);
+        });
         return res.status(403).json(
           new ErrorResponse(
             'Access denied. Insufficient permissions.',
@@ -94,16 +85,16 @@ if (!allowedRoles.some((role) => userRoles.includes(role as 'user' | 'admin'))) 
         );
       }
 
-      return next(); // Add this line
-} catch (error : any) {
-  logger.error('RBAC middleware error', {
-    category: LogCategory.SECURITY,
-    data: { url: req.originalUrl, error: error instanceof Error ? error.message : String(error) },
-  } as PublicLogMetadata);
-  return res.status(500).json(
-    new ErrorResponse('Internal server error during authorization', 500, 'AUTH_ERROR')
-  );
-}
+      return next();
+    } catch (error: any) {
+      logger.error('RBAC middleware error', {
+        category: LogCategory.SECURITY,
+        data: { url: req.originalUrl, error: error instanceof Error ? error.message : String(error) },
+      });
+      return res.status(500).json(
+        new ErrorResponse('Internal server error during authorization', 500, 'AUTH_ERROR')
+      );
+    }
   };
 };
 

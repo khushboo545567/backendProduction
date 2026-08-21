@@ -188,7 +188,7 @@ function determineAction(method: string, path: string): string {
 /**
  * Determine status from HTTP status code
  */
-function determineStatus(statusCode: number): 'SUCCESS' | 'ERROR' | 'WARNING' | 'FAILURE' | 'PENDING' {
+function determineStatus(statusCode: number): 'SUCCESS' | 'ERROR' | 'WARNING' | 'FAILURE' {
     if (statusCode >= 200 && statusCode < 300) return 'SUCCESS';
     if (statusCode >= 400 && statusCode < 500) return 'FAILURE';
     if (statusCode >= 500) return 'ERROR';

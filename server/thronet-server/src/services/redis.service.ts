@@ -1,5 +1,5 @@
 ﻿// services/redis.service.ts
-import Redis, { Cluster } from 'ioredis';
+import Redis from 'ioredis';
 import { redisConfig } from '@/config/cache/redis.config';
 import { logger } from '@/shared/logger.util';
 import { promisify } from 'util';
@@ -40,10 +40,14 @@ interface ExtendedRedisHealth {
     };
 }
 
-// ==================== REDIS SERVICE (PRODUCTION-GRADE) ====================
+// ==================== REDIS SERVICE (SINGLE-NODE, PRODUCTION-GRADE) ====================
+// NOTE: Converted from Redis Cluster to a single-node client because Railway
+// (and most hosted Redis add-ons) provision one instance, not a 3-node
+// cluster. Public API (connect/get/set/delete/batch*/healthCheck/etc.) is
+// unchanged so callers elsewhere in the app don't need to change.
 class RedisService {
     [x: string]: any;
-    private cluster: Cluster | null = null;
+    private client: Redis | null = null;
     private isConnecting = false;
     public connected = false;
     private reconnectAttempts = 0;
@@ -62,27 +66,27 @@ class RedisService {
     // ==================== CONNECTION MANAGEMENT ====================
 
     /**
-     * Γ£à NEW: Test Redis connection before full initialization
+     * Test Redis connection before full initialization
      */
     async testConnection(): Promise<boolean> {
         try {
-            const { nodes } = redisConfig.getConfig();
-            const testNode = Array.isArray(nodes) && nodes.length > 0 ? nodes[0] : null;
+            const { options } = redisConfig.getConfig();
 
-            if (!testNode || typeof testNode === 'string' || typeof testNode === 'number') {
-                logger.warn('ΓÜá∩╕Å [REDIS TEST] Invalid node configuration');
+            if (!options.host) {
+                logger.warn('⚠️ [REDIS TEST] Invalid node configuration');
                 return false;
             }
 
-            logger.info('≡ƒº¬ [REDIS TEST] Testing connection...', {
-                host: testNode.host,
-                port: testNode.port,
+            logger.info('🧪 [REDIS TEST] Testing connection...', {
+                host: options.host,
+                port: options.port,
                 timeout: 5000,
             });
 
             const testClient = new Redis({
-                host: testNode.host,
-                port: testNode.port,
+                host: options.host,
+                port: options.port,
+                password: options.password,
                 connectTimeout: 5000,
                 commandTimeout: 5000,
                 maxRetriesPerRequest: 2,
@@ -108,14 +112,14 @@ class RedisService {
 
             const isSuccess = result === 'PONG';
 
-            logger.info(isSuccess ? 'Γ£à [REDIS TEST] Connection successful' : 'Γ¥î [REDIS TEST] Connection failed', {
+            logger.info(isSuccess ? '✅ [REDIS TEST] Connection successful' : '❌ [REDIS TEST] Connection failed', {
                 result,
                 expected: 'PONG',
             });
 
             return isSuccess;
         } catch (error: any) {
-            logger.warn('ΓÜá∩╕Å [REDIS TEST] Connection test failed', {
+            logger.warn('⚠️ [REDIS TEST] Connection test failed', {
                 error: error.message,
             });
             return false;
@@ -123,24 +127,22 @@ class RedisService {
     }
 
     /**
-     * Initialize Redis Cluster connection
+     * Initialize Redis connection
      */
     async connect(): Promise<void> {
         if (this.isConnecting) {
-            logger.warn('ΓÜá∩╕Å [REDIS] Connection already in progress');
-            // Γ£à NEW: Wait for existing connection attempt
+            logger.warn('⚠️ [REDIS] Connection already in progress');
             if (this.connectionPromise) {
                 await this.connectionPromise;
             }
             return;
         }
 
-        if (this.connected && this.cluster) {
-            logger.info('Γ£à [REDIS] Already connected');
+        if (this.connected && this.client) {
+            logger.info('✅ [REDIS] Already connected');
             return;
         }
 
-        // Γ£à NEW: Create connection promise
         this.connectionPromise = this.performConnect();
 
         try {
@@ -151,79 +153,61 @@ class RedisService {
     }
 
     /**
-     * Γ£à NEW: Separate method for actual connection logic
+     * Separate method for actual connection logic
      */
     private async performConnect(): Promise<void> {
         this.isConnecting = true;
 
         try {
-            const { nodes, options } = redisConfig.getConfig();
+            const { options } = redisConfig.getConfig();
 
-            logger.info('≡ƒö┤ [REDIS] Initializing cluster connection', {
-                nodes: nodes.map(n => typeof n === 'string' ? n : typeof n === 'object' ? `${n.host}:${n.port}` : n),
+            logger.info('🔴 [REDIS] Initializing single-node connection', {
+                host: options.host,
+                port: options.port,
                 environment: process.env.NODE_ENV,
                 pid: process.pid,
-                targetCapacity: '500K+ users',
                 timestamp: new Date().toISOString()
             });
 
-            this.cluster = new Redis.Cluster(nodes, options);
+            this.client = new Redis(options);
 
             // ==================== EVENT HANDLERS ====================
 
-            this.cluster.on('ready', () => {
+            this.client.on('ready', () => {
                 this.connected = true;
                 this.reconnectAttempts = 0;
 
-                const masterNodes = this.cluster!.nodes('master');
-                const slaveNodes = this.cluster!.nodes('slave');
-
-                logger.info('Γ£à [REDIS] Cluster ready and operational', {
+                logger.info('✅ [REDIS] Client ready and operational', {
                     status: 'CONNECTED',
-                    masterNodes: masterNodes.length,
-                    slaveNodes: slaveNodes.length,
-                    totalNodes: masterNodes.length + slaveNodes.length,
+                    host: options.host,
+                    port: options.port,
                     autoPipelining: 'enabled',
-                    scaleReads: 'all nodes',
                     timestamp: new Date().toISOString()
                 });
-
-                // Log node details
-                masterNodes.forEach((node, index) => {
-                    logger.info(`   ≡ƒôì Master Node ${index + 1}: ${node.options.host}:${node.options.port}`);
-                });
             });
 
-            this.cluster.on('connect', () => {
-                logger.info('≡ƒöù [REDIS] Cluster connection established');
+            this.client.on('connect', () => {
+                logger.info('🔗 [REDIS] Connection established');
             });
 
-            this.cluster.on('error', (err: Error) => {
-                logger.error('Γ¥î [REDIS] Cluster error', {
+            this.client.on('error', (err: Error) => {
+                logger.error('❌ [REDIS] Client error', {
                     error: err.message,
                     stack: err.stack,
                     timestamp: new Date().toISOString()
                 });
             });
 
-            this.cluster.on('close', () => {
+            this.client.on('close', () => {
                 this.connected = false;
-                logger.warn('ΓÜá∩╕Å [REDIS] Cluster connection closed', {
+                logger.warn('⚠️ [REDIS] Connection closed', {
                     timestamp: new Date().toISOString()
                 });
             });
 
-            this.cluster.on('node error', (err: Error, address: string) => {
-                logger.error('Γ¥î [REDIS] Node error', {
-                    node: address,
-                    error: err.message,
-                    timestamp: new Date().toISOString()
-                });
-            });
-
-            this.cluster.on('reconnecting', (delay: number) => {
+            this.client.on('reconnecting', (delay: number) => {
                 this.reconnectAttempts++;
-                logger.warn('≡ƒöä [REDIS] Attempting reconnection', {
+                logger.warn('🔄 [REDIS] Attempting reconnection', {
                     attempt: this.reconnectAttempts,
                     maxAttempts: this.MAX_RECONNECT_ATTEMPTS,
                     delay: `${delay}ms`,
@@ -231,51 +215,33 @@ class RedisService {
                 });
 
                 if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-                    logger.error('Γ¥î [REDIS] Max reconnection attempts reached');
+                    logger.error('❌ [REDIS] Max reconnection attempts reached');
                 }
-            });
-
-            this.cluster.on('+node', (node: any) => {
-                logger.info('Γ₧ò [REDIS] Node added to cluster', {
-                    node: `${node.options.host}:${node.options.port}`,
-                    timestamp: new Date().toISOString()
-                });
-            });
-
-            this.cluster.on('-node', (node: any) => {
-                logger.warn('Γ₧û [REDIS] Node removed from cluster', {
-                    node: `${node.options.host}:${node.options.port}`,
-                    timestamp: new Date().toISOString()
-                });
             });
 
             // Wait for connection to be ready
             await this.waitForConnection();
 
             // Test connection with PING
-            await this.cluster.ping();
-            logger.info('≡ƒÅô [REDIS] PING successful - cluster is responsive');
-
-            // Log cluster info
-            await this.logClusterInfo();
+            await this.client.ping();
+            logger.info('🏓 [REDIS] PING successful - client is responsive');
 
         } catch (error: any) {
             this.connected = false;
-            logger.error('Γ¥î [REDIS] Connection failed', {
+            logger.error('❌ [REDIS] Connection failed', {
                 error: error.message,
                 stack: error.stack,
                 reconnectAttempts: this.reconnectAttempts,
                 timestamp: new Date().toISOString()
             });
 
-            // Γ£à ADD THESE LINES (cleanup on failure)
-            if (this.cluster) {
+            if (this.client) {
                 try {
-                    await this.cluster.disconnect();
+                    this.client.disconnect();
                 } catch (disconnectError) {
                     // Ignore disconnect errors
                 }
-                this.cluster = null;
+                this.client = null;
             }
 
             throw error;
@@ -294,7 +260,7 @@ class RedisService {
             const checkConnection = () => {
                 if (this.connected) {
                     const duration = Date.now() - startTime;
-                    logger.info('Γ£à [REDIS] Connection wait completed', {
+                    logger.info('✅ [REDIS] Connection wait completed', {
                         duration: `${duration}ms`
                     });
                     resolve();
@@ -313,24 +279,7 @@ class RedisService {
         });
     }
 
-    /**
-     * Log cluster information
-     */
-    private async logClusterInfo(): Promise<void> {
-        try {
-            const info = await this.cluster!.cluster('INFO');
-            logger.info('≡ƒôè [REDIS] Cluster information', {
-                info: info.split('\r\n').filter(line => line.includes('cluster_')),
-                timestamp: new Date().toISOString()
-            });
-        } catch (error: any) {
-            logger.warn('ΓÜá∩╕Å [REDIS] Could not retrieve cluster info', {
-                error: error.message
-            });
-        }
-    }
-
-    async getRedisClient(): Promise<Cluster> {
+    async getRedisClient(): Promise<Redis> {
         if (!this.connected && this.connectionPromise) {
             await this.connectionPromise;
         }
@@ -339,9 +288,8 @@ class RedisService {
             await this.connect();
         }
 
-        return this.getCluster();
+        return this.getClient();
     }
-
 
     // ==================== CACHE OPERATIONS ====================
 
@@ -353,20 +301,20 @@ class RedisService {
         this.metrics.totalOperations++;
 
         try {
-            if (!this.cluster || !this.connected) {
-                logger.warn('ΓÜá∩╕Å [REDIS GET] Cluster not connected', { key });
+            if (!this.client || !this.connected) {
+                logger.warn('⚠️ [REDIS GET] Client not connected', { key });
                 this.metrics.cacheMisses++;
                 return null;
             }
 
-            const value = await this.cluster.get(key);
+            const value = await this.client.get(key);
             const duration = Date.now() - startTime;
 
             this.updateLatencyMetrics(duration);
 
             if (value === null) {
                 this.metrics.cacheMisses++;
-                logger.debug('Γ¥î [CACHE MISS]', {
+                logger.debug('❌ [CACHE MISS]', {
                     key,
                     duration: `${duration}ms`,
                     timestamp: new Date().toISOString()
@@ -380,7 +328,7 @@ class RedisService {
             const memorySettings = redisConfig.getMemorySettings();
             if (memorySettings.enableCompression && value.startsWith('GZIP:')) {
                 const decompressed = await this.decompress(value.substring(5));
-                logger.debug('Γ£à [CACHE HIT] Decompressed', {
+                logger.debug('✅ [CACHE HIT] Decompressed', {
                     key,
                     duration: `${duration}ms`,
                     compressed: true,
@@ -389,7 +337,7 @@ class RedisService {
                 return decompressed;
             }
 
-            logger.debug('Γ£à [CACHE HIT]', {
+            logger.debug('✅ [CACHE HIT]', {
                 key,
                 duration: `${duration}ms`,
                 size: `${value.length} bytes`,
@@ -401,7 +349,7 @@ class RedisService {
             const duration = Date.now() - startTime;
             this.metrics.cacheMisses++;
 
-            logger.error('Γ¥î [REDIS GET] Error', {
+            logger.error('❌ [REDIS GET] Error', {
                 key,
                 error: error.message,
                 duration: `${duration}ms`,
@@ -419,8 +367,8 @@ class RedisService {
         this.metrics.totalOperations++;
 
         try {
-            if (!this.cluster || !this.connected) {
-                logger.warn('ΓÜá∩╕Å [REDIS SET] Cluster not connected', { key });
+            if (!this.client || !this.connected) {
+                logger.warn('⚠️ [REDIS SET] Client not connected', { key });
                 return;
             }
 
@@ -439,12 +387,12 @@ class RedisService {
 
             // Set with TTL
             const ttl = options.ttl || redisConfig.getCacheTTL().default;
-            await this.cluster.setex(key, ttl, finalValue);
+            await this.client.setex(key, ttl, finalValue);
 
             const duration = Date.now() - startTime;
             this.updateLatencyMetrics(duration);
 
-            logger.debug('Γ£à [CACHE SET]', {
+            logger.debug('✅ [CACHE SET]', {
                 key,
                 ttl: `${ttl}s`,
                 duration: `${duration}ms`,
@@ -459,7 +407,7 @@ class RedisService {
 
         } catch (error: any) {
             const duration = Date.now() - startTime;
-            logger.error('Γ¥î [REDIS SET] Error', {
+            logger.error('❌ [REDIS SET] Error', {
                 key,
                 error: error.message,
                 duration: `${duration}ms`,
@@ -476,15 +424,15 @@ class RedisService {
         this.metrics.totalOperations++;
 
         try {
-            if (!this.cluster || !this.connected) {
-                logger.warn('ΓÜá∩╕Å [REDIS DEL] Cluster not connected', { key });
+            if (!this.client || !this.connected) {
+                logger.warn('⚠️ [REDIS DEL] Client not connected', { key });
                 return;
             }
 
-            const result = await this.cluster.del(key);
+            const result = await this.client.del(key);
             const duration = Date.now() - startTime;
 
-            logger.debug('≡ƒùæ∩╕Å [CACHE DELETE]', {
+            logger.debug('🗑️ [CACHE DELETE]', {
                 key,
                 deleted: result > 0,
                 duration: `${duration}ms`,
@@ -492,7 +440,7 @@ class RedisService {
             });
 
         } catch (error: any) {
-            logger.error('Γ¥î [REDIS DEL] Error', {
+            logger.error('❌ [REDIS DEL] Error', {
                 key,
                 error: error.message,
                 timestamp: new Date().toISOString()
@@ -514,54 +462,40 @@ class RedisService {
         const startTime = Date.now();
 
         try {
-            if (!this.cluster || !this.connected) {
-                logger.warn('ΓÜá∩╕Å [REDIS DEL PATTERN] Cluster not connected', { pattern });
+            if (!this.client || !this.connected) {
+                logger.warn('⚠️ [REDIS DEL PATTERN] Client not connected', { pattern });
                 return 0;
             }
 
-            logger.info('≡ƒöì [CACHE DELETE PATTERN] Scanning keys', {
+            logger.info('🔍 [CACHE DELETE PATTERN] Scanning keys', {
                 pattern,
                 timestamp: new Date().toISOString()
             });
 
             let deletedCount = 0;
-            const nodes = this.cluster.nodes('master');
+            let cursor = '0';
 
-            // Scan each master node
-            for (const node of nodes) {
-                let cursor = '0';
-                do {
-                    const [newCursor, keys] = await node.scan(
-                        cursor,
-                        'MATCH',
-                        pattern,
-                        'COUNT',
-                        100
-                    );
-                    cursor = newCursor;
+            do {
+                const [newCursor, keys] = await this.client.scan(
+                    cursor,
+                    'MATCH',
+                    pattern,
+                    'COUNT',
+                    100
+                );
+                cursor = newCursor;
 
-                    if (keys.length > 0) {
-                        // ✅ FIX: cluster.del(...keys) ek single multi-key command banata
-                        // hai, jo CROSSSLOT error deta hai agar keys alag-alag Redis slots
-                        // pe hon (jo hash-tag ke bina almost hamesha hota hai — jaise
-                        // feed:v1:{userId}:page:1 aur feed:v1:{userId}:page:2 alag slots
-                        // pe ho sakte hain). Ye error upar wale catch me silently swallow
-                        // ho jata tha, isliye cache kabhi invalidate hi nahi hota tha.
-                        // Pipeline har DEL ko alag command ki tarah bhejta hai, jo cluster
-                        // mode me sahi node/slot pe khud route ho jata hai.
-                        const pipeline = this.cluster.pipeline();
-                        keys.forEach((k) => pipeline.del(k));
-                        const results = await pipeline.exec();
-                        deletedCount += results?.filter(
-                            ([err, res]) => !err && Number(res) > 0
-                        ).length || 0;
-                    }
-                } while (cursor !== '0');
-            }
-
+                if (keys.length > 0) {
+                    // NOTE: single-node client hai (cluster nahi), isliye
+                    // CROSSSLOT ka risk yahan applicable nahi — sab keys
+                    // isi ek instance pe hoti hain. Plain multi-key DEL safe hai.
+                    const result = await this.client.del(...keys);
+                    deletedCount += result;
+                }
+            } while (cursor !== '0');
             const duration = Date.now() - startTime;
 
-            logger.info('Γ£à [CACHE DELETE PATTERN] Completed', {
+            logger.info('✅ [CACHE DELETE PATTERN] Completed', {
                 pattern,
                 deletedCount,
                 duration: `${duration}ms`,
@@ -571,7 +505,7 @@ class RedisService {
             return deletedCount;
 
         } catch (error: any) {
-            logger.error('Γ¥î [REDIS DEL PATTERN] Error', {
+            logger.error('❌ [REDIS DEL PATTERN] Error', {
                 pattern,
                 error: error.message,
                 timestamp: new Date().toISOString()
@@ -589,17 +523,17 @@ class RedisService {
         const startTime = Date.now();
 
         try {
-            if (!this.cluster || !this.connected) {
-                logger.warn('ΓÜá∩╕Å [REDIS BATCH SET] Cluster not connected');
+            if (!this.client || !this.connected) {
+                logger.warn('⚠️ [REDIS BATCH SET] Client not connected');
                 return;
             }
 
-            logger.info('≡ƒôª [BATCH SET] Starting batch operation', {
+            logger.info('📦 [BATCH SET] Starting batch operation', {
                 count: items.length,
                 timestamp: new Date().toISOString()
             });
 
-            const pipeline = this.cluster.pipeline();
+            const pipeline = this.client.pipeline();
 
             for (const { key, value, ttl } of items) {
                 const finalTTL = ttl || redisConfig.getCacheTTL().default;
@@ -610,7 +544,7 @@ class RedisService {
 
             const duration = Date.now() - startTime;
 
-            logger.info('Γ£à [BATCH SET] Completed', {
+            logger.info('✅ [BATCH SET] Completed', {
                 count: items.length,
                 duration: `${duration}ms`,
                 avgPerItem: `${(duration / items.length).toFixed(2)}ms`,
@@ -618,7 +552,7 @@ class RedisService {
             });
 
         } catch (error: any) {
-            logger.error('Γ¥î [REDIS BATCH SET] Error', {
+            logger.error('❌ [REDIS BATCH SET] Error', {
                 error: error.message,
                 count: items.length,
                 timestamp: new Date().toISOString()
@@ -633,17 +567,17 @@ class RedisService {
         const startTime = Date.now();
 
         try {
-            if (!this.cluster || !this.connected) {
-                logger.warn('ΓÜá∩╕Å [REDIS BATCH GET] Cluster not connected');
+            if (!this.client || !this.connected) {
+                logger.warn('⚠️ [REDIS BATCH GET] Client not connected');
                 return keys.map(() => null);
             }
 
-            logger.info('≡ƒôª [BATCH GET] Starting batch retrieval', {
+            logger.info('📦 [BATCH GET] Starting batch retrieval', {
                 count: keys.length,
                 timestamp: new Date().toISOString()
             });
 
-            const pipeline = this.cluster.pipeline();
+            const pipeline = this.client.pipeline();
             keys.forEach(key => pipeline.get(key));
 
             const results = await pipeline.exec();
@@ -660,7 +594,7 @@ class RedisService {
             const hitCount = values.filter(v => v !== null).length;
             const missCount = values.filter(v => v === null).length;
 
-            logger.info('Γ£à [BATCH GET] Completed', {
+            logger.info('✅ [BATCH GET] Completed', {
                 count: keys.length,
                 hits: hitCount,
                 misses: missCount,
@@ -673,7 +607,7 @@ class RedisService {
             return values;
 
         } catch (error: any) {
-            logger.error('Γ¥î [REDIS BATCH GET] Error', {
+            logger.error('❌ [REDIS BATCH GET] Error', {
                 error: error.message,
                 count: keys.length,
                 timestamp: new Date().toISOString()
@@ -686,12 +620,12 @@ class RedisService {
      * Execute batch operations using pipeline
      */
     async executeBatch(commands: Array<{ method: string; args: any[] }>): Promise<any[]> {
-        if (!this.cluster || !this.connected) {
-            logger.warn('ΓÜá∩╕Å [REDIS BATCH] Cluster not connected');
+        if (!this.client || !this.connected) {
+            logger.warn('⚠️ [REDIS BATCH] Client not connected');
             return [];
         }
 
-        const pipeline = this.cluster.pipeline();
+        const pipeline = this.client.pipeline();
         const startTime = Date.now();
 
         commands.forEach(({ method, args }) => {
@@ -702,7 +636,7 @@ class RedisService {
             const results = await pipeline.exec();
             const responseTime = Date.now() - startTime;
 
-            logger.debug('ΓÜí [REDIS BATCH] Operation executed', {
+            logger.debug('⚡ [REDIS BATCH] Operation executed', {
                 commandCount: commands.length,
                 responseTimeMs: responseTime,
             });
@@ -711,7 +645,7 @@ class RedisService {
         } catch (error: any) {
             const responseTime = Date.now() - startTime;
 
-            logger.error('Γ¥î [REDIS BATCH] Operation failed', {
+            logger.error('❌ [REDIS BATCH] Operation failed', {
                 error: error.message,
                 commandCount: commands.length,
                 responseTimeMs: responseTime,
@@ -725,46 +659,41 @@ class RedisService {
      * Scan keys with pattern matching (async generator)
      */
     async *scanKeys(pattern: string = '*', count: number = 1000): AsyncGenerator<string[], void, unknown> {
-        if (!this.cluster || !this.connected) {
-            logger.warn('ΓÜá∩╕Å [REDIS SCAN] Cluster not connected');
+        if (!this.client || !this.connected) {
+            logger.warn('⚠️ [REDIS SCAN] Client not connected');
             return;
         }
 
-        const nodes = this.cluster.nodes('master');
+        let cursor = '0';
 
-        for (const node of nodes) {
-            let cursor = 0;
+        do {
+            const startTime = Date.now();
+            try {
+                const result = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', count);
+                cursor = result[0];
+                const keys = result[1];
 
-            do {
-                const startTime = Date.now();
-                try {
-                    const result = await node.scan(cursor, 'MATCH', pattern, 'COUNT', count);
-                    cursor = parseInt(result[0]);
-                    const keys = result[1];
-
-                    if (keys.length > 0) {
-                        const responseTime = Date.now() - startTime;
-                        logger.debug('≡ƒöì [REDIS SCAN] Keys found', {
-                            cursor,
-                            keyCount: keys.length,
-                            pattern,
-                            responseTimeMs: responseTime,
-                        });
-                        yield keys;
-                    }
-                } catch (error: any) {
+                if (keys.length > 0) {
                     const responseTime = Date.now() - startTime;
-                    logger.error('Γ¥î [REDIS SCAN] Scan failed', {
-                        error: error.message,
+                    logger.debug('🔍 [REDIS SCAN] Keys found', {
+                        cursor,
+                        keyCount: keys.length,
                         pattern,
                         responseTimeMs: responseTime,
                     });
-                    throw error;
+                    yield keys;
                 }
-            } while (cursor !== 0);
-        }
+            } catch (error: any) {
+                const responseTime = Date.now() - startTime;
+                logger.error('❌ [REDIS SCAN] Scan failed', {
+                    error: error.message,
+                    pattern,
+                    responseTimeMs: responseTime,
+                });
+                throw error;
+            }
+        } while (cursor !== '0');
     }
-
 
     // ==================== COMPRESSION UTILITIES ====================
 
@@ -790,11 +719,11 @@ class RedisService {
      */
     async healthCheck(): Promise<boolean> {
         try {
-            if (!this.cluster || !this.connected) {
+            if (!this.client || !this.connected) {
                 return false;
             }
 
-            await this.cluster.ping();
+            await this.client.ping();
             return true;
         } catch {
             return false;
@@ -808,12 +737,12 @@ class RedisService {
         const startTime = Date.now();
 
         try {
-            if (!this.cluster) {
+            if (!this.client) {
                 return {
                     connected: false,
                     totalNodes: 0,
                     healthyNodes: 0,
-                    clusterMode: true,
+                    clusterMode: false,
                     performance: {
                         avgResponseTime: 0,
                         successRate: 0,
@@ -821,54 +750,37 @@ class RedisService {
                 };
             }
 
-            const nodes = this.cluster.nodes('all');
-            const totalNodes = nodes.length;
-            let healthyNodes = 0;
-            let totalResponseTime = 0;
-
-            const healthChecks = await Promise.allSettled(
-                nodes.map(async (node) => {
-                    const nodeStartTime = Date.now();
-                    try {
-                        const result = await node.ping();
-                        const responseTime = Date.now() - nodeStartTime;
-                        const isHealthy = result === 'PONG';
-
-                        if (isHealthy) {
-                            healthyNodes++;
-                            totalResponseTime += responseTime;
-                        }
-
-                        return { healthy: isHealthy, responseTime };
-                    } catch (error : any) {
-                        return { healthy: false, responseTime: 0 };
-                    }
-                })
-            );
-
-            const avgResponseTime = healthyNodes > 0 ? totalResponseTime / healthyNodes : 0;
-            const successRate = totalNodes > 0 ? (healthyNodes / totalNodes) * 100 : 0;
-            const totalHealthCheckTime = Date.now() - startTime;
+            const nodeStartTime = Date.now();
+            let healthy = false;
+            try {
+                const result = await this.client.ping();
+                healthy = result === 'PONG';
+            } catch {
+                healthy = false;
+            }
+            const responseTime = Date.now() - nodeStartTime;
 
             const health: ExtendedRedisHealth = {
-                connected: healthyNodes > 0,
-                totalNodes,
-                healthyNodes,
-                clusterMode: true,
+                connected: healthy,
+                totalNodes: 1,
+                healthyNodes: healthy ? 1 : 0,
+                clusterMode: false,
                 performance: {
-                    avgResponseTime: Math.round(avgResponseTime),
-                    successRate: Math.round(successRate * 100) / 100,
+                    avgResponseTime: healthy ? responseTime : 0,
+                    successRate: healthy ? 100 : 0,
                 },
             };
 
-            logger.debug('≡ƒôè [REDIS HEALTH] Health check completed', {
+            const totalHealthCheckTime = Date.now() - startTime;
+
+            logger.debug('📊 [REDIS HEALTH] Health check completed', {
                 ...health,
                 totalCheckTimeMs: totalHealthCheckTime,
             });
 
             return health;
         } catch (error: any) {
-            logger.error('Γ¥î [REDIS HEALTH] Health check failed', {
+            logger.error('❌ [REDIS HEALTH] Health check failed', {
                 error: error.message,
             });
 
@@ -876,7 +788,7 @@ class RedisService {
                 connected: false,
                 totalNodes: 0,
                 healthyNodes: 0,
-                clusterMode: true,
+                clusterMode: false,
                 performance: {
                     avgResponseTime: 0,
                     successRate: 0,
@@ -889,8 +801,6 @@ class RedisService {
      * Get comprehensive statistics
      */
     getStats(): RedisStats {
-        const masterNodes = this.cluster?.nodes('master') || [];
-        const slaveNodes = this.cluster?.nodes('slave') || [];
         const hitRate = this.metrics.totalOperations > 0
             ? ((this.metrics.cacheHits / this.metrics.totalOperations) * 100).toFixed(2)
             : '0.00';
@@ -901,9 +811,9 @@ class RedisService {
         return {
             connected: this.connected,
             reconnectAttempts: this.reconnectAttempts,
-            nodesCount: masterNodes.length + slaveNodes.length,
-            masterNodes: masterNodes.length,
-            slaveNodes: slaveNodes.length,
+            nodesCount: this.connected ? 1 : 0,
+            masterNodes: this.connected ? 1 : 0,
+            slaveNodes: 0,
             totalOperations: this.metrics.totalOperations,
             cacheHits: this.metrics.cacheHits,
             cacheMisses: this.metrics.cacheMisses,
@@ -918,43 +828,51 @@ class RedisService {
      */
     logStats(): void {
         const stats = this.getStats();
-        logger.info('≡ƒôè [REDIS STATS] Current statistics', {
+        logger.info('📊 [REDIS STATS] Current statistics', {
             ...stats,
             timestamp: new Date().toISOString()
         });
     }
 
     /**
-     * Get cluster instance (use with caution)
+     * Get client instance (use with caution)
      */
-    getCluster(): Cluster {
-        if (!this.cluster) {
-            throw new Error('Redis cluster not initialized');
+    getClient(): Redis {
+        if (!this.client) {
+            throw new Error('Redis client not initialized');
         }
-        return this.cluster;
+        return this.client;
     }
 
     /**
-     * Disconnect from cluster
+     * @deprecated use getClient() — kept for backward compatibility with
+     * any code still calling getCluster().
+     */
+    getCluster(): Redis {
+        return this.getClient();
+    }
+
+    /**
+     * Disconnect from Redis
      */
     async disconnect(): Promise<void> {
         try {
-            if (this.cluster) {
-                logger.info('≡ƒö┤ [REDIS] Disconnecting from cluster');
+            if (this.client) {
+                logger.info('🔴 [REDIS] Disconnecting');
 
                 // Log final stats
                 this.logStats();
 
-                await this.cluster.quit();
+                await this.client.quit();
                 this.connected = false;
-                this.cluster = null;
+                this.client = null;
 
-                logger.info('Γ£à [REDIS] Disconnected successfully', {
+                logger.info('✅ [REDIS] Disconnected successfully', {
                     timestamp: new Date().toISOString()
                 });
             }
         } catch (error: any) {
-            logger.error('Γ¥î [REDIS] Error during disconnect', {
+            logger.error('❌ [REDIS] Error during disconnect', {
                 error: error.message,
                 timestamp: new Date().toISOString()
             });
@@ -968,7 +886,7 @@ export const connectRedis = async (): Promise<void> => {
     await redisServiceInstance.connect();
 };
 
-export const getRedisClient = async (): Promise<Cluster> => {
+export const getRedisClient = async (): Promise<Redis> => {
     return await redisServiceInstance.getRedisClient();
 };
 

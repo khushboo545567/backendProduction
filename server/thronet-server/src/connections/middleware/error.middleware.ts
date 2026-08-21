@@ -1,11 +1,9 @@
 // src/middleware/error.middleware.ts
 
 import { Request, Response, NextFunction } from 'express';
-import { ErrorResponse, HttpStatus } from '../utils/response';
-import logger from '../utils/logger';
-import { LogCategory } from '../utils/logger';
-import environmentConfig from '../config/environment';
-
+import { ErrorResponse, HttpStatus } from '@/shared/response.util';
+import logger, { LogCategory } from '@/shared/logger.util';
+import environmentConfig from '@/config/environment/environment';
 /**
  * Error Handling Middleware
  * Centralized error handler for the Connection Service.

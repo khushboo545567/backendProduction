@@ -20,6 +20,7 @@ export interface IUser extends Document {
     passwordSalt?: string;
     firstName: string;
     lastName?: string;
+    dateOfBirth?: Date;
     location?: string;
     currentPosition?: string;
     company?: string;
@@ -176,6 +177,10 @@ interface IUserPreferences {
         sms: boolean;
     };
     theme: 'light' | 'dark' | 'auto';
+    // Controls whether "who viewed your profile" notifications name the viewer
+    // ('named'), hide identity but still track ('public'/'connections' — reserved
+    // for future granularity), or disable view tracking entirely ('private').
+    profileViewVisibility?: 'named' | 'public' | 'connections' | 'private';
 }
 
 interface IUserMetadata {
@@ -194,6 +199,17 @@ interface IUserFlags {
     deletedBy?: string;
 }
 
+// 🔧 NAYA — search result ke return shape ke liye
+interface IPaginatedUsersResult {
+    data: any[];
+    totalCount: number;
+    currentPage: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+    estimatedTotal?: number;
+}
+
 export interface IUserModel extends Model<IUser> {
     generateAccessToken(payload: TokenPayload): string;
     generateRefreshToken(payload: TokenPayload): string;
@@ -205,6 +221,15 @@ export interface IUserModel extends Model<IUser> {
     findByUsername(username: string): Promise<(IUser & Document) | null>;
     findByUserId(userId: string): Promise<IUser | null>;
     getActiveUserCount(): Promise<number>;
+    // 🔧 NAYA — search ke liye
+    findUsersPaginated(options: {
+        page: number;
+        limit: number;
+        query: string;
+        region?: string;
+        useEstimatedCount?: boolean;
+        projection?: string;
+    }): Promise<IPaginatedUsersResult>;
 }
 
 interface TokenPayload {
@@ -278,6 +303,10 @@ const UserSchema = new Schema<IUser, IUserModel>(
             trim: true,
             maxlength: [50, 'Last name cannot exceed 50 characters'],
         },
+        dateOfBirth: {
+            type: Date,
+            default: null,
+        },
         location: {
             type: String,
             trim: true,
@@ -323,7 +352,7 @@ const UserSchema = new Schema<IUser, IUserModel>(
         },
 
 
-        
+
         profilePhotoId: {
             type: String,
             default: null,
@@ -646,6 +675,11 @@ const UserSchema = new Schema<IUser, IUserModel>(
                 sms: { type: Boolean, default: false },
             },
             theme: { type: String, enum: ['light', 'dark', 'auto'], default: 'auto' },
+            profileViewVisibility: {
+                type: String,
+                enum: ['named', 'public', 'connections', 'private'],
+                default: 'named',
+            },
         },
         metadata: {
             registrationIp: String,
@@ -707,6 +741,8 @@ const UserSchema = new Schema<IUser, IUserModel>(
 // NOTE: Sirf compound aur unique indexes yahan hain
 // Single-field indexes upar field definition mein  se handle hote hain
 
+UserSchema.index({ dateOfBirth: 1, status: 1 });
+UserSchema.index({ 'onboarding.workingProfile.startDate': 1, status: 1 });
 UserSchema.index({ email: 1, status: 1 });
 UserSchema.index({ userId: 1, emailVerified: 1 });
 UserSchema.index({ createdAt: -1 });
@@ -714,6 +750,15 @@ UserSchema.index({ location: 1, status: 1 });
 UserSchema.index({ location: 1, 'onboarding.userType': 1 });
 UserSchema.index({ 'onboarding.userType': 1, createdAt: -1 });
 UserSchema.index({ location: 1, 'onboarding.userType': 1, status: 1, createdAt: -1 });
+
+// 🔧 NAYA — full-text search index (name, username, email, company, location)
+UserSchema.index(
+    { firstName: 'text', lastName: 'text', username: 'text', email: 'text', company: 'text', location: 'text' },
+    {
+        name: 'user_search_text_index',
+        weights: { firstName: 10, lastName: 8, username: 6, company: 4, location: 3, email: 2 },
+    }
+);
 
 UserSchema.virtual('fullName').get(function (this: IUser) {
     return this.firstName && this.lastName ? `${this.firstName} ${this.lastName}` : this.email;
@@ -821,6 +866,74 @@ UserSchema.statics.findByUserId = async function (userId: string): Promise<IUser
 
 UserSchema.statics.getActiveUserCount = async function (): Promise<number> {
     return this.countDocuments({ status: 'active', 'flags.isDeleted': false });
+};
+
+// 🔧 NAYA — Feature 40: paginated user search
+// Query string ko firstName/lastName/username/company/location ke against
+// case-insensitive partial (regex) match karta hai. Deleted/inactive users
+// exclude hote hain.
+UserSchema.statics.findUsersPaginated = async function (options: {
+    page: number;
+    limit: number;
+    query: string;
+    region?: string;
+    useEstimatedCount?: boolean;
+    projection?: string;
+}): Promise<IPaginatedUsersResult> {
+    const { page = 1, limit = 20, query, useEstimatedCount = true, projection } = options;
+
+    if (!query || !query.trim()) {
+        return {
+            data: [],
+            totalCount: 0,
+            currentPage: page,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPreviousPage: false,
+            estimatedTotal: 0,
+        };
+    }
+
+    const skip = (page - 1) * limit;
+    const trimmedQuery = query.trim();
+
+    // Case-insensitive partial match. MongoDB ka $text sirf whole-word match
+    // karta hai, isliye "kas" jaisi partial typing ke liye regex use kar rahe hain.
+    // Special regex characters escape kiye hain taaki user input crash na kare.
+    const escapedQuery = trimmedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const searchRegex = new RegExp(escapedQuery, 'i');
+
+    const filter: any = {
+        'flags.isDeleted': false,
+        status: 'active',
+        $or: [
+            { firstName: searchRegex },
+            { lastName: searchRegex },
+            { username: searchRegex },
+            { company: searchRegex },
+            { location: searchRegex },
+        ],
+    };
+
+    const selectFields =
+        projection || 'userId username firstName lastName location company profilePhotoId';
+
+    const [data, totalCount] = await Promise.all([
+        this.find(filter).select(selectFields).skip(skip).limit(limit).lean(),
+        this.countDocuments(filter),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+
+    return {
+        data,
+        totalCount,
+        currentPage: page,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+        estimatedTotal: totalCount,
+    };
 };
 
 UserSchema.methods.incrementLoginAttempts = async function (): Promise<any> {

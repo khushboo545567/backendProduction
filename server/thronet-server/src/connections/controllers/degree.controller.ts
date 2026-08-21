@@ -3,9 +3,9 @@
 // src/controllers/degreeController.ts (Production Ready - Fixed)
 
 import { Request, Response, NextFunction } from 'express';
-import logger from '../utils/logger';
-import { degreeService } from '../services/degreeService';
-import { SuccessResponse, ErrorResponse, HttpStatus } from '../utils/response';
+import { degreeService } from '../services/degree.service';
+import logger from '@/shared/logger.util';
+import { SuccessResponse, ErrorResponse, HttpStatus } from '@/shared/response.util';
 // import { NetworkMetrics, ConnectionDegreePath, CentralityMeasures } from '../types/network.types';
 
 /**

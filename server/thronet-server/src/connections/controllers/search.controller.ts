@@ -1,10 +1,10 @@
-// src/controllers/searchController.ts
+// src/connections/controllers/search.controller.ts
 
 import { Request, Response, NextFunction } from 'express';
 import { asyncHandler } from '../middleware/asyns.middleware';
-import { ErrorResponse, SuccessResponse, HttpStatus } from '@utils/response';
-import logger from '@utils/logger';
-import environmentConfig from '../config/environment';
+import { ErrorResponse, SuccessResponse, HttpStatus } from '@/shared/response.util';
+import logger from '@/shared/logger.util';
+import environmentConfig from '@/config/environment/environment';
 import {
   processSearchQueries,
   handleSearchIndexing,
@@ -17,14 +17,14 @@ import {
   processSearchRecommendations,
   handleSearchValidation,
   manageSearchAudit
-} from '@services/searchService';
+} from '../services/search.service';
 
 /**
  * Search Controller
  * Handles HTTP requests for search-related operations in the Connection Service.
  * Optimized for 100M+ users with efficient routing and response handling.
- * 
- * Features (Complete 1 of 12, aligned with searchService.ts):
+ *
+ * Features (Complete 1 of 12, aligned with search.service.ts):
  * 1. searchUsersByName - Search users by name (Feature 36) ✓
  * 2. searchUsersByCompany - Search users by company (Feature 37)
  * 3. searchUsersBySkills - Search users by skills (Feature 38)
@@ -37,7 +37,7 @@ import {
  * 10. getSearchHistory - Get user search history
  * 11. getSearchRecommendations - Get search recommendations
  * 12. validateSearch - Validate search parameters
- * 
+ *
  * Routes:
  * - GET /api/v1/search/users - Search users by name
  * - GET /api/v1/search/company - Search users by company
@@ -47,31 +47,12 @@ import {
  * - Additional routes for other features
  */
 
-// interface ISearchResult {
-//   userId: string;
-//   username: string;
-//   firstName: string;
-//   lastName: string;
-//   fullName?: string;
-// }
-
-// interface IPaginationResult<T> {
-//   data: T[];
-//   totalCount: number;
-//   currentPage: number;
-//   totalPages: number;
-//   hasNextPage: boolean;
-//   hasPreviousPage: boolean;
-//   estimatedTotal?: number;
-// }
-
-class searchController {}
 /**
  * Search users by name
  * Implements Feature 36
  * HTTP: GET /api/v1/search/users?name=query&page=1&limit=20
  */
-export const searchUsersByName = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const searchUsersByName = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { name, page = '1', limit = environmentConfig.PAGINATION_DEFAULT_LIMIT } = req.query;
   const authUserId = req.user?.id;
 
@@ -102,7 +83,6 @@ export const searchUsersByName = asyncHandler(async (req: Request, res: Response
       useEstimatedCount: true,
       projection: 'userId username firstName lastName',
     });
-    
 
     await logger.auditLog('search_users_by_name', authUserId, {
       query: name,
@@ -135,7 +115,7 @@ export const searchUsersByName = asyncHandler(async (req: Request, res: Response
  * Implements Feature 37
  * HTTP: GET /api/v1/search/company?company=query&page=1&limit=20
  */
-export const searchUsersByCompany = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const searchUsersByCompany = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { company, page = '1', limit = environmentConfig.PAGINATION_DEFAULT_LIMIT } = req.query;
   const authUserId = req.user?.id;
 
@@ -198,7 +178,7 @@ export const searchUsersByCompany = asyncHandler(async (req: Request, res: Respo
  * Implements Feature 38
  * HTTP: GET /api/v1/search/skills?skills=query&page=1&limit=20
  */
-export const searchUsersBySkills = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const searchUsersBySkills = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { skills, page = '1', limit = environmentConfig.PAGINATION_DEFAULT_LIMIT } = req.query;
   const authUserId = req.user?.id;
 
@@ -261,7 +241,7 @@ export const searchUsersBySkills = asyncHandler(async (req: Request, res: Respon
  * Implements Feature 39
  * HTTP: GET /api/v1/search/suggestions?query=partial&limit=10
  */
-export const getSearchSuggestions = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const getSearchSuggestions = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { query, limit = '10' } = req.query;
   const authUserId = req.user?.id;
 
@@ -280,7 +260,6 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
   }
 
   try {
-    // const suggestions = await processSearchSuggestions(query, limitNum);
     const suggestions = await processSearchSuggestions();
 
     await logger.auditLog('get_search_suggestions', authUserId, {
@@ -312,7 +291,7 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
  * Implements Feature 41
  * HTTP: POST /api/v1/search/index/:userId
  */
-export const updateSearchIndex = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const updateSearchIndex = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { userId } = req.params;
   const authUserId = req.user?.id;
 
@@ -353,7 +332,7 @@ export const updateSearchIndex = asyncHandler(async (req: Request, res: Response
  * Get search filters
  * HTTP: GET /api/v1/search/filters
  */
-export const getSearchFilters = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const getSearchFilters = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -372,7 +351,7 @@ export const getSearchFilters = asyncHandler(async (req: Request, res: Response,
  * Manage search cache
  * HTTP: POST /api/v1/search/cache/manage
  */
-export const manageSearchCache = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const manageSearchCache = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -391,7 +370,7 @@ export const manageSearchCache = asyncHandler(async (req: Request, res: Response
  * Get search analytics
  * HTTP: GET /api/v1/search/analytics
  */
-export const getSearchAnalytics = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const getSearchAnalytics = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -410,7 +389,7 @@ export const getSearchAnalytics = asyncHandler(async (req: Request, res: Respons
  * Handle search optimization
  * HTTP: POST /api/v1/search/optimize
  */
-export const optimizeSearch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const optimizeSearch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -429,7 +408,7 @@ export const optimizeSearch = asyncHandler(async (req: Request, res: Response, n
  * Get search history
  * HTTP: GET /api/v1/search/history
  */
-export const getSearchHistory = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const getSearchHistory = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -448,7 +427,7 @@ export const getSearchHistory = asyncHandler(async (req: Request, res: Response,
  * Get search recommendations
  * HTTP: GET /api/v1/search/recommendations
  */
-export const getSearchRecommendations = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const getSearchRecommendations = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -467,7 +446,7 @@ export const getSearchRecommendations = asyncHandler(async (req: Request, res: R
  * Validate search parameters
  * HTTP: POST /api/v1/search/validate
  */
-export const validateSearch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const validateSearch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -486,7 +465,7 @@ export const validateSearch = asyncHandler(async (req: Request, res: Response, n
  * Manage search audit
  * HTTP: GET /api/v1/search/audit
  */
-export const manageSearchAuditEndpoint = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+const manageSearchAuditEndpoint = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const authUserId = req.user?.id;
 
   if (!authUserId) {
@@ -501,5 +480,20 @@ export const manageSearchAuditEndpoint = asyncHandler(async (req: Request, res: 
   }
 });
 
-
-export { searchController };
+// 🔧 FIX: ab saare handlers ek hi object ke andar bundled hain,
+// isliye `searchController.searchUsersByName` jaisa access route file me kaam karega
+export const searchController = {
+  searchUsersByName,
+  searchUsersByCompany,
+  searchUsersBySkills,
+  getSearchSuggestions,
+  updateSearchIndex,
+  getSearchFilters,
+  manageSearchCache,
+  getSearchAnalytics,
+  optimizeSearch,
+  getSearchHistory,
+  getSearchRecommendations,
+  validateSearch,
+  manageSearchAuditEndpoint,
+};

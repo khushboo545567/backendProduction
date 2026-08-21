@@ -14,9 +14,14 @@
  * - Cache statistics
  * - Health checks
  * - Graceful shutdown
+ * - ✅ Per-command timeout guard — prevents a stale/half-open Redis
+ *   connection from hanging a request forever. If a Redis command
+ *   doesn't resolve within COMMAND_TIMEOUT_MS, we treat it as failed
+ *   and fall through (set/get/etc. already have try/catch that
+ *   degrades gracefully).
  * 
  * @module utils/cache.util
- * @version 3.2.0
+ * @version 3.3.0
  */
 
 import { createClient, RedisClientType } from 'redis';
@@ -40,6 +45,13 @@ const redisConfig: RedisConfig = {
     connectionTimeout: 15000,
 };
 
+// ✅ NEW: max time any single Redis command is allowed to take before
+// we give up on it and fall through to the caller's error handling.
+// This is separate from connectionTimeout (which only guards the
+// initial handshake) — without this, a command sent on a connection
+// that *looks* open but is actually stale/dead can hang forever.
+const COMMAND_TIMEOUT_MS = parseInt(process.env['REDIS_COMMAND_TIMEOUT_MS'] || '4000');
+
 // ==================== REDIS CLIENT ====================
 
 let redisClient: RedisClientType | null = null;
@@ -53,6 +65,32 @@ interface CachedItem {
     expiresAt: number | null;
 }
 const memoryCache: Map<string, CachedItem> = new Map();
+
+// ==================== TIMEOUT HELPER ====================
+
+/**
+ * ✅ NEW: Race any promise against a timeout. If the promise doesn't
+ * settle within `ms`, this rejects with a timeout error instead of
+ * waiting forever. Used to wrap every Redis command so a stale
+ * connection can't hang a request indefinitely.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`Redis command timed out after ${ms}ms: ${label}`));
+        }, ms);
+
+        promise
+            .then((result) => {
+                clearTimeout(timer);
+                resolve(result);
+            })
+            .catch((err) => {
+                clearTimeout(timer);
+                reject(err);
+            });
+    });
+}
 
 // ==================== CACHE UTILITY CLASS ====================
 
@@ -120,7 +158,7 @@ class CacheUtil {
 
             const handleTimeout = (): void => {
                 if (!connected) {
-                    LoggerUtil.warn('⏱️ Redis Cluster connection timeout - falling back to in-memory cache', {
+                    LoggerUtil.warn('⏱️ Redis connection timeout - falling back to in-memory cache', {
                         timeout: redisConfig.connectionTimeout,
                         host: redisConfig.host,
                         port: redisConfig.port,
@@ -145,6 +183,12 @@ class CacheUtil {
                         host: redisConfig.host,
                         port: redisConfig.port,
                         connectTimeout: redisConfig.connectionTimeout,
+                        // ✅ NEW: keep the TCP connection alive so idle
+                        // connections don't get silently dropped by a
+                        // proxy/load balancer without either side
+                        // noticing (which is what leads to "looks
+                        // connected but every command hangs").
+                        keepAlive: 5000,
                         reconnectStrategy: (retries: number): number | false => {
                             if (retries > 3) {
                                 LoggerUtil.warn('Max Redis reconnection attempts reached');
@@ -168,12 +212,18 @@ class CacheUtil {
                         isConnected = false;
                         resolve(false);
                     } else {
+                        // ✅ NEW: on a post-connect error, don't just
+                        // flip isConnected=false silently — every
+                        // subsequent call already checks isConnected()
+                        // and falls back to memory cache, but we also
+                        // want commands already in-flight to be caught
+                        // by withTimeout() rather than hang.
                         isConnected = false;
                     }
                 });
 
                 redisClient.on('connect', () => {
-                    LoggerUtil.info('Redis cluster connecting...', {
+                    LoggerUtil.info('Redis connecting...', {
                         host: redisConfig.host,
                         port: redisConfig.port,
                     });
@@ -184,7 +234,7 @@ class CacheUtil {
                     isConnected = true;
                     clearTimeout(timeoutId);
 
-                    LoggerUtil.info('✅ Redis cluster connected and ready', {
+                    LoggerUtil.info('✅ Redis connected and ready', {
                         host: redisConfig.host,
                         port: redisConfig.port,
                     });
@@ -193,19 +243,19 @@ class CacheUtil {
                 });
 
                 redisClient.on('reconnecting', () => {
-                    LoggerUtil.warn('Redis cluster reconnecting...');
+                    LoggerUtil.warn('Redis reconnecting...');
                     isConnected = false;
                 });
 
                 redisClient.on('end', () => {
-                    LoggerUtil.warn('Redis cluster connection closed');
+                    LoggerUtil.warn('Redis connection closed');
                     isConnected = false;
                 });
 
                 redisClient.connect().catch((error: Error) => {
                     if (!connected) {
                         clearTimeout(timeoutId);
-                        LoggerUtil.error('Redis cluster connection failed', {
+                        LoggerUtil.error('Redis connection failed', {
                             error: error.message,
                             code: (error as any).code,
                         });
@@ -245,7 +295,7 @@ class CacheUtil {
     static async ping(): Promise<string> {
         try {
             if (this.isConnected()) {
-                await redisClient!.ping();
+                await withTimeout(redisClient!.ping(), COMMAND_TIMEOUT_MS, 'ping');
                 return 'PONG';
             } else {
                 return 'PONG';
@@ -260,6 +310,12 @@ class CacheUtil {
 
     /**
      * Set value in cache
+     *
+     * ✅ FIXED: every Redis write is now wrapped in withTimeout(). If
+     * the connection is stale (looks open, doesn't respond), this
+     * call now fails fast after COMMAND_TIMEOUT_MS instead of hanging
+     * the caller (e.g. login) until the HTTP client's own timeout
+     * kicks in.
      */
     static async set(key: string, value: any, ttl = 3600): Promise<boolean> {
         try {
@@ -270,9 +326,17 @@ class CacheUtil {
 
             if (this.isConnected()) {
                 if (ttl > 0) {
-                    await redisClient!.setEx(fullKey, ttl, serializedValue);
+                    await withTimeout(
+                        redisClient!.setEx(fullKey, ttl, serializedValue),
+                        COMMAND_TIMEOUT_MS,
+                        `set:${key}`
+                    );
                 } else {
-                    await redisClient!.set(fullKey, serializedValue);
+                    await withTimeout(
+                        redisClient!.set(fullKey, serializedValue),
+                        COMMAND_TIMEOUT_MS,
+                        `set:${key}`
+                    );
                 }
                 LoggerUtil.debug('Cache set (Redis)', { key, ttl });
                 return true;
@@ -285,6 +349,22 @@ class CacheUtil {
                 return true;
             }
         } catch (error: unknown) {
+            // ✅ On timeout (or any Redis error), mark the connection
+            // as unhealthy so subsequent calls in this same request
+            // (and future requests) skip straight to the memory
+            // fallback instead of trying — and possibly hanging on —
+            // the same stale connection again.
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+                LoggerUtil.warn('Cache set timed out — marking Redis unhealthy, falling back to memory', { key });
+                const fullKey = `${redisConfig.keyPrefix}${key}`;
+                const serializedValue = typeof value === 'string' ? value : JSON.stringify(value);
+                memoryCache.set(fullKey, {
+                    value: serializedValue,
+                    expiresAt: ttl > 0 ? Date.now() + (ttl * 1000) : null,
+                });
+                return true;
+            }
             LoggerUtil.error('Cache set failed', { error: (error as Error).message, key });
             return false;
         }
@@ -292,13 +372,19 @@ class CacheUtil {
 
     /**
      * Get value from cache
+     *
+     * ✅ FIXED: wrapped in withTimeout() — same reasoning as set().
      */
     static async get(key: string): Promise<any> {
         try {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const value = await redisClient!.get(fullKey);
+                const value = await withTimeout(
+                    redisClient!.get(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `get:${key}`
+                );
                 if (value) {
                     LoggerUtil.debug('Cache hit (Redis)', { key });
                     try {
@@ -328,6 +414,11 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+                LoggerUtil.warn('Cache get timed out — marking Redis unhealthy', { key });
+                return null;
+            }
             LoggerUtil.error('Cache get failed', { error: (error as Error).message, key });
             return null;
         }
@@ -384,7 +475,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const result = await redisClient!.del(fullKey);
+                const result = await withTimeout(
+                    redisClient!.del(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `del:${key}`
+                );
                 LoggerUtil.debug('Cache deleted (Redis)', { key, deleted: result > 0 });
                 return result > 0;
             } else {
@@ -393,6 +488,9 @@ class CacheUtil {
                 return deleted;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache delete failed', { error: (error as Error).message, key });
             return false;
         }
@@ -406,7 +504,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const result = await redisClient!.exists(fullKey);
+                const result = await withTimeout(
+                    redisClient!.exists(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `exists:${key}`
+                );
                 return result === 1;
             } else {
                 const cached = memoryCache.get(fullKey);
@@ -418,6 +520,9 @@ class CacheUtil {
                 return true;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache exists check failed', { error: (error as Error).message, key });
             return false;
         }
@@ -431,7 +536,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                return await redisClient!.ttl(fullKey);
+                return await withTimeout(
+                    redisClient!.ttl(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `ttl:${key}`
+                );
             } else {
                 const cached = memoryCache.get(fullKey);
                 if (!cached) return -2;
@@ -440,6 +549,9 @@ class CacheUtil {
                 return Math.floor(ttlMs / 1000);
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache TTL check failed', { error: (error as Error).message, key });
             return -2;
         }
@@ -455,9 +567,17 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const value = await redisClient!.incr(fullKey);
+                const value = await withTimeout(
+                    redisClient!.incr(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `incr:${key}`
+                );
                 if (value === 1 && ttl > 0) {
-                    await redisClient!.expire(fullKey, ttl);
+                    await withTimeout(
+                        redisClient!.expire(fullKey, ttl),
+                        COMMAND_TIMEOUT_MS,
+                        `expire:${key}`
+                    );
                 }
                 LoggerUtil.debug('Cache incremented (Redis)', { key, value });
                 return value;
@@ -482,6 +602,9 @@ class CacheUtil {
                 return value;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache increment failed', { error: (error as Error).message, key });
             return 0;
         }
@@ -495,7 +618,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const value = await redisClient!.decr(fullKey);
+                const value = await withTimeout(
+                    redisClient!.decr(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `decr:${key}`
+                );
                 LoggerUtil.debug('Cache decremented (Redis)', { key, value });
                 return value;
             } else {
@@ -515,6 +642,9 @@ class CacheUtil {
                 return value;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache decrement failed', { error: (error as Error).message, key });
             return 0;
         }
@@ -531,7 +661,11 @@ class CacheUtil {
             const result: Record<string, any> = {};
 
             if (this.isConnected()) {
-                const values = await redisClient!.mGet(fullKeys);
+                const values = await withTimeout(
+                    redisClient!.mGet(fullKeys),
+                    COMMAND_TIMEOUT_MS,
+                    'mget'
+                );
                 keys.forEach((key, index) => {
                     if (values[index]) {
                         try {
@@ -562,6 +696,9 @@ class CacheUtil {
 
             return result;
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache mget failed', { error: (error as Error).message, count: keys.length });
             return {};
         }
@@ -589,7 +726,7 @@ class CacheUtil {
                     }
                 });
 
-                await pipeline.exec();
+                await withTimeout(pipeline.exec(), COMMAND_TIMEOUT_MS, 'mset');
                 LoggerUtil.debug('Cache mset (Redis)', { count: keys.length, ttl });
                 return true;
             } else {
@@ -609,6 +746,9 @@ class CacheUtil {
                 return true;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache mset failed', { error: (error as Error).message });
             return false;
         }
@@ -691,7 +831,7 @@ class CacheUtil {
                         }
                     });
 
-                    return await pipeline.exec();
+                    return await withTimeout(pipeline.exec(), COMMAND_TIMEOUT_MS, 'pipeline');
                 } else {
                     const results = [];
                     for (const cmd of commands) {
@@ -740,9 +880,8 @@ class CacheUtil {
 
                 for (let i = 0; i < keys.length; i += batchSize) {
                     const batch = keys.slice(i, i + batchSize);
-                    // In cluster mode, delete keys one-by-one to avoid cross-slot issues
                     for (const k of batch) {
-                        const r = await redisClient!.del(k);
+                        const r = await withTimeout(redisClient!.del(k), COMMAND_TIMEOUT_MS, `del:${k}`);
                         deleted += r;
                     }
                 }
@@ -766,6 +905,9 @@ class CacheUtil {
                 return deleted;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache clear failed', { error: (error as Error).message, pattern });
             return 0;
         }
@@ -782,15 +924,16 @@ class CacheUtil {
         try {
             let cursor = '0';
             do {
-                const reply = await redisClient!.scan(cursor, {
-                    MATCH: pattern,
-                    COUNT: 100,
-                });
+                const reply = await withTimeout(
+                    redisClient!.scan(cursor, { MATCH: pattern, COUNT: 100 }),
+                    COMMAND_TIMEOUT_MS,
+                    'scan'
+                );
                 cursor = reply.cursor;
                 keys.push(...reply.keys);
             } while (cursor !== '0');
         } catch (error: unknown) {
-            LoggerUtil.error('Cluster scan failed', { error: (error as Error).message, pattern });
+            LoggerUtil.error('Scan failed', { error: (error as Error).message, pattern });
         }
 
         return keys;
@@ -806,7 +949,7 @@ class CacheUtil {
             if (this.isConnected()) {
                 return {
                     connected: true,
-                    type: 'redis-cluster',
+                    type: 'redis',
                     host: redisConfig.host,
                     port: redisConfig.port,
                     timestamp: new Date().toISOString(),
@@ -836,13 +979,13 @@ class CacheUtil {
         try {
             if (this.isConnected()) {
                 const start = Date.now();
-                await redisClient!.ping();
+                await withTimeout(redisClient!.ping(), COMMAND_TIMEOUT_MS, 'healthcheck-ping');
                 const latency = Date.now() - start;
 
                 return {
                     status: 'healthy',
                     connected: true,
-                    type: 'redis-cluster',
+                    type: 'redis',
                     host: redisConfig.host,
                     port: redisConfig.port,
                     latency,
@@ -860,6 +1003,9 @@ class CacheUtil {
                 };
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Cache health check failed', { error: (error as Error).message });
             return {
                 status: 'unhealthy',
@@ -878,9 +1024,9 @@ class CacheUtil {
     static async shutdown(): Promise<void> {
         try {
             if (this.isConnected()) {
-                LoggerUtil.info('Shutting down Redis cluster client...');
+                LoggerUtil.info('Shutting down Redis client...');
                 await redisClient!.quit();
-                LoggerUtil.info('✅ Redis cluster client disconnected');
+                LoggerUtil.info('✅ Redis client disconnected');
             } else {
                 LoggerUtil.info('Clearing in-memory cache...');
                 memoryCache.clear();
@@ -901,7 +1047,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const result = await redisClient!.expire(fullKey, ttl);
+                const result = await withTimeout(
+                    redisClient!.expire(fullKey, ttl),
+                    COMMAND_TIMEOUT_MS,
+                    `expire:${key}`
+                );
                 LoggerUtil.debug('Expiration set (Redis)', { key, ttl, success: result });
                 return Boolean(result);
             } else {
@@ -920,6 +1070,9 @@ class CacheUtil {
                 return true;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Set expiration failed', { error: (error as Error).message, key, ttl });
             return false;
         }
@@ -935,12 +1088,24 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const added = await redisClient!.sAdd(fullKey, itemId);
+                const added = await withTimeout(
+                    redisClient!.sAdd(fullKey, itemId),
+                    COMMAND_TIMEOUT_MS,
+                    `sadd:${key}`
+                );
 
                 if (ttl && ttl > 0) {
-                    const exists = await redisClient!.exists(fullKey);
+                    const exists = await withTimeout(
+                        redisClient!.exists(fullKey),
+                        COMMAND_TIMEOUT_MS,
+                        `exists:${key}`
+                    );
                     if (exists === 1) {
-                        await redisClient!.expire(fullKey, ttl);
+                        await withTimeout(
+                            redisClient!.expire(fullKey, ttl),
+                            COMMAND_TIMEOUT_MS,
+                            `expire:${key}`
+                        );
                     }
                 }
 
@@ -974,6 +1139,9 @@ class CacheUtil {
                 return true;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Add to set failed', { error: (error as Error).message, key, itemId });
             return false;
         }
@@ -987,7 +1155,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const removed = await redisClient!.sRem(fullKey, itemId);
+                const removed = await withTimeout(
+                    redisClient!.sRem(fullKey, itemId),
+                    COMMAND_TIMEOUT_MS,
+                    `srem:${key}`
+                );
                 LoggerUtil.debug('Item removed from set (Redis)', { key, itemId, removed: removed > 0 });
                 return removed > 0;
             } else {
@@ -1011,6 +1183,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Remove from set failed', { error: (error as Error).message, key, itemId });
             return false;
         }
@@ -1024,7 +1199,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const items = await redisClient!.sMembers(fullKey);
+                const items = await withTimeout(
+                    redisClient!.sMembers(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `smembers:${key}`
+                );
                 LoggerUtil.debug('Retrieved all items from set (Redis)', { key, count: items.length });
                 return items;
             } else {
@@ -1039,6 +1218,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Get all from set failed', { error: (error as Error).message, key });
             return [];
         }
@@ -1056,26 +1238,26 @@ class CacheUtil {
             const fullPattern = `${redisConfig.keyPrefix}${pattern}`;
 
             if (this.isConnected()) {
-                // Cluster mode: collect keys from scanIterator up to `count`
                 const keys: string[] = [];
                 let fetched = 0;
 
-                let cursor = '0';
+                let scanCursor = '0';
                 do {
-                    const reply = await redisClient!.scan(cursor, {
-                        MATCH: fullPattern,
-                        COUNT: count,
-                    });
-                    cursor = reply.cursor;
+                    const reply = await withTimeout(
+                        redisClient!.scan(scanCursor, { MATCH: fullPattern, COUNT: count }),
+                        COMMAND_TIMEOUT_MS,
+                        'scan'
+                    );
+                    scanCursor = reply.cursor;
                     for (const key of reply.keys) {
                         keys.push(key.replace(redisConfig.keyPrefix, ''));
                         fetched++;
                         if (fetched >= count) break;
                     }
-                } while (cursor !== '0' && fetched < count);
+                } while (scanCursor !== '0' && fetched < count);
 
-                LoggerUtil.debug('Scanned keys (Redis cluster)', { pattern, found: keys.length });
-                return [String(cursor), keys];
+                LoggerUtil.debug('Scanned keys (Redis)', { pattern, found: keys.length });
+                return [String(scanCursor), keys];
             } else {
                 const regex = new RegExp(
                     fullPattern.replace(/\*/g, '.*').replace(/\?/g, '.')
@@ -1096,6 +1278,9 @@ class CacheUtil {
                 return [nextCursor, pageKeys];
             }
         } catch (error: any) {
+            if (error.message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Scan keys failed', { error: error.message, cursor, pattern });
             return ['0', []];
         }
@@ -1109,8 +1294,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const result = await redisClient!.sIsMember(fullKey, itemId);
-                // RedisClusterType sIsMember returns boolean
+                const result = await withTimeout(
+                    redisClient!.sIsMember(fullKey, itemId),
+                    COMMAND_TIMEOUT_MS,
+                    `sismember:${key}`
+                );
                 LoggerUtil.debug('Check set membership (Redis)', { key, itemId, isMember: result });
                 return result as unknown as boolean;
             } else {
@@ -1125,6 +1313,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Check set membership failed', { error: (error as Error).message, key, itemId });
             return false;
         }
@@ -1138,7 +1329,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const count = await redisClient!.sCard(fullKey);
+                const count = await withTimeout(
+                    redisClient!.sCard(fullKey),
+                    COMMAND_TIMEOUT_MS,
+                    `scard:${key}`
+                );
                 LoggerUtil.debug('Get set count (Redis)', { key, count });
                 return count;
             } else {
@@ -1153,6 +1348,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Get set count failed', { error: (error as Error).message, key });
             return 0;
         }
@@ -1166,9 +1364,17 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const added = await redisClient!.sAdd(fullKey, itemIds);
+                const added = await withTimeout(
+                    redisClient!.sAdd(fullKey, itemIds),
+                    COMMAND_TIMEOUT_MS,
+                    `sadd:${key}`
+                );
                 if (ttl && ttl > 0) {
-                    await redisClient!.expire(fullKey, ttl);
+                    await withTimeout(
+                        redisClient!.expire(fullKey, ttl),
+                        COMMAND_TIMEOUT_MS,
+                        `expire:${key}`
+                    );
                 }
                 LoggerUtil.debug('Multiple items added to set (Redis)', { key, count: itemIds.length, added });
                 return added;
@@ -1202,6 +1408,9 @@ class CacheUtil {
                 return added;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Add multiple to set failed', { error: (error as Error).message, key });
             return 0;
         }
@@ -1215,7 +1424,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const removed = await redisClient!.sRem(fullKey, itemIds);
+                const removed = await withTimeout(
+                    redisClient!.sRem(fullKey, itemIds),
+                    COMMAND_TIMEOUT_MS,
+                    `srem:${key}`
+                );
                 LoggerUtil.debug('Multiple items removed from set (Redis)', { key, count: itemIds.length, removed });
                 return removed;
             } else {
@@ -1237,6 +1450,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('Remove multiple from set failed', { error: (error as Error).message, key });
             return 0;
         }
@@ -1253,7 +1469,11 @@ class CacheUtil {
             const serializedValue = typeof value === 'string' ? value : JSON.stringify(value);
 
             if (this.isConnected()) {
-                const length = await redisClient!.lPush(fullKey, serializedValue);
+                const length = await withTimeout(
+                    redisClient!.lPush(fullKey, serializedValue),
+                    COMMAND_TIMEOUT_MS,
+                    `lpush:${key}`
+                );
                 LoggerUtil.debug('List push (Redis)', { key, length });
                 return length;
             } else {
@@ -1276,6 +1496,9 @@ class CacheUtil {
                 return list.length;
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('List push failed', { error: (error as Error).message, key });
             return 0;
         }
@@ -1289,7 +1512,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                await redisClient!.lTrim(fullKey, start, stop);
+                await withTimeout(
+                    redisClient!.lTrim(fullKey, start, stop),
+                    COMMAND_TIMEOUT_MS,
+                    `ltrim:${key}`
+                );
                 LoggerUtil.debug('List trimmed (Redis)', { key, start, stop });
                 return true;
             } else {
@@ -1311,6 +1538,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('List trim failed', { error: (error as Error).message, key });
             return false;
         }
@@ -1324,7 +1554,11 @@ class CacheUtil {
             const fullKey = `${redisConfig.keyPrefix}${key}`;
 
             if (this.isConnected()) {
-                const items = await redisClient!.lRange(fullKey, start, stop);
+                const items = await withTimeout(
+                    redisClient!.lRange(fullKey, start, stop),
+                    COMMAND_TIMEOUT_MS,
+                    `lrange:${key}`
+                );
                 const parsed = items.map(item => {
                     try { return JSON.parse(item); } catch { return item; }
                 });
@@ -1352,6 +1586,9 @@ class CacheUtil {
                 }
             }
         } catch (error: unknown) {
+            if ((error as Error).message?.includes('timed out')) {
+                isConnected = false;
+            }
             LoggerUtil.error('List range failed', { error: (error as Error).message, key });
             return [];
         }
@@ -1381,5 +1618,3 @@ process.on('SIGINT', async () => {
 // ==================== EXPORT ====================
 
 export default CacheUtil;
-
-

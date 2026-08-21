@@ -1,19 +1,8 @@
-// src/middleware/auth.middleware.ts
+// src/shared/middlewares/auth.middleware.ts
 /**
  * JWT Auth Middleware - Production-Ready for 1M+ Users
  * Verifies access token, checks blacklist, attaches user to req.user
  * Integrates device/session limits (2 active devices max)
- * 
- * @module middleware/auth.middleware
- * @version 1.0.0
- */
-
-/** 
- * auth.middleware.ts - FIXED VERSION
- * ✅ Complete error handling
- * ✅ Token verification checks
- * ✅ Detailed error messages
- * ✅ User validation
  * 
  * @module middleware/auth.middleware
  * @version 2.0.0
@@ -34,20 +23,25 @@ interface DecodedToken {
     deviceId?: string;
 }
 
+// ✅ ReqUser rakha hai kyunki kuch jagah reference ho sakta hai,
+// lekin ab AuthRequest ismein use nahi karta — global Express.User
+// (shared/types/express/index.d.ts) hi source of truth hai.
 export interface ReqUser {
-    id: string;                  // ✅ Primary ID (matches global type)
-    userId: string;              // ✅ Alias for backward compatibility
+    id: string;
+    userId: string;
     _id: string;
-    isAdmin: boolean;            // ✅ Required by global type
-    region?: string;             // ✅ Optional region
-    role: 'user' | 'admin';      // ✅ Strict type instead of string
+    isAdmin: boolean;
+    region?: string;
+    role: 'user' | 'admin';
     email: string;
     deviceId: string | null;
     sessionId: string | null;
 }
 
+// ✅ SINGLE declaration — duplicate wali dusri jagah hata di gayi hai.
+// user field yahan NAHI hai — global Express.Request.user
+// (shared/types/express/index.d.ts se) automatically milta hai.
 export interface AuthRequest extends Request {
-    user?: ReqUser;
     correlationId?: string;
 }
 
@@ -82,39 +76,10 @@ const enforceDeviceLimit = async (userId: string, deviceId: string) => {
  */
 class AuthMiddleware {
 
-    // shared/middlewares/auth.middleware.ts mein ADD karo
-
     /**
      * Optional authentication — token hai to decode karo, nahi hai to skip karo
      * Public leaderboards ke liye — logged in users ko currentUser entry milti hai
      */
-    // static optionalAuthenticate = (req: Request, res: Response, next: NextFunction) => {
-    //     try {
-    //         const authHeader = req.headers.authorization;
-
-    //         if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    //             // Token nahi — anonymous user, continue karo
-    //             return next();
-    //         }
-
-    //         const token = authHeader.split(' ')[1];
-    //         const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-
-    //         (req as AuthRequest).user = {
-    //             id: decoded.userId,
-    //             email: decoded.email,
-    //             role: decoded.role,
-    //         };
-
-    //         return next();
-    //     } catch {
-    //         // Invalid token — anonymous user treat karo, error mat do
-    //         return next();
-    //     }
-    // };
-
-
-    // In auth.middleware.ts — ADD this method
     static async authenticateOptional(req: Request, res: Response, next: NextFunction) {
         try {
             const authHeader = req.headers.authorization;
@@ -259,15 +224,7 @@ class AuthMiddleware {
                     });
                     return ResponseUtil.unauthorized(res, 'User not found. Please login again.');
                 }
-                // ✅ FIX: removed the big console.log(═══...) block that used to
-                // print here on EVERY single authenticated request. With 20-30
-                // API calls firing per page load, this was producing hundreds of
-                // console lines per second and tripping Railway's 500 logs/sec
-                // rate limit ("Messages dropped: N"), which also adds real
-                // latency to every request (console writes are synchronous I/O).
-                // Structured, level-aware logging via `logger.debug` below is
-                // kept — it won't print in production if the log level is set
-                // above 'debug'.
+
                 logger.debug('User fetched from database', {
                     userId: user.userId,
                     email: user.email,
@@ -398,10 +355,6 @@ class AuthMiddleware {
                 correlationId
             });
 
-            // ✅ FIX: removed console.log('✅ User authenticated:', {...}) that
-            // used to fire on every authenticated request — same log-spam
-            // reason as above. logger.debug above already captures this.
-
             // Continue to next middleware
             next();
 
@@ -447,8 +400,6 @@ class AuthMiddleware {
         };
     }
 }
-
-// middleware/auth.middleware.ts
 
 /**
  * Check if user is authenticated
@@ -497,5 +448,8 @@ export const getAuthToken = (req: Request): string | null => {
 
     return token;
 };
+
+// ✅ Named alias so routes can do: import { authenticateJWT } from '@/shared/middlewares/auth.middleware'
+export const authenticateJWT = AuthMiddleware.authenticate;
 
 export default AuthMiddleware;
