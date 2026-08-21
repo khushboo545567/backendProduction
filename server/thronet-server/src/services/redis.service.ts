@@ -541,8 +541,20 @@ class RedisService {
                     cursor = newCursor;
 
                     if (keys.length > 0) {
-                        const result = await this.cluster.del(...keys);
-                        deletedCount += result;
+                        // ✅ FIX: cluster.del(...keys) ek single multi-key command banata
+                        // hai, jo CROSSSLOT error deta hai agar keys alag-alag Redis slots
+                        // pe hon (jo hash-tag ke bina almost hamesha hota hai — jaise
+                        // feed:v1:{userId}:page:1 aur feed:v1:{userId}:page:2 alag slots
+                        // pe ho sakte hain). Ye error upar wale catch me silently swallow
+                        // ho jata tha, isliye cache kabhi invalidate hi nahi hota tha.
+                        // Pipeline har DEL ko alag command ki tarah bhejta hai, jo cluster
+                        // mode me sahi node/slot pe khud route ho jata hai.
+                        const pipeline = this.cluster.pipeline();
+                        keys.forEach((k) => pipeline.del(k));
+                        const results = await pipeline.exec();
+                        deletedCount += results?.filter(
+                            ([err, res]) => !err && Number(res) > 0
+                        ).length || 0;
                     }
                 } while (cursor !== '0');
             }
