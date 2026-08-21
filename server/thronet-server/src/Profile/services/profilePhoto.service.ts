@@ -3,7 +3,7 @@
  * Handles Cloudinary upload/delete operations
  * 
  * @module services/profilePhoto.service
- * @version 1.0.0
+ * @version 1.0.1 - Added auth cache invalidation fix
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -12,6 +12,8 @@ import sharp from 'sharp';
 import { ProfilePhoto, User } from '@/shared/models/index.models';
 import { LoggerUtil } from '@/shared/logger.util';
 import Constants from '@/shared/constants.util';
+// ✅ NEW IMPORT — needed to clear stale auth cache after profilePhotoId changes
+import { AuthCacheRepository } from '@/auth/repository/auth.repository';
 
 // ==================== INTERFACES ====================
 
@@ -134,6 +136,13 @@ class ProfilePhotoService {
                     { $set: { profilePhotoId: photoId } }, // ✅ photoId use karo
                     { new: true }
                 );
+
+                // ✅ FIX: Invalidate stale auth cache so getUserById() /
+                // profile GET returns the fresh profilePhotoId immediately,
+                // instead of waiting for the 15-min cache TTL to expire.
+                // This was the root cause of "photo uploads but disappears
+                // on refresh" — DB was correct, cached auth user was stale.
+                await AuthCacheRepository.invalidateUserCaches(userId);
 
                 LoggerUtil.info('User profilePhotoId updated', {
                     userId,
@@ -489,6 +498,13 @@ class ProfilePhotoService {
 
             await existingPhoto.save();
 
+            // ✅ FIX: If this photo is (or becomes) the active one, its
+            // cloudinary URL just changed — invalidate stale auth cache
+            // so profile GET reflects the new image immediately.
+            if (existingPhoto.isActive) {
+                await AuthCacheRepository.invalidateUserCaches(userId);
+            }
+
             LoggerUtil.info('Profile photo updated successfully', {
                 photoId,
                 userId,
@@ -540,6 +556,11 @@ class ProfilePhotoService {
                 { $set: { profilePhotoId: photoId } },
                 { new: true }
             );
+
+            // ✅ FIX: Invalidate stale auth cache so profile GET returns
+            // the fresh profilePhotoId immediately instead of waiting for
+            // the 15-min cache TTL to expire.
+            await AuthCacheRepository.invalidateUserCaches(userId);
 
             LoggerUtil.info('Active photo set successfully', {
                 photoId,
@@ -607,6 +628,10 @@ class ProfilePhotoService {
                     { new: true }
                 );
 
+                // ✅ FIX: Invalidate stale auth cache so profile GET stops
+                // returning the now-deleted photo's URL.
+                await AuthCacheRepository.invalidateUserCaches(userId);
+
                 LoggerUtil.info('User profilePhotoId cleared', {
                     userId,
                     deletedPhotoId: photoId,
@@ -664,10 +689,23 @@ class ProfilePhotoService {
                 throw new Error('Photo is already archived');
             }
 
+            const wasActive = photo.isActive;
+
             photo.isArchived = true;
             photo.archivedAt = new Date();
             photo.isActive = false;
             await photo.save();
+
+            // ✅ FIX: If the active photo got archived, its profilePhotoId
+            // is now stale on the User model / auth cache. Clear both.
+            if (wasActive) {
+                await User.findOneAndUpdate(
+                    { userId },
+                    { $unset: { profilePhotoId: 1 } },
+                    { new: true }
+                );
+                await AuthCacheRepository.invalidateUserCaches(userId);
+            }
 
             LoggerUtil.info('Photo archived successfully', {
                 photoId,
