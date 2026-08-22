@@ -2,10 +2,11 @@
   "name": "throne8-server",
   "version": "1.0.0",
   "description": "Entry Point Server for Throne8",
-  "main": "server.js",
+  "main": "server/thronet-server/dist/server.js",
   "scripts": {
-    "dev": "nodemon server.js",
-    "start": "node server.js"
+    "dev": "cd server/thronet-server && npm run dev",
+    "build": "cd server/thronet-server && npm run build",
+    "start": "cd server/thronet-server && npm start"
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
