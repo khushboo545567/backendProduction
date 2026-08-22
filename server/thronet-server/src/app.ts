@@ -2,7 +2,17 @@
 //  * app.ts
 //  * server/thronet-server/src/app.ts
 //  * Express Application Configuration
-//  * ./version 4.1.0 (production-hardened)
+//  * ./version 4.1.1 (debug — SeniorMentorship temporarily disabled)
+//  *
+//  * 🟢 DEBUG (temporary):
+//  *    - SeniorMentorship import/mount commented out to isolate a startup
+//  *      hang. Nothing after "ALL connection sub-routes loaded successfully"
+//  *      was ever printing, and app.ts's own top-level console.logs never
+//  *      fired either — meaning one of app.ts's static imports never
+//  *      resolves. SeniorMentorship is the prime suspect (not even present
+//  *      in the original project file tree — looks new/half-wired).
+//  *      Once confirmed, either fix whatever's hanging inside
+//  *      SeniorMentorship/routers, or leave it disabled until it's ready.
 //  */
 
 import express, { Express, Request, Response, NextFunction } from 'express';
@@ -23,7 +33,9 @@ import AuthRoutes from './routes/index';
 console.log("Verifiy route import mounting....")
 // import verifyRoutes from './auth/routes/index';
 import mentorRoutes from './Mentorship/routers';
-import seniorMentorRoutes from './SeniorMentorship/routers';
+// 🟢 DEBUG: temporarily disabled — prime suspect for the import hang.
+// Re-enable once confirmed safe (see note above).
+// import seniorMentorRoutes from './SeniorMentorship/routers';
 console.log('🔍 mentorRoutes imported successfully');
 import companyRoutes from './company/routers';
 import studyGroupRoutes from './StudyGroup/routers';
@@ -227,7 +239,8 @@ console.log("Verifiy route mounting....")
 // app.use('/api/v1/verify', verifyRoutes);
 console.log('🔍 VerifyRoutes mounted successfully in app');
 app.use('/api/v1/mentorship', mentorRoutes);
-app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
+// 🟢 DEBUG: temporarily disabled along with the import above.
+// app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
 console.log('🔍 MentorRoutes mounted successfully in app');
 app.use('/api/v1/company', companyRoutes);
 console.log('🔍 CompanyRoutes mounted successfully in app');
