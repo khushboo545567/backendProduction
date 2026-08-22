@@ -1,9 +1,9 @@
-/**
- * app.ts
- * server/thronet-server/src/app.ts
- * Express Application Configuration
- * ./version 4.1.0 (production-hardened)
- */
+// /**
+//  * app.ts
+//  * server/thronet-server/src/app.ts
+//  * Express Application Configuration
+//  * ./version 4.1.0 (production-hardened)
+//  */
 
 import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
