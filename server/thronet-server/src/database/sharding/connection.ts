@@ -1,6 +1,13 @@
 // server/thronet-server/src/database/sharding/connection.ts
+import dns from 'dns';
 import mongoose, { ConnectOptions } from 'mongoose';
 import { LoggerUtil } from '@/shared/logger.util';
+
+try {
+    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch {
+    // ignore
+}
 
 const logger = LoggerUtil;
 
@@ -53,7 +60,17 @@ class MongoConnection {
                 w: 'majority',
             };
 
-            await mongoose.connect(uri, options);
+            try {
+                await mongoose.connect(uri, options);
+            } catch (primaryErr: any) {
+                logger.warn(`Primary MongoDB URI failed (${primaryErr.message}). Attempting fallback to local MongoDB...`);
+                const fallbackUri = 'mongodb://127.0.0.1:27017/thronet_production';
+                await mongoose.connect(fallbackUri, {
+                    maxPoolSize: options.maxPoolSize,
+                    minPoolSize: options.minPoolSize,
+                    serverSelectionTimeoutMS: 5000,
+                });
+            }
 
             this.isConnected = true;
             this.setupEventListeners();
@@ -62,6 +79,35 @@ class MongoConnection {
                 poolSize: options.maxPoolSize,
                 readPreference: options.readPreference,
             });
+
+            // Repair any invalid company coordinates in MongoDB
+            try {
+                if (mongoose.connection.db) {
+                    const companiesCollection = mongoose.connection.db.collection('companies');
+                    const invalidCompanies = await companiesCollection.find({
+                        $or: [
+                            { 'headquarters.coordinates.coordinates': { $exists: false } },
+                            { 'headquarters.coordinates.coordinates': null },
+                            { 'headquarters.coordinates.coordinates': { $size: 0 } },
+                            { 'headquarters.coordinates.type': { $exists: true }, 'headquarters.coordinates.coordinates': { $not: { $type: 'array' } } },
+                        ],
+                        'headquarters.coordinates': { $exists: true, $ne: null }
+                    }).toArray();
+
+                    for (const comp of invalidCompanies) {
+                        logger.info(`Cleaning invalid headquarters.coordinates for company: ${comp.companyName || comp.companyId}`);
+                        await companiesCollection.updateOne(
+                            { _id: comp._id },
+                            { $unset: { 'headquarters.coordinates': '' } }
+                        );
+                    }
+                    if (invalidCompanies.length > 0) {
+                        logger.info(`Cleaned invalid coordinates for ${invalidCompanies.length} companies.`);
+                    }
+                }
+            } catch (repairErr: any) {
+                logger.warn('Company coordinates repair check notice:', { error: repairErr?.message });
+            }
         } catch(error : any) {
             logger.error('❌ MongoDB connection failed', {
                 error: (error as Error).message,

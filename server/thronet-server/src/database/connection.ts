@@ -86,6 +86,28 @@ export async function connectDB(retryCount = 0): Promise<void> {
 
         setupConnectionListeners();
 
+        // Sanitize existing company documents with incomplete/invalid GeoJSON Point coordinates
+        try {
+            if (mongoose.connection.db) {
+                await mongoose.connection.db.collection('companies').updateMany(
+                    {
+                        $or: [
+                            { 'headquarters.coordinates.coordinates': { $exists: false } },
+                            { 'headquarters.coordinates.coordinates': null },
+                            { 'headquarters.coordinates.coordinates': { $size: 0 } },
+                        ],
+                        'headquarters.coordinates': { $exists: true, $ne: null }
+                    },
+                    {
+                        $unset: { 'headquarters.coordinates': '' }
+                    }
+                );
+                logger.info('Sanitized existing company GeoJSON coordinates in MongoDB');
+            }
+        } catch (repairErr: any) {
+            logger.warn('Company coordinates repair note:', { error: repairErr?.message });
+        }
+
     } catch (error: unknown) {
         const err = error as Error;
 

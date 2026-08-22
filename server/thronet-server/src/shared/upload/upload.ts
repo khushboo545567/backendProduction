@@ -159,8 +159,11 @@ const videoFileFilter = (req: Request, file: Express.Multer.File, callback: File
 // ✅ Universal filter for all media types (used by uploadMultiple/uploadFields)
 const mediaFileFilter = (req: Request, file: Express.Multer.File, callback: FileFilterCallback): void => {
     const allowedMimeTypes: { [key: string]: string[] } = {
-        images: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'],
-        videos: ['video/mp4', 'video/mpeg', 'video/quicktime', 'video/x-msvideo', 'video/webm'],
+        images: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'],
+        videos: [
+            'video/mp4', 'video/mpeg', 'video/quicktime', 'video/x-msvideo', 'video/webm',
+            'video/ogg', 'video/3gpp', 'video/x-matroska', 'video/mkv', 'video/avi', 'video/x-m4v', 'video/mp2t'
+        ],
         documents: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain']
     };
 
@@ -170,11 +173,11 @@ const mediaFileFilter = (req: Request, file: Express.Multer.File, callback: File
         ...allowedMimeTypes.documents
     ];
 
-    if (!allAllowed.includes(file.mimetype)) {
-        return callback(new AppError(`Invalid file type: ${file.mimetype}`, 400));
+    if (file.mimetype.startsWith('video/') || allAllowed.includes(file.mimetype)) {
+        return callback(null, true);
     }
 
-    callback(null, true);
+    callback(new AppError(`Invalid file type: ${file.mimetype}`, 400));
 };
 
 // ==================== MULTER INSTANCES ====================
@@ -209,17 +212,17 @@ const uploadVideoConfig = multer({
 });
 
 /**
- * Multiple files upload configuration (max 10 files)
+ * Multiple files upload configuration (max 20 files, 100MB for video support)
  */
 const uploadMultipleConfig = multer({
     storage: memoryStorage,
     fileFilter: mediaFileFilter,
     limits: {
-        fileSize: uploadConfig.maxFileSize,
-        files: 20,      // ← 10 se 20
-        fields: 50,     // ← 20 se 50 — JSON strings ke liye
-        parts: 100,     // ← 30 se 100
-        fieldSize: 10 * 1024 * 1024,  // ← 10MB per field — ADD THIS
+        fileSize: uploadConfig.maxVideoFileSize,
+        files: 20,
+        fields: 50,
+        parts: 100,
+        fieldSize: 10 * 1024 * 1024,
     }
 });
 
@@ -393,9 +396,6 @@ export const uploadMultiple = (fieldName: string = 'photos', maxCount: number = 
     };
 };
 
-/**
- * Fields upload middleware (different field names)
- */
 export const uploadFields = (fields: Array<{ name: string; maxCount: number }>) => {
     return (req: Request, res: any, next: any) => {
         const startTime = Date.now();
@@ -409,14 +409,29 @@ export const uploadFields = (fields: Array<{ name: string; maxCount: number }>) 
             const duration = Date.now() - startTime;
 
             if (error) {
+                logger.error('❌ [MULTER / UPLOAD ERROR]', {
+                    error: error.message,
+                    code: (error as any).code,
+                    duration: `${duration}ms`
+                });
+
                 if (error instanceof multer.MulterError) {
-                    logger.error('❌ [MULTER ERROR]', {
-                        code: error.code,
-                        message: error.message
+                    const errorMessages: Record<string, string> = {
+                        LIMIT_FILE_SIZE: `File too large. Maximum size allowed: ${uploadConfig.maxVideoFileSize / (1024 * 1024)}MB`,
+                        LIMIT_FILE_COUNT: 'Too many files uploaded',
+                        LIMIT_UNEXPECTED_FILE: 'Unexpected field in form data',
+                    };
+                    return res.status(400).json({
+                        success: false,
+                        message: errorMessages[error.code] || error.message,
+                        code: error.code
                     });
-                    return next(new AppError(error.message, 400));
                 }
-                return next(error);
+
+                return res.status(400).json({
+                    success: false,
+                    message: error.message || 'File upload failed'
+                });
             }
 
             logger.info('✅ [UPLOAD SUCCESS] Fields uploaded', {

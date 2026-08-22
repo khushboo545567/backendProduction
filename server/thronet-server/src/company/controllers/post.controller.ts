@@ -10,7 +10,14 @@ class PostController {
   // =====================================================
   async createPost(req: Request, res: Response): Promise<void> {
     try {
-      const { title, content, company, author, type, tags, scheduledFor } = req.body;
+      const title = req.body.title;
+      const content = req.body.content || '';
+      const company = req.body.company || req.body.companyId;
+      const author = req.body.author || req.body.authorId;
+      const type = req.body.type || req.body.postType || 'Blog';
+      const status = req.body.status;
+      const scheduledFor = req.body.scheduledFor || req.body.scheduledAt;
+      const tags = req.body.tags;
 
       // ✅ Files extract karo
       const files = req.files as {
@@ -34,13 +41,27 @@ class PostController {
         }
       }
 
+      let parsedTags: string[] = [];
+      if (tags) {
+        if (Array.isArray(tags)) {
+          parsedTags = tags;
+        } else if (typeof tags === 'string') {
+          if (tags.startsWith('[')) {
+            try { parsedTags = JSON.parse(tags); } catch { parsedTags = tags.split(',').map((t: string) => t.trim()); }
+          } else {
+            parsedTags = tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+          }
+        }
+      }
+
       const post = await postService.createPost({
         title,
         content,
         company,
         author,
         type,
-        tags: tags ? (typeof tags === 'string' ? JSON.parse(tags) : tags) : [],
+        status,
+        tags: parsedTags,
         scheduledFor,
         pollData,
         images,
@@ -163,22 +184,56 @@ class PostController {
     try {
       const objectId = (req as any).resolvedObjectId;
 
-      // ✅ Sirf allowed fields extract karo
-      const { title, content, tags, status } = req.body;
-      const updateData: UpdatePostDTO = {};
+      const { title, content, tags, status, type, existingMedia, media } = req.body;
 
-      if (title !== undefined) updateData.title = title;
-      if (content !== undefined) updateData.content = content;
-      if (tags !== undefined) updateData.tags = typeof tags === 'string'
-        ? JSON.parse(tags) : tags;
-      if (status !== undefined) updateData.status = status;
+      // Extract uploaded files
+      const files = req.files as {
+        [fieldname: string]: Express.Multer.File[]
+      } | undefined;
 
-      if (Object.keys(updateData).length === 0) {
-        ResponseUtil.badRequest(res, 'At least one field (title or content) is required');
+      const images = files?.images || [];
+      const videos = files?.videos || [];
+      const documents = files?.documents || [];
+
+      let parsedExistingMedia = existingMedia || media;
+      if (typeof parsedExistingMedia === 'string') {
+        try {
+          parsedExistingMedia = JSON.parse(parsedExistingMedia);
+        } catch {
+          parsedExistingMedia = undefined;
+        }
+      }
+
+      let parsedTags = tags;
+      if (typeof parsedTags === 'string') {
+        try {
+          parsedTags = JSON.parse(parsedTags);
+        } catch {
+          parsedTags = tags ? [tags] : undefined;
+        }
+      }
+
+      const hasFiles = images.length > 0 || videos.length > 0 || documents.length > 0;
+      const hasFields = title !== undefined || content !== undefined || tags !== undefined ||
+        status !== undefined || type !== undefined || parsedExistingMedia !== undefined;
+
+      if (!hasFiles && !hasFields) {
+        ResponseUtil.badRequest(res, 'At least one field to update is required');
         return;
       }
 
-      const post = await postService.updatePost(objectId, updateData);
+      const post = await postService.updatePost(objectId, {
+        title,
+        content,
+        type,
+        tags: parsedTags,
+        status,
+        existingMedia: parsedExistingMedia,
+        images,
+        videos,
+        documents,
+      });
+
       if (!post) {
         ResponseUtil.notFound(res, 'Post not found');
         return;

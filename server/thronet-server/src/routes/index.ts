@@ -77,7 +77,9 @@ console.log('🔍 ProfileRoutes mounted successfully in routes/index.ts');
 router.use('/connections', connectionRouter);
 console.log('🔍 ConnectionRoutes mounted successfully in routes/index.ts');
 
-router.use('/company', companyRouter);
+import companyRoutes from '@/company/routers';
+
+router.use('/company', companyRoutes);
 console.log('🔍 CompanyRoutes mounted successfully in routes/index.ts');
 
 export default router;

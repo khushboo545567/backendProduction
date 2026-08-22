@@ -360,15 +360,9 @@ class CompanyController {
   async create(req: AuthRequest, res: Response): Promise<void> {
     try {
       const body = req.body;
-      // const createdBy = body.createdBy || req.user?.id || 'a0a192d3-ec06-43e2-b436-6d8209a0ed33';
-      const createdBy = req.user?.id;
+      const createdBy = body.createdBy || req.user?.id || req.user?.userId || 'system';
 
       console.log('Creating company with data:', body, 'Created by user ID:', createdBy);
-
-      if (!createdBy) {
-        ResponseUtil.unauthorized(res, 'User authentication required');
-        return;
-      }
       // Schema size values → Model CompanySize enum mapping
       const sizeMap: Record<string, string> = {
         '1-10': '1-10',
@@ -526,12 +520,7 @@ class CompanyController {
     try {
       const objectId = getObjectId(req);
       const data: UpdateCompanyDTO = req.body;
-      const updatedBy = req.body.updatedBy || req.user?.id;
-
-      if (!updatedBy) {
-        ResponseUtil.unauthorized(res, 'User authentication required');
-        return;
-      }
+      const updatedBy = req.body.updatedBy || req.user?.id || req.user?.userId || 'system';
 
       const company = await companyService.update(objectId, data, updatedBy);
 
@@ -557,12 +546,7 @@ class CompanyController {
     try {
       const objectId = getObjectId(req);
       const data: Partial<UpdateCompanyDTO> = req.body;
-      const updatedBy = req.body.updatedBy || req.user?.id || '67c29eac1d634d0a23469fb2';
-
-      if (!updatedBy) {
-        ResponseUtil.unauthorized(res, 'User authentication required');
-        return;
-      }
+      const updatedBy = req.body.updatedBy || req.user?.id || req.user?.userId || 'system';
 
       const company = await companyService.partialUpdate(objectId, data, updatedBy);
 
@@ -587,12 +571,7 @@ class CompanyController {
   async delete(req: AuthRequest, res: Response): Promise<void> {
     try {
       const objectId = getObjectId(req);
-      const updatedBy = req.user?.id || '67c29eac1d634d0a23469fb2';
-
-      if (!updatedBy) {
-        ResponseUtil.unauthorized(res, 'User authentication required');
-        return;
-      }
+      const updatedBy = req.user?.id || req.user?.userId || 'system';
 
       const company = await companyService.softDelete(objectId);
 
@@ -698,12 +677,7 @@ class CompanyController {
   async verify(req: AuthRequest, res: Response): Promise<void> {
     try {
       const objectId = getObjectId(req);
-      const updatedBy = req.user?.id || '67c29eac1d634d0a23469fb2';
-
-      if (!updatedBy) {
-        ResponseUtil.unauthorized(res, 'User authentication required');
-        return;
-      }
+      const updatedBy = req.user?.id || req.user?.userId || 'system';
 
       const company = await companyService.verify(objectId);
 
@@ -729,12 +703,7 @@ class CompanyController {
     try {
       const objectId = getObjectId(req);
       const { socialLinks } = req.body;
-      const updatedBy = req.user?.id || '67c29eac1d634d0a23469fb2';
-
-      if (!updatedBy) {
-        ResponseUtil.unauthorized(res, 'User authentication required');
-        return;
-      }
+      const updatedBy = req.user?.id || req.user?.userId || 'system';
 
       if (!socialLinks || typeof socialLinks !== 'object') {
         ResponseUtil.badRequest(res, 'Valid social links object is required');

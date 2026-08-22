@@ -3,11 +3,19 @@
  * server.ts
  * thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
- * ./version 4.0.0
+ * ./version 4.0.1
  */
 
+import dns from 'dns';
 import dotenv from 'dotenv';
 import path from 'path';
+
+// Fix for Node on Windows DNS resolving MongoDB Atlas SRV records
+try {
+    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch {
+    // ignore if not permitted
+}
 
 if (process.env['NODE_ENV'] !== 'production') {
     dotenv.config({ path: path.join(__dirname, '../../.env') });

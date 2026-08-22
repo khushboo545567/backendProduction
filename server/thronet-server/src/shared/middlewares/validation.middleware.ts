@@ -100,7 +100,7 @@ export const validateJoi = (schema: Joi.ObjectSchema) => {
         abortEarly: false,
         stripUnknown: true,
         convert: true,
-        allowUnknown: false,
+        allowUnknown: true,
       });
 
       if (error) {

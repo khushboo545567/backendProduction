@@ -1,4 +1,4 @@
-﻿// src/models/company.model.ts
+// src/models/company.model.ts
 import { v4 as uuidv4 } from 'uuid';
 import mongoose, { Schema, Document, Model, Query } from 'mongoose';
 import { logger } from '@/shared/logger.util';
@@ -49,6 +49,23 @@ export enum CompanyType {
   MNC = 'MNC',
   GOVERNMENT = 'Government',
   NON_PROFIT = 'Non-Profit',
+}
+
+export enum OrganizationType {
+  PRIVATE = 'Private',
+  PUBLIC = 'Public',
+  NON_PROFIT = 'Non-Profit',
+  GOVERNMENT = 'Government',
+  PARTNERSHIP = 'Partnership',
+  SOLE_PROPRIETORSHIP = 'Sole Proprietorship',
+  OTHER = 'Other',
+}
+
+export enum OperatingStatus {
+  OPERATING = 'Operating',
+  CLOSED = 'Closed',
+  ACQUIRED = 'Acquired',
+  BANKRUPT = 'Bankrupt',
 }
 
 export enum CompanySize {
@@ -106,8 +123,15 @@ export enum RemoteWorkType {
 
 // ==================== INTERFACES ====================
 interface IPhone {
-  country: string;
+  countryCode?: string;
+  country?: string;
   number: string;
+}
+
+interface IContact {
+  email: string;
+  phone: IPhone;
+  website?: string;
 }
 
 interface ICoordinates {
@@ -252,12 +276,12 @@ export interface ICompany extends Document {
   displayName?: string;
   industry: IndustryType;
   subIndustry?: string;
-  companyType: CompanyType;
+  companyType?: CompanyType;
+  organizationType?: OrganizationType;
+  operatingStatus?: OperatingStatus;
   companySize?: CompanySize;
   foundedYear?: number;
-  email: string;
-  phone: IPhone;
-  website?: string;
+  contact: IContact;
   headquarters: IHeadquarters;
   descriptions: IDescriptions;
   media: IMedia;
@@ -323,6 +347,28 @@ interface ICompanyModel extends Model<ICompany, Record<string, never>, ICompanyM
   clearExpiredCache(): void;
 }
 
+// ==================== GEOJSON POINT SCHEMA ====================
+const pointSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: ['Point'],
+      required: true,
+    },
+    coordinates: {
+      type: [Number],
+      required: true,
+      validate: {
+        validator: function (v: number[]) {
+          return Array.isArray(v) && v.length === 2 && typeof v[0] === 'number' && typeof v[1] === 'number' && !isNaN(v[0]) && !isNaN(v[1]) && v[0] >= -180 && v[0] <= 180 && v[1] >= -90 && v[1] <= 90;
+        },
+        message: 'Coordinates must be an array of [longitude, latitude]',
+      },
+    },
+  },
+  { _id: false }
+);
+
 // ==================== SCHEMA DEFINITION ====================
 const companySchema = new Schema<ICompany, ICompanyModel>(
   {
@@ -368,52 +414,65 @@ const companySchema = new Schema<ICompany, ICompanyModel>(
     subIndustry: {
       type: String,
       maxlength: 100,
-      trim: true,
+    },
+    companySize: {
+      type: String,
+      required: true,
+      enum: Object.values(CompanySize),
     },
     companyType: {
       type: String,
       enum: Object.values(CompanyType),
-      default: CompanyType.SME,
+      default: CompanyType.STARTUP,
     },
-    companySize: {
+    organizationType: {
       type: String,
-      enum: Object.values(CompanySize),
+      enum: Object.values(OrganizationType),
+      default: OrganizationType.PRIVATE,
+    },
+    operatingStatus: {
+      type: String,
+      enum: Object.values(OperatingStatus),
+      default: OperatingStatus.OPERATING,
     },
     foundedYear: {
       type: Number,
-      min: 1800,
+      min: [1800, 'Founded year cannot be before 1800'],
+      max: [new Date().getFullYear(), 'Founded year cannot be in the future'],
       validate: {
-        validator: (v: number) => v <= new Date().getFullYear(),
-        message: 'Founded year cannot be in the future',
+        validator: Number.isInteger,
+        message: 'Founded year must be an integer',
       },
     },
-    email: {
-      type: String,
-      required: true,
-      lowercase: true,
-      trim: true,
-      validate: {
-        validator: (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
-        message: 'Invalid email format',
-      },
-    },
-    phone: {
-      country: { type: String, default: '+91', maxlength: 4 },
-      number: {
+    contact: {
+      email: {
         type: String,
         required: true,
+        trim: true,
+        lowercase: true,
         validate: {
-          validator: (v: string) => /^\d{10,15}$/.test(v),
-          message: 'Invalid phone number',
+          validator: (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
+          message: 'Invalid email format',
         },
       },
-    },
-    website: {
-      type: String,
-      trim: true,
-      validate: {
-        validator: (v: string) => !v || /^https?:\/\/.+\..+/.test(v),
-        message: 'Invalid website URL',
+      phone: {
+        countryCode: { type: String, default: '+91', maxlength: 5 },
+        number: {
+          type: String,
+          required: true,
+          validate: {
+            validator: (v: string) => /^\d{7,15}$/.test(v),
+            message: 'Phone number must be between 7 and 15 digits',
+          },
+        },
+      },
+      website: {
+        type: String,
+        trim: true,
+        validate: {
+          validator: (v: string) => !v || /^https?:\/\/.+\..+/.test(v),
+          message: 'Invalid website URL',
+        },
       },
     },
     headquarters: {
@@ -423,8 +482,9 @@ const companySchema = new Schema<ICompany, ICompanyModel>(
       country: { type: String, default: 'India', maxlength: 50 },
       pincode: { type: String, maxlength: 10 },
       coordinates: {
-        type: { type: String, enum: ['Point'], default: 'Point' },
-        coordinates: { type: [Number], index: '2dsphere' },
+        type: pointSchema,
+        required: false,
+        default: undefined,
       },
     },
     growthMetrics: {
@@ -597,7 +657,7 @@ const companySchema = new Schema<ICompany, ICompanyModel>(
 
 // ✅ Sirf compound indexes yahan hain
 companySchema.index({ 'account.status': 1, 'account.isVerified': 1, industry: 1, 'audit.isDeleted': 1 });
-companySchema.index({ 'headquarters.coordinates': '2dsphere' });
+companySchema.index({ 'headquarters.coordinates': '2dsphere' }, { sparse: true });
 companySchema.index({ 'headquarters.city': 1, industry: 1, 'audit.isDeleted': 1 });
 companySchema.index({ 'stats.profileViews': -1, createdAt: -1 });
 companySchema.index({ 'features.isFeatured': 1, 'account.status': 1, 'audit.isDeleted': 1 });
@@ -614,6 +674,25 @@ companySchema.index({ createdAt: -1 });
 companySchema.index({ isVerified: 1, status: 1 });
 companySchema.index({ industry: 1, companySize: 1 });
 
+// ==================== PRE-VALIDATE MIDDLEWARE ====================
+companySchema.pre('validate', function (next) {
+  if (this.headquarters) {
+    const coords = (this.headquarters as any)?.coordinates?.coordinates;
+    const isValid = Array.isArray(coords) &&
+      coords.length === 2 &&
+      typeof coords[0] === 'number' &&
+      typeof coords[1] === 'number' &&
+      !isNaN(coords[0]) &&
+      !isNaN(coords[1]);
+    if (!isValid) {
+      (this.headquarters as any).coordinates = undefined;
+    } else {
+      (this.headquarters as any).coordinates.type = 'Point';
+    }
+  }
+  next();
+});
+
 // ==================== PRE-SAVE MIDDLEWARE ====================
 companySchema.pre('save', async function (next) {
   try {
@@ -628,11 +707,24 @@ companySchema.pre('save', async function (next) {
       const address = `${this.headquarters.address || ''}, ${this.headquarters.city}, ${this.headquarters.state}, ${this.headquarters.country}`;
       try {
         const result = await geocoder.geocode(address);
-        if (result.length > 0) {
-          this.headquarters.coordinates.coordinates = [result[0].longitude || 0, result[0].latitude || 0];
+        if (result.length > 0 && result[0].longitude && result[0].latitude) {
+          this.headquarters.coordinates = {
+            type: 'Point',
+            coordinates: [result[0].longitude, result[0].latitude],
+          };
         }
       } catch (geoError) {
         logger.error('Geocoding error', { companyId: this.companyId, error: geoError });
+      }
+    }
+
+    // Clean up coordinates if invalid GeoJSON
+    if (this.headquarters) {
+      const coords = this.headquarters.coordinates?.coordinates;
+      if (Array.isArray(coords) && coords.length === 2 && typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+        this.headquarters.coordinates.type = 'Point';
+      } else {
+        this.headquarters.coordinates = undefined;
       }
     }
 
@@ -670,15 +762,31 @@ companySchema.methods.softDelete = async function (): Promise<Document & ICompan
 companySchema.methods.incrementStat = async function (
   field: 'followersCount' | 'postsCount' | 'employeesCount'
 ): Promise<Document & ICompany> {
-  this.stats[field] = (this.stats[field] || 0) + 1;
-  return await this.save();
+  const CompanyModel = this.constructor as any;
+  const updated = await CompanyModel.findByIdAndUpdate(
+    this._id,
+    { $inc: { [`stats.${field}`]: 1 } },
+    { new: true }
+  );
+  if (updated) {
+    this.stats = updated.stats;
+  }
+  return this;
 };
 
 companySchema.methods.decrementStat = async function (
   field: 'followersCount' | 'postsCount' | 'employeesCount'
 ): Promise<Document & ICompany> {
-  this.stats[field] = Math.max(0, (this.stats[field] || 0) - 1);
-  return await this.save();
+  const CompanyModel = this.constructor as any;
+  const updated = await CompanyModel.findByIdAndUpdate(
+    this._id,
+    { $inc: { [`stats.${field}`]: -1 } },
+    { new: true }
+  );
+  if (updated) {
+    this.stats = updated.stats;
+  }
+  return this;
 };
 
 // ==================== STATIC METHODS ====================

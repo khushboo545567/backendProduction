@@ -65,15 +65,7 @@ class CompanyService {
     return `${prefix}${sanitized}`;
   }
 
-  private async invalidateCompanyCache(objectId: string): Promise<void> {
-    await CacheUtil.del(`${this.CACHE_PREFIX}${objectId}`);
-    await CacheUtil.clearByPattern(`${this.CACHE_PREFIX}slug:*`);
-  }
 
-  private async invalidateListCache(): Promise<void> {
-    await CacheUtil.clearByPattern(`${this.CACHE_PREFIX}list:*`);
-    await CacheUtil.clearByPattern(`${this.CACHE_PREFIX}popular:*`);
-  }
 
   // ─────────────────────────────────────────────
   // CREATE
@@ -357,6 +349,22 @@ class CompanyService {
   async decrementFollowers(objectId: string): Promise<void> {
     await Company.findByIdAndUpdate(objectId, { $inc: { 'stats.followersCount': -1 } });
     await this.invalidateCompanyCache(objectId);
+  }
+
+  async invalidateCompanyCache(objectId: string): Promise<void> {
+    try {
+      await CacheUtil.del(`${this.CACHE_PREFIX}${objectId}`);
+    } catch {
+      // ignore
+    }
+  }
+
+  async invalidateListCache(): Promise<void> {
+    try {
+      await CacheUtil.clearByPattern(`${this.CACHE_PREFIX}*`);
+    } catch {
+      // ignore
+    }
   }
 }
 

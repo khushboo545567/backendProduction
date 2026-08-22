@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import mongoose from 'mongoose';
 import {
     CompanyIdentity, CompanyTimeline, CompanyUpdate,
@@ -10,10 +11,22 @@ class CompanyAboutRepository {
 
     // ============ IDENTITY ============
     async upsertIdentity(companyObjectId: string, companyUUID: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, identityId, company, companyUUID: _, ...updateData } = data || {};
         return CompanyIdentity.findOneAndUpdate(
             { company: new mongoose.Types.ObjectId(companyObjectId) },
-            { ...data, company: new mongoose.Types.ObjectId(companyObjectId), companyUUID, updatedBy: userId },
-            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+            {
+                $set: {
+                    ...updateData,
+                    company: new mongoose.Types.ObjectId(companyObjectId),
+                    companyUUID,
+                    updatedBy: userId || 'system',
+                },
+                $setOnInsert: {
+                    identityId: uuidv4(),
+                    createdBy: userId || 'system',
+                },
+            },
+            { new: true, upsert: true, setDefaultsOnInsert: false }
         ).lean();
     }
 
@@ -27,11 +40,12 @@ class CompanyAboutRepository {
 
     // ============ TIMELINE ============
     async createTimeline(companyObjectId: string, companyUUID: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, ...cleanData } = data || {};
         const doc = new CompanyTimeline({
-            ...data,
+            ...cleanData,
             company: new mongoose.Types.ObjectId(companyObjectId),
             companyUUID,
-            createdBy: userId,
+            createdBy: userId || 'system',
         });
         return doc.save();
     }
@@ -47,9 +61,10 @@ class CompanyAboutRepository {
     }
 
     async updateTimeline(timelineId: string, companyObjectId: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, ...updateData } = data || {};
         return CompanyTimeline.findOneAndUpdate(
             { timelineId, company: new mongoose.Types.ObjectId(companyObjectId) },
-            { ...data, updatedBy: userId },
+            { $set: { ...updateData, updatedBy: userId || 'system' } },
             { new: true, runValidators: true }
         ).lean();
     }
@@ -63,12 +78,13 @@ class CompanyAboutRepository {
 
     // ============ UPDATES / NEWS ============
     async createUpdate(companyObjectId: string, companyUUID: string, data: any, userId: string) {
-        const publishedAt = data.isPublished ? new Date() : undefined;
+        const { createdBy, _id, createdAt, updatedAt, ...cleanData } = data || {};
+        const publishedAt = cleanData.isPublished ? new Date() : undefined;
         const doc = new CompanyUpdate({
-            ...data,
+            ...cleanData,
             company: new mongoose.Types.ObjectId(companyObjectId),
             companyUUID,
-            createdBy: userId,
+            createdBy: userId || 'system',
             publishedAt,
         });
         return doc.save();
@@ -98,11 +114,12 @@ class CompanyAboutRepository {
     }
 
     async updateUpdate(updateId: string, companyObjectId: string, data: any, userId: string) {
-        const extra: any = { updatedBy: userId };
-        if (data.isPublished === true) extra.publishedAt = new Date();
+        const { createdBy, _id, createdAt, updatedAt, ...updateData } = data || {};
+        const extra: any = { updatedBy: userId || 'system' };
+        if (updateData.isPublished === true) extra.publishedAt = new Date();
         return CompanyUpdate.findOneAndUpdate(
             { updateId, company: new mongoose.Types.ObjectId(companyObjectId) },
-            { ...data, ...extra },
+            { $set: { ...updateData, ...extra } },
             { new: true, runValidators: true }
         ).lean();
     }
@@ -116,11 +133,12 @@ class CompanyAboutRepository {
 
     // ============ TESTIMONIALS ============
     async createTestimonial(companyObjectId: string, companyUUID: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, ...cleanData } = data || {};
         const doc = new CompanyTestimonial({
-            ...data,
+            ...cleanData,
             company: new mongoose.Types.ObjectId(companyObjectId),
             companyUUID,
-            createdBy: userId,
+            createdBy: userId || 'system',
         });
         return doc.save();
     }
@@ -142,9 +160,10 @@ class CompanyAboutRepository {
     }
 
     async updateTestimonial(testimonialId: string, companyObjectId: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, ...updateData } = data || {};
         return CompanyTestimonial.findOneAndUpdate(
             { testimonialId, company: new mongoose.Types.ObjectId(companyObjectId) },
-            { ...data, updatedBy: userId },
+            { $set: { ...updateData, updatedBy: userId || 'system' } },
             { new: true, runValidators: true }
         ).lean();
     }
@@ -158,10 +177,22 @@ class CompanyAboutRepository {
 
     // ============ PRODUCT ============
     async upsertProduct(companyObjectId: string, companyUUID: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, productId, company, companyUUID: _, ...updateData } = data || {};
         return CompanyProduct.findOneAndUpdate(
             { company: new mongoose.Types.ObjectId(companyObjectId) },
-            { ...data, company: new mongoose.Types.ObjectId(companyObjectId), companyUUID, updatedBy: userId },
-            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+            {
+                $set: {
+                    ...updateData,
+                    company: new mongoose.Types.ObjectId(companyObjectId),
+                    companyUUID,
+                    updatedBy: userId || 'system',
+                },
+                $setOnInsert: {
+                    productId: uuidv4(),
+                    createdBy: userId || 'system',
+                },
+            },
+            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: false }
         ).lean();
     }
 
@@ -175,10 +206,22 @@ class CompanyAboutRepository {
 
     // ============ COMPANY LIFE ============
     async upsertLife(companyObjectId: string, companyUUID: string, data: any, userId: string) {
+        const { createdBy, _id, createdAt, updatedAt, lifeId, company, companyUUID: _, ...updateData } = data || {};
         return CompanyLife.findOneAndUpdate(
             { company: new mongoose.Types.ObjectId(companyObjectId) },
-            { ...data, company: new mongoose.Types.ObjectId(companyObjectId), companyUUID, updatedBy: userId },
-            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+            {
+                $set: {
+                    ...updateData,
+                    company: new mongoose.Types.ObjectId(companyObjectId),
+                    companyUUID,
+                    updatedBy: userId || 'system',
+                },
+                $setOnInsert: {
+                    lifeId: uuidv4(),
+                    createdBy: userId || 'system',
+                },
+            },
+            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: false }
         ).lean();
     }
 

@@ -23,6 +23,7 @@ import AuthRoutes from './routes/index';
 console.log("Verifiy route import mounting....")
 // import verifyRoutes from './auth/routes/index';
 import mentorRoutes from './Mentorship/routers';
+import seniorMentorRoutes from './SeniorMentorship/routers';
 console.log('🔍 mentorRoutes imported successfully');
 import companyRoutes from './company/routers';
 import studyGroupRoutes from './StudyGroup/routers';
@@ -226,6 +227,7 @@ console.log("Verifiy route mounting....")
 // app.use('/api/v1/verify', verifyRoutes);
 console.log('🔍 VerifyRoutes mounted successfully in app');
 app.use('/api/v1/mentorship', mentorRoutes);
+app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
 console.log('🔍 MentorRoutes mounted successfully in app');
 app.use('/api/v1/company', companyRoutes);
 console.log('🔍 CompanyRoutes mounted successfully in app');

@@ -9,7 +9,7 @@ import employeeRoutes from './employee.routes';
 import eventRoutes from './event.routes';
 import reviewRoutes from './review.routes';
 import analyticsRoutes from './analytics.routes';
-// import jobRoutes from './job.routes';
+import jobRoutes from './job.routes';
 import followerRoutes from './follower.routes';
 
 const router = Router();
@@ -55,27 +55,34 @@ router.get('/', (_req, res) => {
 
 // Company Routes
 router.use('/companies', companyRoutes);
+router.use('/company', companyRoutes);
 
 // Employee Routes
 router.use('/employees', employeeRoutes);
+router.use('/employee', employeeRoutes);
 
 // Post Routes
 router.use('/posts', postRoutes);
+router.use('/post', postRoutes);
 
-// // Event Routes
+// Event Routes
 router.use('/events', eventRoutes);
+router.use('/event', eventRoutes);
 
-// // Job Routes
-// router.use('/jobs', jobRoutes);
+// Job Routes
+router.use('/jobs', jobRoutes);
+router.use('/job', jobRoutes);
 
-// // Review Routes
+// Review Routes
 router.use('/reviews', reviewRoutes);
+router.use('/review', reviewRoutes);
 
-// // Analytics Routes
+// Analytics Routes
 router.use('/analytics', analyticsRoutes);
 
 // Follower Routes
 router.use('/followers', followerRoutes);
+router.use('/follower', followerRoutes);
 
 // =====================================================
 // 404 HANDLER

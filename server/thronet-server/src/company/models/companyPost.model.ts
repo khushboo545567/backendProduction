@@ -1,4 +1,4 @@
-﻿import { PostStatus, PostType } from '../interfaces';
+import { PostStatus, PostType } from '../interfaces';
 import mongoose, { Model, Query, Document, Schema } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -108,8 +108,8 @@ export const CompanyPostSchema = new Schema(
     },
     content: {
       type: String,
-      required: [true, 'Post content is required'],
-      minlength: [10, 'Content must be at least 10 characters'],
+      required: false,
+      default: '',
     },
     company: {
       type: Schema.Types.ObjectId,

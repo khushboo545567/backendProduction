@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 // ==================== ENUMS ====================
@@ -67,7 +67,7 @@ const CompanyIdentitySchema = new Schema<ICompanyIdentity>({
     vision: { type: String, trim: true, maxlength: 1000 },
     promises: [{ type: String, trim: true, maxlength: 500 }],
     impacts: { type: [ImpactSchema], default: [] },
-    createdBy: { type: String, required: true },
+    createdBy: { type: String, default: 'system' },
     updatedBy: { type: String },
 }, { timestamps: true, collection: 'company_identities', versionKey: false });
 

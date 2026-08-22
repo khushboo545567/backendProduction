@@ -8,10 +8,7 @@ export interface IEmployeeDocument extends Document {
   firstName: string;
   lastName: string;
   email: string;
-  company: {
-    _id: string;
-    toString(): string;
-  };
+  company: any;
   designation: string;
   department?: string;
   profileImage?: string;
