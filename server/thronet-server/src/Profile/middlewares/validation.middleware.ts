@@ -979,12 +979,10 @@ export const validateUpdatePost = (req: Request, res: Response, next: NextFuncti
         title: Joi.string()
             .min(Constants.ACTIVITY_VALIDATION.POST.TITLE_MIN_LENGTH)
             .max(Constants.ACTIVITY_VALIDATION.POST.TITLE_MAX_LENGTH)
-            .pattern(Constants.ACTIVITY_VALIDATION.POST.TITLE_PATTERN)
             .optional()
             .messages({
                 'string.min': `Title must be at least ${Constants.ACTIVITY_VALIDATION.POST.TITLE_MIN_LENGTH} character`,
                 'string.max': `Title cannot exceed ${Constants.ACTIVITY_VALIDATION.POST.TITLE_MAX_LENGTH} characters`,
-                'string.pattern.base': 'Title must start with a capital letter',
             }),
         content: Joi.string()
             .max(Constants.ACTIVITY_VALIDATION.POST.CONTENT_MAX_LENGTH)
