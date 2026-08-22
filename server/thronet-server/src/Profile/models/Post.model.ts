@@ -203,10 +203,6 @@ const PostEntrySchema = new Schema<IPostEntry>(
             minlength: 1,
             maxlength: 300,
             trim: true,
-            validate: {
-                validator: (v: string) => /^[A-Z].*/.test(v),
-                message: 'Title must start with a capital letter',
-            },
         },
         content: { type: String, maxlength: 10000, trim: true },
         mood: {
