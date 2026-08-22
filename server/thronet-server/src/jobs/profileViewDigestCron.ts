@@ -8,6 +8,7 @@
 // worth checking whether that one is actually running in production.)
 
 import cron from 'node-cron';
+import mongoose from 'mongoose';
 import logger from '@/shared/logger.util';
 import { profileViewService } from '@/connections/services/profileView.service';
 import WhoViewedProfile from '@/connections/models/WhoViewedProfile';
@@ -24,6 +25,12 @@ class ProfileViewDigestCron {
       }
       this.isRunning = true;
       try {
+        if (mongoose.connection.readyState !== 1) {
+          logger.warn('Profile view digest cron skipped — MongoDB not connected', {
+            readyState: mongoose.connection.readyState,
+          });
+          return;
+        }
         logger.info('Running profile view digest cron job');
         await this.runDigest();
         logger.info('Profile view digest cron job completed');
@@ -54,17 +61,27 @@ class ProfileViewDigestCron {
     }
 
     let notifiedCount = 0;
-    for (const userId of userIdsWithUnnotifiedViews) {
-      try {
-        const result = await profileViewService.processDigestForUser(userId as string);
-        if (result.notified) notifiedCount++;
-      } catch (userError) {
-        // One user's failure shouldn't block the rest of the batch
-        logger.warn('Failed to process profile view digest for user', {
-          userId,
-          error: userError instanceof Error ? userError.message : 'Unknown error',
-        });
-      }
+    const BATCH_SIZE = 20; // process 20 users concurrently at a time, instead of one-by-one
+
+    for (let i = 0; i < userIdsWithUnnotifiedViews.length; i += BATCH_SIZE) {
+      const batch = userIdsWithUnnotifiedViews.slice(i, i + BATCH_SIZE);
+
+      const results = await Promise.allSettled(
+        batch.map((userId) => profileViewService.processDigestForUser(userId as string))
+      );
+
+      results.forEach((res, idx) => {
+        const userId = batch[idx];
+        if (res.status === 'fulfilled') {
+          if (res.value.notified) notifiedCount++;
+        } else {
+          // One user's failure shouldn't block the rest of the batch
+          logger.warn('Failed to process profile view digest for user', {
+            userId,
+            error: res.reason instanceof Error ? res.reason.message : 'Unknown error',
+          });
+        }
+      });
     }
 
     logger.info('Profile view digest processed', {
