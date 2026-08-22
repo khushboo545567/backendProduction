@@ -26,7 +26,7 @@ interface MongoConnectionOptions extends ConnectOptions {
 class MongoConnection {
     private static instance: MongoConnection;
     private isConnected: boolean = false;
-
+    private listenersRegistered: boolean = false;
     private constructor() { }
 
     public static getInstance(): MongoConnection {
@@ -71,9 +71,11 @@ class MongoConnection {
                     serverSelectionTimeoutMS: 5000,
                 });
             }
-
             this.isConnected = true;
-            this.setupEventListeners();
+            if (!this.listenersRegistered) {
+                this.setupEventListeners();
+                this.listenersRegistered = true;
+            }
 
             logger.info('✅ MongoDB connected successfully', {
                 poolSize: options.maxPoolSize,
@@ -117,6 +119,8 @@ class MongoConnection {
         }
     }
 
+    private reconnectScheduled = false;
+
     private setupEventListeners(): void {
         mongoose.connection.on('connected', () => {
             logger.info('MongoDB connection established');
@@ -125,6 +129,7 @@ class MongoConnection {
         mongoose.connection.on('disconnected', () => {
             logger.warn('MongoDB connection disconnected');
             this.isConnected = false;
+            this.scheduleReconnect(0);
         });
 
         mongoose.connection.on('error', (err) => {
@@ -137,6 +142,22 @@ class MongoConnection {
         });
     }
 
+    private scheduleReconnect(attempt: number): void {
+        // Guard against overlapping reconnect loops.
+        if (this.reconnectScheduled) return;
+        this.reconnectScheduled = true;
+
+        const delay = Math.min(5_000 * Math.pow(2, attempt), 60_000); // cap at 60s
+        logger.info('Scheduling MongoDB reconnect', { delay: `${delay / 1_000}s`, attempt });
+
+        setTimeout(() => {
+            this.reconnectScheduled = false;
+            this.connect().catch((err: any) => {
+                logger.error('MongoDB reconnect attempt failed', { error: err?.message });
+                this.scheduleReconnect(attempt + 1);
+            });
+        }, delay);
+    }
     public async disconnect(): Promise<void> {
         if (!this.isConnected) {
             return;
