@@ -19,18 +19,18 @@ import express, { Request, Response } from 'express';
 import { Server } from 'http';
 
 import { LoggerUtil as logger } from './shared/logger.util';
-import { startAllWorkers, stopAllWorkers, getWorkerStats } from './company/workersCompany';
+import { startAllWorkers, stopAllWorkers, getWorkerStats } from './Company/workersCompany';
 import CacheUtil from './shared/cache.util';
 
 
 // ==================== CONSTANTS ====================
 
-const HEALTH_PORT   = parseInt(process.env['WORKER_HEALTH_PORT'] ?? '3001', 10);
+const HEALTH_PORT = parseInt(process.env['WORKER_HEALTH_PORT'] ?? '3001', 10);
 const FALLBACK_PORTS = [HEALTH_PORT, 3002, 3003, 3004, 3005];
 
-const REDIS_MAX_RETRIES  = 10;
-const REDIS_RETRY_DELAY  = 3_000; // ms — doubles on each attempt (exponential backoff)
-const STATS_INTERVAL_MS  = 5 * 60 * 1_000; // log worker stats every 5 minutes
+const REDIS_MAX_RETRIES = 10;
+const REDIS_RETRY_DELAY = 3_000; // ms — doubles on each attempt (exponential backoff)
+const STATS_INTERVAL_MS = 5 * 60 * 1_000; // log worker stats every 5 minutes
 
 
 // ==================== STATE ====================
@@ -78,8 +78,8 @@ async function startHealthServer(): Promise<void> {
     app.get('/metrics', (_req: Request, res: Response) => {
         res.set('Content-Type', 'text/plain');
         res.send(`# HELP worker_uptime_seconds Total uptime of the worker process\n` +
-                 `# TYPE worker_uptime_seconds gauge\n` +
-                 `worker_uptime_seconds ${process.uptime()}\n`);
+            `# TYPE worker_uptime_seconds gauge\n` +
+            `worker_uptime_seconds ${process.uptime()}\n`);
     });
 
     // Try ports in order — useful when running multiple workers locally
@@ -97,7 +97,7 @@ async function startHealthServer(): Promise<void> {
                         logger.info('Health server started', {
                             port,
                             health: `http://localhost:${port}/health`,
-                            ping:   `http://localhost:${port}/ping`,
+                            ping: `http://localhost:${port}/ping`,
                         });
                         resolve();
                     })
@@ -129,7 +129,7 @@ async function startHealthServer(): Promise<void> {
 
 async function waitForRedis(
     maxRetries = REDIS_MAX_RETRIES,
-    baseDelay  = REDIS_RETRY_DELAY,
+    baseDelay = REDIS_RETRY_DELAY,
 ): Promise<void> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
@@ -169,9 +169,9 @@ async function waitForRedis(
 async function startWorkerProcess(): Promise<void> {
     try {
         logger.info('Starting queue worker process', {
-            nodeEnv:     process.env['NODE_ENV'] ?? 'development',
+            nodeEnv: process.env['NODE_ENV'] ?? 'development',
             nodeVersion: process.version,
-            pid:         process.pid,
+            pid: process.pid,
         });
 
         await waitForRedis();
@@ -243,12 +243,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
 // ==================== PROCESS HANDLERS ====================
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason) => {
     logger.error('Unhandled rejection in worker', {
         reason: (reason as Error)?.message ?? String(reason),
-        stack:  (reason as Error)?.stack,
+        stack: (reason as Error)?.stack,
     });
 });
 

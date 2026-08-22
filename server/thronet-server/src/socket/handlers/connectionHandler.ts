@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import logger, { LogCategory } from '@/shared/logger.util';
-import { AuthenticatedSocket, getIO } from '../index';
+import { AuthenticatedSocket } from '../index';
 
 export const setupConnectionHandlers = (io: Server, socket: AuthenticatedSocket) => {
     const userId = socket.data.userId || socket.userId;
@@ -109,22 +109,17 @@ export const emitConnectionDeclined = (
 
 // Company admin apni company ka room join kare
 export const emitCompanyAnalyticsUpdate = (
+    io: Server,
     companyObjectId: string,
-    data: Record<string, unknown>,
-    io?: Server
+    data: Record<string, unknown>
 ) => {
-    try {
-        const socketServer = io || getIO();
-        socketServer.to(`company:${companyObjectId}`).emit('analytics:update', {
-            ...data,
-            timestamp: new Date()
-        });
+    io.to(`company:${companyObjectId}`).emit('analytics:update', {
+        ...data,
+        timestamp: new Date()
+    });
 
-        logger.info('Analytics update emitted', {
-            category: LogCategory.CONNECTION,
-            data: { companyObjectId }
-        });
-    } catch {
-        // ignore if socket server is not available
-    }
+    logger.info('Analytics update emitted', {
+        category: LogCategory.CONNECTION,
+        data: { companyObjectId }
+    });
 };

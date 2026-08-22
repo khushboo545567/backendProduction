@@ -24,7 +24,6 @@ export interface CreatePostDTO {
   }>;
   tags?: string[];
   scheduledFor?: Date | string;
-  status?: PostStatus | string;
 }
 
 // Update Request DTO

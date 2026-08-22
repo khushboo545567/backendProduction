@@ -1,115 +1,116 @@
-// ============================================
-// Analytics Queue Definition
-// ============================================
 
-import Queue from 'bull';
-import { queueConfig } from '@/config/cache/queue';
-import logger from '@/shared/logger.util';
-import { AnalyticsJobData, AnalyticsJobResult } from '@/company/interfaces';
+// // ============================================
+// // Analytics Queue Definition
+// // ============================================
 
-// Create Analytics Queue
-export const analyticsQueue = new Queue<AnalyticsJobData>(
-  queueConfig.bull.queues.analytics.name,
-  {
-    redis: queueConfig.bull.redis,
-    defaultJobOptions: queueConfig.bull.defaultJobOptions,
-    limiter: queueConfig.bull.queues.analytics.limiter,
-  }
-);
+// import Queue from 'bull';
+// import { queueConfig } from '@/config/cache/queue';
+// import logger from '@/shared/logger.util';
+// import { AnalyticsJobData, AnalyticsJobResult } from '@/company/interfaces';
 
-// =====================================================
-// Queue Event Handlers
-// =====================================================
+// // Create Analytics Queue
+// export const analyticsQueue = new Queue<AnalyticsJobData>(
+//   queueConfig.bull.queues.analytics.name,
+//   {
+//     redis: queueConfig.bull.redis,
+//     defaultJobOptions: queueConfig.bull.defaultJobOptions,
+//     limiter: queueConfig.bull.queues.analytics.limiter,
+//   }
+// );
 
-analyticsQueue.on('error', (error) => {
-  logger.error('Analytics Queue Error:', error.message);
-});
+// // =====================================================
+// // Queue Event Handlers
+// // =====================================================
 
-analyticsQueue.on('active', (job) => {
-  logger.debug(`Processing analytics job ${job.id}`, {
-    eventType: job.data.eventType,
-  });
-});
+// analyticsQueue.on('error', (error) => {
+//   logger.error('Analytics Queue Error:', error.message);
+// });
 
-analyticsQueue.on('completed', (job, result: AnalyticsJobResult) => {
-  logger.debug(`Analytics job ${job.id} completed`, {
-    success: result.success,
-  });
-});
+// analyticsQueue.on('active', (job) => {
+//   logger.debug(`Processing analytics job ${job.id}`, {
+//     eventType: job.data.eventType,
+//   });
+// });
 
-analyticsQueue.on('failed', (job, error) => {
-  logger.error(`Analytics job ${job?.id} failed`, {
-    eventType: job?.data?.eventType,
-    error: error.message,
-  });
-});
+// analyticsQueue.on('completed', (job, result: AnalyticsJobResult) => {
+//   logger.debug(`Analytics job ${job.id} completed`, {
+//     success: result.success,
+//   });
+// });
 
-// =====================================================
-// Helper Functions
-// =====================================================
+// analyticsQueue.on('failed', (job, error) => {
+//   logger.error(`Analytics job ${job?.id} failed`, {
+//     eventType: job?.data?.eventType,
+//     error: error.message,
+//   });
+// });
 
-/**
- * Track analytics event
- */
-export async function trackAnalyticsEvent(
-  data: AnalyticsJobData
-): Promise<void> {
-  try {
-    await analyticsQueue.add(data, {
-      priority: queueConfig.priorities.low, // Analytics is lower priority
-      attempts: 2, // Fewer retries for analytics
-    });
+// // =====================================================
+// // Helper Functions
+// // =====================================================
 
-    logger.debug('Analytics event tracked', {
-      eventType: data.eventType,
-    });
-  } catch (error: any) {
-    logger.error('Failed to track analytics event', error);
-    // Don't throw - analytics failures shouldn't break app
-  }
-}
+// /**
+//  * Track analytics event
+//  */
+// export async function trackAnalyticsEvent(
+//   data: AnalyticsJobData
+// ): Promise<void> {
+//   try {
+//     await analyticsQueue.add(data, {
+//       priority: queueConfig.priorities.low, // Analytics is lower priority
+//       attempts: 2, // Fewer retries for analytics
+//     });
 
-/**
- * Track batch events
- */
-export async function trackBatchAnalytics(
-  events: AnalyticsJobData[]
-): Promise<void> {
-  try {
-    const jobs = events.map((event) => ({
-      data: event,
-      opts: {
-        priority: queueConfig.priorities.low,
-        attempts: 2,
-      },
-    }));
+//     logger.debug('Analytics event tracked', {
+//       eventType: data.eventType,
+//     });
+//   } catch (error: any) {
+//     logger.error('Failed to track analytics event', error);
+//     // Don't throw - analytics failures shouldn't break app
+//   }
+// }
 
-    await analyticsQueue.addBulk(jobs);
+// /**
+//  * Track batch events
+//  */
+// export async function trackBatchAnalytics(
+//   events: AnalyticsJobData[]
+// ): Promise<void> {
+//   try {
+//     const jobs = events.map((event) => ({
+//       data: event,
+//       opts: {
+//         priority: queueConfig.priorities.low,
+//         attempts: 2,
+//       },
+//     }));
 
-    logger.info('Batch analytics tracked', { count: events.length });
-  } catch (error: any) {
-    logger.error('Failed to track batch analytics', error);
-  }
-}
+//     await analyticsQueue.addBulk(jobs);
 
-/**
- * Get queue stats
- */
-export async function getAnalyticsQueueStats() {
-  const [waiting, active, completed, failed] = await Promise.all([
-    analyticsQueue.getWaitingCount(),
-    analyticsQueue.getActiveCount(),
-    analyticsQueue.getCompletedCount(),
-    analyticsQueue.getFailedCount(),
-  ]);
+//     logger.info('Batch analytics tracked', { count: events.length });
+//   } catch (error: any) {
+//     logger.error('Failed to track batch analytics', error);
+//   }
+// }
 
-  return {
-    waiting,
-    active,
-    completed,
-    failed,
-    paused: await analyticsQueue.isPaused(),
-  };
-}
+// /**
+//  * Get queue stats
+//  */
+// export async function getAnalyticsQueueStats() {
+//   const [waiting, active, completed, failed] = await Promise.all([
+//     analyticsQueue.getWaitingCount(),
+//     analyticsQueue.getActiveCount(),
+//     analyticsQueue.getCompletedCount(),
+//     analyticsQueue.getFailedCount(),
+//   ]);
 
-export default analyticsQueue;
+//   return {
+//     waiting,
+//     active,
+//     completed,
+//     failed,
+//     paused: await analyticsQueue.isPaused(),
+//   };
+// }
+
+// export default analyticsQueue;

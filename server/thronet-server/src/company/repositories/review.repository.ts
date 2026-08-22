@@ -54,7 +54,7 @@ class ReviewRepository {
 
     async updateByObjectId(
         objectId: string,
-        data: Partial<ICompanyReviewDocument> | Record<string, any>
+        data: Partial<ICompanyReviewDocument>
     ): Promise<ICompanyReviewDocument | null> {
         if (!mongoose.Types.ObjectId.isValid(objectId)) return null;
         return CompanyReview.findByIdAndUpdate(objectId, data, { new: true })

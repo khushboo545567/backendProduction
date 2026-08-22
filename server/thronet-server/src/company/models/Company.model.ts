@@ -123,15 +123,8 @@ export enum RemoteWorkType {
 
 // ==================== INTERFACES ====================
 interface IPhone {
-  countryCode?: string;
-  country?: string;
+  country: string;
   number: string;
-}
-
-interface IContact {
-  email: string;
-  phone: IPhone;
-  website?: string;
 }
 
 interface ICoordinates {
@@ -276,12 +269,12 @@ export interface ICompany extends Document {
   displayName?: string;
   industry: IndustryType;
   subIndustry?: string;
-  companyType?: CompanyType;
-  organizationType?: OrganizationType;
-  operatingStatus?: OperatingStatus;
+  companyType: CompanyType;
   companySize?: CompanySize;
   foundedYear?: number;
-  contact: IContact;
+  email: string;
+  phone: IPhone;
+  website?: string;
   headquarters: IHeadquarters;
   descriptions: IDescriptions;
   media: IMedia;
@@ -419,11 +412,6 @@ const companySchema = new Schema<ICompany, ICompanyModel>(
       type: String,
       required: true,
       enum: Object.values(CompanySize),
-    },
-    companyType: {
-      type: String,
-      enum: Object.values(CompanyType),
-      default: CompanyType.STARTUP,
     },
     organizationType: {
       type: String,

@@ -5,7 +5,7 @@
 import { Job } from 'bull';
 import mediaQueue from '../../shared/queues/media.queue';
 import { MediaJobData, MediaJobResult } from '../interfaces';
-import { mediaService } from '../services';
+import { mediaService } from '@/services';
 import logger from '@/shared/logger.util';
 import queueConfig from '@/config/cache/queue';
 
@@ -64,7 +64,7 @@ async function processMediaJob(job: Job<MediaJobData>): Promise<MediaJobResult> 
     });
 
     return result;
-  } catch (error : any) {
+  } catch (error: any) {
     logger.error(`Media job ${job.id} failed`, {
       type,
       filename,
