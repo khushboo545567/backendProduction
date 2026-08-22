@@ -10,6 +10,9 @@ import {
 import { logger } from '@/shared/logger.util';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 import { AuthRequest } from '@/shared/middlewares/auth.middleware';
+import { TrustScoreService } from '@/Mentorship/services/trustScore.service';
+import mentorRepository from '@/Mentorship/repositories/mentor.repository';
+import { TrustScoreCalculator } from '../utils/trustScoreCalculator';
 
 class MentorController {
   /**
@@ -163,7 +166,39 @@ class MentorController {
         return;
       }
 
-      ResponseHandler.success(res, 'Trust Score fetched successfully', mentor.trustScore || null);
+      let trustScore = mentor.trustScore;
+
+      // 1. Identify if trustScore is missing OR if it's the empty Mongoose schema default
+      // Even if MongoDB defaults to `{ overall: 0, breakdown: ... }`, we treat it as uncalculated if all metrics are 0
+      const isUncalculated = 
+        !trustScore || 
+        Object.keys(trustScore).length === 0 || 
+        (trustScore.overall === 0 && (!trustScore.metrics || trustScore.metrics.totalCompletedSessions === 0));
+
+      if (isUncalculated) {
+        // 2. Try the primary service which also updates the Database
+        const recalculatedScore = await TrustScoreService.recalculate(mentor.mentorId);
+        
+        if (recalculatedScore) {
+          trustScore = recalculatedScore;
+        } else {
+          // 3. Complete Fallback: If DB errors out, dynamically generate it just for this request
+          trustScore = TrustScoreCalculator.calculate({
+            totalSessions: 0,
+            completedSessions: 0,
+            cancelledSessions: 0,
+            averageRating: 0,
+            totalReviews: 0,
+            hasTitle: !!mentor.title,
+            hasBio: !!mentor.bio && mentor.bio.length >= 50,
+            hasDomains: Array.isArray(mentor.domains) && mentor.domains.length > 0,
+            hasSkills: Array.isArray(mentor.skills) && mentor.skills.length > 0,
+            isVerified: !!mentor.verification?.isVerified,
+          });
+        }
+      }
+
+      ResponseHandler.success(res, 'Trust Score fetched successfully', trustScore || null);
     } catch (error: any) {
       logger.error('Error fetching trust score:', error);
       next(error);

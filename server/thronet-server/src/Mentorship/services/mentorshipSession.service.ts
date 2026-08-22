@@ -1,6 +1,6 @@
 import mentorService from './mentor.service';
 import { SESSION_DURATIONS, SessionType } from '@/shared/constants/sessionTypes';
-import { PaymentMethod, PaymentStatus } from '@/Mentorship/interface/session.types';
+import { PaymentMethod, PaymentStatus, ISessionMentor } from '@/Mentorship/interface/session.types';
 import { Availability, Mentor, SessionMentor } from '../models';
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
@@ -211,7 +211,7 @@ class MentorshipSessionService {
        */
       const userIds = new Set<string>();
 
-      sessions.forEach(session => {
+      sessions.forEach((session: ISessionMentor) => {
         if (session.menteeId) {
           userIds.add(session.menteeId);
         }
@@ -231,7 +231,22 @@ class MentorshipSessionService {
         .select('userId firstName lastName email profilePhotoId')
         .lean();
 
-      const userMap = new Map<string, any>();
+      interface EnrichedMentee {
+        userId: string;
+        fullName: string;
+        email: string;
+        profilePic: string;
+      }
+      type SessionBooking = NonNullable<ISessionMentor['bookings']>[0];
+      interface EnrichedBooking extends SessionBooking {
+        mentee?: EnrichedMentee;
+      }
+      interface EnrichedSession extends Omit<ISessionMentor, 'bookings'> {
+        mentee?: EnrichedMentee;
+        bookings?: EnrichedBooking[];
+      }
+
+      const userMap = new Map<string, EnrichedMentee>();
       users.forEach((u: any) => {
         userMap.set(u.userId, {
           userId: u.userId,
@@ -241,16 +256,16 @@ class MentorshipSessionService {
         });
       });
 
-      const enrichedSessions = sessions.map(session => {
-        const enriched = { ...session };
+      const enrichedSessions = sessions.map((session: ISessionMentor) => {
+        const enriched: EnrichedSession = { ...session };
         
         if (session.menteeId && userMap.has(session.menteeId)) {
           enriched.mentee = userMap.get(session.menteeId);
         }
 
         if (session.bookings && Array.isArray(session.bookings)) {
-          enriched.bookings = session.bookings.map((booking: any) => {
-            const bEnriched = { ...booking };
+          enriched.bookings = session.bookings.map((booking: SessionBooking) => {
+            const bEnriched: EnrichedBooking = { ...booking };
             const targetId = booking.bookedBy || booking.menteeId;
             if (targetId && userMap.has(targetId)) {
               bEnriched.mentee = userMap.get(targetId);
@@ -399,11 +414,11 @@ class MentorshipSessionService {
       }).lean();
 
       const total     = sessions.length;
-      const completed = sessions.filter((s) => s.status === BookingStatus.COMPLETED).length;
-      const left      = sessions.filter((s) => s.completion?.leftAt !== undefined).length;
+      const completed = sessions.filter((s: ISessionMentor) => s.status === BookingStatus.COMPLETED).length;
+      const left      = sessions.filter((s: ISessionMentor) => s.completion?.leftAt !== undefined).length;
       const totalTimeSpent = sessions
-        .filter((s) => s.completion?.actualDuration)
-        .reduce((acc, s) => acc + (s.completion?.actualDuration || 0), 0);
+        .filter((s: ISessionMentor) => s.completion?.actualDuration)
+        .reduce((acc: number, s: ISessionMentor) => acc + (s.completion?.actualDuration || 0), 0);
 
       return {
         totalSessionsBooked:   total,
@@ -666,42 +681,36 @@ class MentorshipSessionService {
         throw new ForbiddenError('Only the mentor of this session can confirm bookings');
       }
 
-      if (bookingId) {
-        const booking = session.bookings?.find((b: any) => b.bookedBy === bookingId);
-        if (!booking) throw new BadRequestError('Booking not found');
-        if (booking.status !== 'pending') throw new BadRequestError('Booking is not pending');
-
-        session.bookings = session.bookings.map((b: any) =>
-          b.bookedBy === bookingId ? { ...b, status: 'confirmed' } : b
-        );
-      } else {
-        const hasPending = session.bookings?.some((b: any) => b.status === 'pending');
-        if (!hasPending) throw new BadRequestError('No pending bookings to confirm');
-
-        session.bookings = session.bookings?.map((b: any) =>
-          b.status === 'pending' ? { ...b, status: 'confirmed' } : b
-        );
+      if (!bookingId) {
+        throw new BadRequestError('bookingId is required to confirm a session booking');
       }
 
-      /**
-       * FIX:
-       * Previously only booking.status was updated during confirmation.
-       * startSession() validates session.status === CONFIRMED,
-       * causing confirmed bookings to fail when mentors attempted
-       * to start a session.
-       *
-       * We now synchronize the root session status with the
-       * booking status during confirmation so the lifecycle becomes:
-       *
-       * AVAILABLE -> CONFIRMED -> IN_PROGRESS -> COMPLETED
-       */
-      session.status = BookingStatus.CONFIRMED;
+      const booking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
+      if (!booking) {
+        const available = session.bookings?.map((b: any) => b._id?.toString());
+        throw new BadRequestError(`Booking not found. Expected: ${bookingId}, Available: ${JSON.stringify(available)}`);
+      }
+      if (booking.status !== 'pending') {
+        throw new BadRequestError(`Booking is not pending. Current status: ${booking.status}`);
+      }
 
-      await session.save();
-      logger.info(`Session confirmed: ${sessionId}, bookedBy: ${bookingId}`);
-      return session;
+      // Perform an atomic update to avoid any Document.save() validation issues
+      await SessionMentor.updateOne(
+        { sessionId, 'bookings._id': bookingId },
+        { 
+          $set: { 
+            'bookings.$.status': BookingStatus.CONFIRMED,
+            status: BookingStatus.CONFIRMED
+          } 
+        }
+      );
+
+      logger.info(`Session confirmed: ${sessionId}, bookedBy/bookingId: ${bookingId}`);
+      
+      // Fetch the updated document returning lean for response
+      return await SessionMentor.findOne({ sessionId });
     } catch (error: any) {
-      logger.error(`Failed to confirm session: ${error.message}`);
+      logger.error(`Failed to confirm session (${sessionId}): ${error.message}`);
       throw error;
     }
   }
@@ -723,7 +732,15 @@ class MentorshipSessionService {
         throw new ForbiddenError('Only the mentor of this session can start it');
       }
 
-      if (session.status !== BookingStatus.CONFIRMED && session.status !== BookingStatus.RESCHEDULED) {
+      const hasConfirmedBooking = session.bookings?.some((b: any) => 
+        b.status === BookingStatus.CONFIRMED || b.status === BookingStatus.RESCHEDULED
+      );
+
+      if (
+        session.status !== BookingStatus.CONFIRMED && 
+        session.status !== BookingStatus.RESCHEDULED &&
+        !hasConfirmedBooking
+      ) {
         throw new BadRequestError('Session must be confirmed before starting');
       }
 
@@ -797,15 +814,44 @@ class MentorshipSessionService {
     sessionId: string,
     userId: string,
     reason: string,
-    authToken?: string
+    authToken: string | undefined,
+    bookingId: string
   ): Promise<any> {
     try {
+      if (!bookingId) {
+        throw new BadRequestError('bookingId is required to cancel a session booking');
+      }
+
       const session = await this.getSessionById(sessionId, userId, authToken);
+
+      const booking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
+      if (!booking) {
+        throw new BadRequestError('Booking not found');
+      }
 
       const hoursDiff    = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
       const refundEligible = hoursDiff >= 24;
 
-      await session.cancelSession(userId, reason, refundEligible);
+      const updateData: any = {
+        $set: { 
+          'bookings.$.status': BookingStatus.CANCELLED,
+          'cancellation': {
+            cancelledBy: userId,
+            cancelledAt: new Date(),
+            reason,
+            refundEligible
+          }
+        }
+      };
+
+      if (session.sessionType !== SessionType.GROUP_SESSION) {
+        updateData.$set.status = BookingStatus.CANCELLED;
+      }
+
+      await SessionMentor.updateOne(
+        { sessionId, 'bookings._id': bookingId },
+        updateData
+      );
 
       TrustScoreEvents.emit('SessionCancelled', {
         mentorId: session.mentorId,
@@ -1038,11 +1084,20 @@ Only produce the final architectural plan with the smallest possible implementat
     sessionId: string,
     userId: string,
     newScheduledAt: Date,
-    reason?: string,
-    authToken?: string
+    reason: string | undefined,
+    authToken: string | undefined,
+    bookingId: string
   ): Promise<any> {
     try {
+      if (!bookingId) {
+        throw new BadRequestError('bookingId is required to reschedule a session booking');
+      }
+
       const session = await this.getSessionById(sessionId, userId, authToken);
+      const booking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
+      if (!booking) {
+        throw new BadRequestError('Booking not found');
+      }
 
       const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
       if (hoursDiff < 24) {
@@ -1053,7 +1108,27 @@ Only produce the final architectural plan with the smallest possible implementat
         throw new BadRequestError('New scheduled time must be in the future');
       }
 
-      await session.rescheduleSession(newScheduledAt, userId, reason || 'Rescheduled by user');
+      const updateData: any = {
+        $set: { 
+          'bookings.$.status': BookingStatus.RESCHEDULED,
+          'bookings.$.scheduledAt': newScheduledAt,
+          'reschedule.lastRescheduledAt': new Date(),
+          'reschedule.rescheduledBy': userId,
+          'reschedule.reason': reason || 'Rescheduled by user'
+        },
+        $inc: { 'reschedule.count': 1 },
+        $push: { 'reschedule.previousDates': session.scheduledAt }
+      };
+
+      if (session.sessionType !== SessionType.GROUP_SESSION) {
+        updateData.$set.scheduledAt = newScheduledAt;
+        updateData.$set.status = BookingStatus.RESCHEDULED;
+      }
+
+      await SessionMentor.updateOne(
+        { sessionId, 'bookings._id': bookingId },
+        updateData
+      );
       logger.info(`Session rescheduled: ${sessionId}`);
 
       // TODO: Update calendar via calendarSync.service

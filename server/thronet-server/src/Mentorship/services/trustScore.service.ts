@@ -11,12 +11,12 @@ export class TrustScoreService {
    * Recalculates the Trust Score for a mentor.
    * This handles fetching data, aggregating metrics, calling the calculator, and persisting the result.
    */
-  public static async recalculate(mentorId: string): Promise<void> {
+  public static async recalculate(mentorId: string): Promise<any> {
     try {
       const mentor = await Mentor.findOne({ mentorId });
       if (!mentor) {
         console.warn(`[TrustScore] Mentor not found for recalculation: ${mentorId}`);
-        return;
+        return null;
       }
 
       // Aggregate Reviews
@@ -95,9 +95,11 @@ export class TrustScoreService {
       await mentorRepository.updateByMentorId(mentorId, { trustScore: newTrustScore });
 
       console.info(`[TrustScore] Recalculated for Mentor ${mentorId}: Overall ${newTrustScore.overall}`);
+      return newTrustScore;
     } catch (error) {
       console.error(`[TrustScore] Error recalculating for mentor ${mentorId}:`, error);
       // We do not throw because we don't want to crash event listeners.
+      return null;
     }
   }
 }

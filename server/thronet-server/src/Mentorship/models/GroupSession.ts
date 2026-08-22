@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { PaymentMethod } from '@/Mentorship/interface/session.types';
 
 export interface IParticipant {
   sessionId: string;
@@ -35,6 +36,16 @@ export interface IGroupSession {
     pricePerPerson: number;
     currency: string;
     totalRevenue: number;
+  };
+  payment: {
+    method: string;
+  };
+  settings: {
+    followUp: {
+      allowed: boolean;
+      periodDays: number;
+    };
+    bufferTimeMinutes: number;
   };
   meeting: {
     platform: 'zoom' | 'google_meet' | 'daily_co' | 'custom';
@@ -97,8 +108,6 @@ const ParticipantSchema = new Schema<IParticipant>(
     sessionId: {
       type: String,
       required: true,
-      unique: true,
-      index: true,
     },
     menteeId: { type: String, required: true },
     registeredAt: { type: Date, default: Date.now },
@@ -208,6 +217,20 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
       },
       currency: { type: String, default: 'INR' },
       totalRevenue: { type: Number, default: 0, min: 0 },
+    },
+    payment: {
+      method: {
+        type: String,
+        enum: Object.values(PaymentMethod),
+        required: true,
+      },
+    },
+    settings: {
+      followUp: {
+        allowed: { type: Boolean, default: false },
+        periodDays: { type: Number, default: 0, min: 0, max: 30 },
+      },
+      bufferTimeMinutes: { type: Number, default: 0, min: 0, max: 60 },
     },
     meeting: {
       platform: {

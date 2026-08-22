@@ -363,14 +363,18 @@ class SessionController {
         return;
       }
 
-      const { reason } = req.body;
+      const { reason, bookingId } = req.body;
       if (!reason) {
         ResponseHandler.badRequest(res, 'Cancellation reason is required');
         return;
       }
+      if (!bookingId) {
+        ResponseHandler.badRequest(res, 'bookingId is required to cancel a booking');
+        return;
+      }
 
       const authToken = getAuthToken(req) || undefined;
-      const result = await bookingService.cancelBooking(id, userId, reason, authToken);
+      const result = await bookingService.cancelBooking(id, userId, reason, authToken, bookingId);
 
       ResponseHandler.success(res, 'Session cancelled successfully', {
         session: result.session,
@@ -400,9 +404,13 @@ class SessionController {
         return;
       }
 
-      const { newScheduledAt, reason } = req.body;
+      const { newScheduledAt, reason, bookingId } = req.body;
       if (!newScheduledAt) {
         ResponseHandler.badRequest(res, 'New scheduled time is required');
+        return;
+      }
+      if (!bookingId) {
+        ResponseHandler.badRequest(res, 'bookingId is required to reschedule a booking');
         return;
       }
 
@@ -412,10 +420,14 @@ class SessionController {
         return;
       }
 
-      if (session.menteeId !== userId && session.mentorId !== userId) {
-        ResponseHandler.forbidden(res, 'You do not have permission to reschedule this session');
-        return;
-      }
+      
+
+      // if (session.menteeId !== userId && session.mentorId !== userId) {
+      //   ResponseHandler.forbidden(res, 'You do not have permission to reschedule this session');
+      //   return;
+      // }
+
+      // Permission check deferred to underlying service
 
       const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
       if (hoursDiff < 24) {
@@ -435,7 +447,8 @@ class SessionController {
         userId,
         new Date(newScheduledAt),
         reason || 'Rescheduled by user',
-        authToken
+        authToken,
+        bookingId
       );
 
       ResponseHandler.success(res, 'Session rescheduled successfully', {
@@ -471,10 +484,7 @@ class SessionController {
         return;
       }
 
-      if (session.menteeId !== userId && session.mentorId !== userId) {
-        ResponseHandler.forbidden(res, 'You do not have permission to view this session');
-        return;
-      }
+      // Permission check deferred to underlying service
 
       const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
 

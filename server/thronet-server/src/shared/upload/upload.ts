@@ -191,8 +191,8 @@ const uploadSingleConfig = multer({
     limits: {
         fileSize: uploadConfig.maxFileSize,
         files: 1,
-        fields: 10,
-        parts: 20
+        fields: 20,
+        parts: 30
     }
 });
 
@@ -206,8 +206,8 @@ const uploadVideoConfig = multer({
     limits: {
         fileSize: uploadConfig.maxVideoFileSize,
         files: 1,
-        fields: 10,
-        parts: 20
+        fields: 20,
+        parts: 30
     }
 });
 

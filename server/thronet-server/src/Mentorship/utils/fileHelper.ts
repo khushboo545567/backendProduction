@@ -49,15 +49,19 @@ class FileHelper {
         ? this.generateUniqueFilename(file.originalname)
         : file.originalname;
 
-      // Upload to S3
-      const { url, key } = await awsService.uploadFile(
-        file.buffer,
-        filename,
-        {
-          folder: options.folder || 'uploads',
-          contentType: file.mimetype,
-        }
-      );
+      // [UN-COMMENT IN PRODUCTION]
+      // const { url, key } = await awsService.uploadFile(
+      //   file.buffer,
+      //   filename,
+      //   {
+      //     folder: options.folder || 'uploads',
+      //     contentType: file.mimetype,
+      //   }
+      // );
+      
+      // Mock upload for development
+      const url = `https://mock-s3-bucket.s3.amazonaws.com/${options.folder || 'uploads'}/${filename}`;
+      const key = `${options.folder || 'uploads'}/${filename}`;
 
       logger.info(`File uploaded successfully: ${filename}`);
 
@@ -330,4 +334,4 @@ class FileHelper {
   }
 }
 
-export default new FileHelper();
+export default new FileHelper();// Trigger restart

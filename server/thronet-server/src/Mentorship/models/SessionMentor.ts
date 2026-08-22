@@ -86,7 +86,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         bookedAt:       { type: Date, default: Date.now },
         status: {
           type: String,
-          enum: ['pending', 'confirmed', 'cancelled', 'completed'],
+          enum: ['pending', 'confirmed', 'rescheduled', 'in_progress', 'cancelled', 'completed'],
           default: 'pending',
         },
         slotTime:       { type: String },
@@ -238,6 +238,14 @@ SessionMentorSchema.methods.confirmBooking = async function () {
 SessionMentorSchema.methods.startSession = async function () {
   this.status = BookingStatus.IN_PROGRESS;
   this.startedAt = new Date();
+  if (this.bookings && this.bookings.length > 0) {
+    this.bookings.forEach((b: any) => {
+      if (b.status === 'confirmed' || b.status === 'rescheduled') {
+        b.status = 'in_progress';
+      }
+    });
+    this.markModified('bookings');
+  }
   return await this.save();
 };
 
@@ -256,6 +264,17 @@ SessionMentorSchema.methods.completeSession = async function (
     followUpNotes,
   };
   this.endedAt = new Date();
+
+  // Cascade the completed status to the individual bookings
+  if (this.bookings && this.bookings.length > 0) {
+    this.bookings.forEach((b: any) => {
+      if (b.status === 'in_progress' || b.status === 'confirmed' || b.status === 'rescheduled') {
+        b.status = 'completed';
+      }
+    });
+    this.markModified('bookings');
+  }
+
   return await this.save();
 };
 

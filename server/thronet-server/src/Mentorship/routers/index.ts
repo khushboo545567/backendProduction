@@ -1,5 +1,5 @@
 // src/routes/index.ts
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import ReminderCron from '@/jobs/reminderCron';
 import mentorRoutes from './mentor.routes';
 import searchRoutes from './search.routes';
@@ -14,11 +14,12 @@ import reviewRoutes from './review.routes'; // ✅ PHASE 11
 import analyticsRoutes from './analytics.routes'; // ✅ PHASE 11
 import adminRoutes from './admin.routes'; // ✅ PHASE 11
 import notificationRoutes from './notification.routes'; // ✅ PHASE 11 - NEW
+import seniorMentorApplicationRoutes from './seniorMentorApplication.routes';
 
 const router = Router();
 
 // Health check
-router.get('/health', (_req, res) => {
+router.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'OK',
     service: 'Mentorship Service',
@@ -28,7 +29,7 @@ router.get('/health', (_req, res) => {
 });
 
 // ✅ TEST ROUTE - Manually trigger reminder cron job (REMOVE IN PRODUCTION)
-router.post('/test/trigger-reminders', async (_req, res) => {
+router.post('/test/trigger-reminders', async (_req: Request, res: Response) => {
   try {
     await ReminderCron.triggerManually();
     res.json({ 
@@ -58,5 +59,6 @@ router.use('/reviews', reviewRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/admin', adminRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/senior-mentor-applications', seniorMentorApplicationRoutes);
 
 export default router;

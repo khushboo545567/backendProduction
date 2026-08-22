@@ -25,6 +25,12 @@ interface CreateGroupSessionInput {
   pricePerPerson: number;
   agenda?: string;
   outcomes?: string[];
+  paymentMethod: string;
+  followUp?: {
+    allowed: boolean;
+    periodDays: number;
+  };
+  bufferTimeMinutes?: number;
 }
 
 class GroupService {
@@ -101,6 +107,16 @@ class GroupService {
           pricePerPerson: input.pricePerPerson,
           currency: 'INR',
           totalRevenue: 0,
+        },
+        payment: {
+          method: input.paymentMethod,
+        },
+        settings: {
+          followUp: {
+            allowed: input.followUp?.allowed || false,
+            periodDays: input.followUp?.periodDays || 0,
+          },
+          bufferTimeMinutes: input.bufferTimeMinutes || 0,
         },
         agenda: input.agenda,
         outcomes: input.outcomes,

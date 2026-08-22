@@ -12,6 +12,7 @@ import { User, UserProfile } from '@/shared/models/index.models';
 import { SessionMentor } from '../models';
 import { ConflictError } from '@/shared/errors/app.error';
 // import { redisClient } from '../../config/cache/redis.config';
+import { getRedisClient } from '@/services/redis.service';
 
 import waitlistCron from '@/jobs/waitlistCron';
 
@@ -56,7 +57,8 @@ class BookingService {
     const lockKey = `booking:lock:${input.mentorId}:${input.scheduledAt.getTime()}`;
     const lockValue = `${input.menteeId}-${Date.now()}`;
 
-    const acquired = await getRedisClient.set(lockKey, lockValue, 'NX', 'EX', 60);
+    const redisClient = await getRedisClient();
+    const acquired = await redisClient.set(lockKey, lockValue, 'NX', 'EX', 60);
     if (!acquired) {
       throw new ConflictError(
         'This slot is currently being booked by another user. Please try again in a moment.'
@@ -84,7 +86,8 @@ class BookingService {
           session._id.toString(),
           input.menteeId,
           'Video setup failed during booking',
-          authToken
+          authToken,
+          session.bookings[0]._id.toString()
         );
         throw new Error('Booking failed: Could not create video meeting. Please try again.');
       }
@@ -152,6 +155,7 @@ class BookingService {
     } finally {
       // ✅ FIX: Release lock only if this process acquired it (prevents releasing another process's lock)
       try {
+        const redisClient = await getRedisClient();
         const current = await redisClient.get(lockKey);
         if (current === lockValue) {
           await redisClient.del(lockKey);
@@ -233,7 +237,8 @@ class BookingService {
     sessionId: string,
     userId: string,
     reason: string,
-    authToken?: string
+    authToken: string | undefined,
+    bookingId: string
   ): Promise<any> {
     try {
       logger.info(`❌ Cancelling booking: ${sessionId}`);
@@ -318,7 +323,8 @@ class BookingService {
     userId: string,
     newScheduledAt: Date,
     reason: string,
-    authToken?: string
+    authToken: string | undefined,
+    bookingId: string
   ): Promise<any> {
     try {
       logger.info(`🔄 Rescheduling booking: ${sessionId}`);
@@ -335,7 +341,8 @@ class BookingService {
         userId,
         newScheduledAt,
         reason,
-        authToken
+        authToken,
+        bookingId
       );
 
       const actualMenteeId = updatedSession.menteeId || (updatedSession.bookings && updatedSession.bookings[0]?.menteeId);

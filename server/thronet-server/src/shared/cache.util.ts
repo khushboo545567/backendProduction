@@ -24,7 +24,7 @@
  * @version 3.3.0
  */
 
-import { createClient, RedisClientType } from 'redis';
+import { createClient, createCluster, RedisClientType, RedisClusterType } from 'redis';
 import { LoggerUtil } from './logger.util';
 
 // ==================== CONFIGURATION ====================
@@ -35,6 +35,8 @@ interface RedisConfig {
     password?: string;
     keyPrefix: string;
     connectionTimeout: number;
+    clusterMode: boolean;
+    clusterNodes: string[];
 }
 
 const redisConfig: RedisConfig = {
@@ -43,6 +45,10 @@ const redisConfig: RedisConfig = {
     password: process.env['REDIS_PASSWORD'] || undefined,
     keyPrefix: process.env['REDIS_KEY_PREFIX'] || 'auth:',
     connectionTimeout: 15000,
+    clusterMode: process.env['REDIS_CLUSTER_MODE'] === 'true',
+    clusterNodes: process.env['REDIS_CLUSTER_NODES'] 
+        ? process.env['REDIS_CLUSTER_NODES'].split(',') 
+        : [],
 };
 
 // ✅ NEW: max time any single Redis command is allowed to take before
@@ -54,7 +60,7 @@ const COMMAND_TIMEOUT_MS = parseInt(process.env['REDIS_COMMAND_TIMEOUT_MS'] || '
 
 // ==================== REDIS CLIENT ====================
 
-let redisClient: RedisClientType | null = null;
+let redisClient: RedisClientType | RedisClusterType | null = null;
 let isConnected: boolean = false;
 let useRedis: boolean = process.env['USE_REDIS'] !== 'false';
 let connectionAttempted: boolean = false;
@@ -74,8 +80,8 @@ const memoryCache: Map<string, CachedItem> = new Map();
  * waiting forever. Used to wrap every Redis command so a stale
  * connection can't hang a request indefinitely.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
+function withTimeout(promise: Promise<any>, ms: number, label: string): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
         const timer = setTimeout(() => {
             reject(new Error(`Redis command timed out after ${ms}ms: ${label}`));
         }, ms);
@@ -178,27 +184,46 @@ class CacheUtil {
             timeoutId = setTimeout(handleTimeout, redisConfig.connectionTimeout);
 
             try {
-                redisClient = createClient({
-                    socket: {
-                        host: redisConfig.host,
-                        port: redisConfig.port,
-                        connectTimeout: redisConfig.connectionTimeout,
-                        // ✅ NEW: keep the TCP connection alive so idle
-                        // connections don't get silently dropped by a
-                        // proxy/load balancer without either side
-                        // noticing (which is what leads to "looks
-                        // connected but every command hangs").
-                        keepAlive: 5000,
-                        reconnectStrategy: (retries: number): number | false => {
-                            if (retries > 3) {
-                                LoggerUtil.warn('Max Redis reconnection attempts reached');
-                                return false;
+                if (redisConfig.clusterMode) {
+                    redisClient = createCluster({
+                        rootNodes: redisConfig.clusterNodes.map(node => {
+                            const [host, port] = node.split(':');
+                            return {
+                                url: `redis://${redisConfig.password ? `:${redisConfig.password}@` : ''}${host}:${port}`
+                            };
+                        }),
+                        defaults: {
+                            socket: {
+                                connectTimeout: redisConfig.connectionTimeout,
+                                keepAlive: 5000 as any,
+                                reconnectStrategy: (retries: number): number | false => {
+                                    if (retries > 3) {
+                                        LoggerUtil.warn('Max Redis reconnection attempts reached');
+                                        return false;
+                                    }
+                                    return Math.min(retries * 100, 3000);
+                                },
                             }
-                            return Math.min(retries * 100, 3000);
+                        }
+                    });
+                } else {
+                    redisClient = createClient({
+                        socket: {
+                            host: redisConfig.host,
+                            port: redisConfig.port,
+                            connectTimeout: redisConfig.connectionTimeout,
+                            keepAlive: 5000 as any,
+                            reconnectStrategy: (retries: number): number | false => {
+                                if (retries > 3) {
+                                    LoggerUtil.warn('Max Redis reconnection attempts reached');
+                                    return false;
+                                }
+                                return Math.min(retries * 100, 3000);
+                            },
                         },
-                    },
-                    password: redisConfig.password,
-                });
+                        password: redisConfig.password,
+                    });
+                }
 
                 redisClient.on('error', (error: Error) => {
                     LoggerUtil.error('Redis client error', {
@@ -252,7 +277,20 @@ class CacheUtil {
                     isConnected = false;
                 });
 
-                redisClient.connect().catch((error: Error) => {
+                redisClient.connect().then(() => {
+                    if (!connected) {
+                        connected = true;
+                        isConnected = true;
+                        clearTimeout(timeoutId);
+
+                        LoggerUtil.info('✅ Redis cluster connected and ready', {
+                            host: redisConfig.host,
+                            port: redisConfig.port,
+                        });
+
+                        resolve(true);
+                    }
+                }).catch((error: Error) => {
                     if (!connected) {
                         clearTimeout(timeoutId);
                         LoggerUtil.error('Redis connection failed', {
@@ -284,7 +322,9 @@ class CacheUtil {
      * Check if Redis cluster is connected
      */
     static isConnected(): boolean {
-        return useRedis && isConnected && (redisClient?.isOpen ?? false);
+        // @ts-ignore
+        const isClientOpen = redisClient?.isOpen ?? (redisClient !== null);
+        return useRedis && isConnected && isClientOpen;
     }
 
     // ==================== HEALTH / PING ====================
@@ -712,21 +752,20 @@ class CacheUtil {
             const keys = Object.keys(keyValuePairs);
 
             if (this.isConnected()) {
-                const pipeline = redisClient!.multi();
-                keys.forEach(key => {
+                const promises = keys.map(key => {
                     const fullKey = `${redisConfig.keyPrefix}${key}`;
                     const value = typeof keyValuePairs[key] === 'string'
                         ? keyValuePairs[key]
                         : JSON.stringify(keyValuePairs[key]);
 
                     if (ttl > 0) {
-                        pipeline.setEx(fullKey, ttl, value);
+                        return (redisClient as RedisClientType).setEx(fullKey, ttl, value);
                     } else {
-                        pipeline.set(fullKey, value);
+                        return (redisClient as RedisClientType).set(fullKey, value);
                     }
                 });
 
-                await withTimeout(pipeline.exec(), COMMAND_TIMEOUT_MS, 'mset');
+                await withTimeout(Promise.all(promises), COMMAND_TIMEOUT_MS, 'mset');
                 LoggerUtil.debug('Cache mset (Redis)', { count: keys.length, ttl });
                 return true;
             } else {
@@ -768,7 +807,7 @@ class CacheUtil {
         if (!this.isConnected() || !redisClient) {
             throw new Error('Redis client not available - use CacheUtil methods instead');
         }
-        return redisClient;
+        return redisClient as RedisClientType;
     }
 
     // ==================== PIPELINE ====================
@@ -801,37 +840,34 @@ class CacheUtil {
             },
             exec: async () => {
                 if (CacheUtil.isConnected()) {
-                    const pipeline = redisClient!.multi();
-
-                    commands.forEach(cmd => {
+                    const promises = commands.map(cmd => {
                         const fullKey = `${redisConfig.keyPrefix}${cmd.args[0]}`;
+                        const client = redisClient as RedisClientType;
 
                         switch (cmd.method) {
                             case 'incr':
-                                pipeline.incr(fullKey);
-                                break;
+                                return client.incr(fullKey);
                             case 'get':
-                                pipeline.get(fullKey);
-                                break;
+                                return client.get(fullKey);
                             case 'del':
-                                pipeline.del(fullKey);
-                                break;
+                                return client.del(fullKey);
                             case 'set': {
                                 const value = typeof cmd.args[1] === 'string'
                                     ? cmd.args[1]
                                     : JSON.stringify(cmd.args[1]);
                                 const ttl = cmd.args[2];
                                 if (ttl && ttl > 0) {
-                                    pipeline.setEx(fullKey, ttl, value);
+                                    return client.setEx(fullKey, ttl, value);
                                 } else {
-                                    pipeline.set(fullKey, value);
+                                    return client.set(fullKey, value);
                                 }
-                                break;
                             }
+                            default:
+                                return Promise.resolve(null);
                         }
                     });
 
-                    return await withTimeout(pipeline.exec(), COMMAND_TIMEOUT_MS, 'pipeline');
+                    return await withTimeout(Promise.all(promises), COMMAND_TIMEOUT_MS, 'pipeline');
                 } else {
                     const results = [];
                     for (const cmd of commands) {
@@ -922,7 +958,7 @@ class CacheUtil {
         const keys: string[] = [];
 
         try {
-            let cursor = '0';
+            let cursor: any = '0';
             do {
                 const reply = await withTimeout(
                     redisClient!.scan(cursor, { MATCH: pattern, COUNT: 100 }),
@@ -931,7 +967,7 @@ class CacheUtil {
                 );
                 cursor = reply.cursor;
                 keys.push(...reply.keys);
-            } while (cursor !== '0');
+            } while (cursor !== '0' && cursor !== 0);
         } catch (error: unknown) {
             LoggerUtil.error('Scan failed', { error: (error as Error).message, pattern });
         }
@@ -1559,7 +1595,7 @@ class CacheUtil {
                     COMMAND_TIMEOUT_MS,
                     `lrange:${key}`
                 );
-                const parsed = items.map(item => {
+                const parsed = items.map((item: string) => {
                     try { return JSON.parse(item); } catch { return item; }
                 });
                 LoggerUtil.debug('List range retrieved (Redis)', { key, start, stop, count: parsed.length });
