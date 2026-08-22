@@ -21,6 +21,7 @@ import { Server } from 'http';
 import { LoggerUtil as logger } from './shared/logger.util';
 import { startAllWorkers, stopAllWorkers, getWorkerStats } from './Company/workersCompany';
 import CacheUtil from './shared/cache.util';
+import { connectDB, disconnectDB } from './database/connection';
 
 
 // ==================== CONSTANTS ====================
@@ -176,6 +177,9 @@ async function startWorkerProcess(): Promise<void> {
 
         await waitForRedis();
 
+        logger.info('Connecting to MongoDB');
+        await connectDB();
+
         logger.info('Initializing queue workers');
         startAllWorkers();
 
@@ -224,9 +228,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
             logger.info('Closing health server');
             await new Promise<void>((resolve) => healthServer!.close(() => resolve()));
         }
-
         logger.info('Closing Redis connection');
         await CacheUtil.shutdown();
+
+        logger.info('Closing MongoDB connection');
+        await disconnectDB();
 
         logger.info('Worker shutdown complete');
         process.exit(0);

@@ -20,9 +20,9 @@ import { databaseConfig } from '@/config/env/database';
 import { LoggerUtil as logger } from '@/shared/logger.util';
 
 // ==================== STATE ====================
-
 let isConnected         = false;
 let connectionAttempts  = 0;
+let listenersRegistered = false;
 
 const MAX_RETRY_ATTEMPTS = 5;
 const BASE_RETRY_DELAY   = 2_000; // ms
@@ -50,6 +50,13 @@ export async function connectDB(retryCount = 0): Promise<void> {
 
     connectionAttempts = retryCount + 1;
 
+        // Register listeners exactly once for the lifetime of the process —
+    // guarded by a flag, not retryCount, since scheduleReconnect() always
+    // calls connectDB() with retryCount=0 again on every reconnect cycle.
+    if (!listenersRegistered) {
+        setupConnectionListeners();
+        listenersRegistered = true;
+    }
     logger.info('Connecting to MongoDB', {
         attempt:  connectionAttempts,
         maxAttempts: MAX_RETRY_ATTEMPTS,
@@ -84,9 +91,7 @@ export async function connectDB(retryCount = 0): Promise<void> {
             pool:     `${databaseConfig.mongodb.options.minPoolSize ?? 5}–${databaseConfig.mongodb.options.maxPoolSize ?? 10}`,
         });
 
-        setupConnectionListeners();
-
-        // Sanitize existing company documents with incomplete/invalid GeoJSON Point coordinates
+               // Sanitize existing company documents with incomplete/invalid GeoJSON Point coordinates
         try {
             if (mongoose.connection.db) {
                 await mongoose.connection.db.collection('companies').updateMany(
@@ -129,25 +134,29 @@ export async function connectDB(retryCount = 0): Promise<void> {
             return connectDB(retryCount + 1);
         }
 
-        // All retries exhausted
-        logger.error('Failed to connect to MongoDB after all retries', {
-            attempts: MAX_RETRY_ATTEMPTS,
-            hints: [
-                'Verify MongoDB Atlas cluster is running',
-                'Check MONGODB_URI in .env',
-                'Ensure IP is whitelisted in Atlas',
-                'Confirm database user permissions',
-            ],
-        });
-
-        // In development: hard-exit immediately so the developer knows right away.
-        // In production: let the caller (app.ts initializeApp) decide — it will exit
-        //                after logging the failure to Kafka.
-        if (process.env['NODE_ENV'] !== 'production') {
-            process.exit(1);
-        }
-
-        throw err; // re-throw so initializeApp catch block can handle it
+                // All retries exhausted
+                logger.error('Failed to connect to MongoDB after all retries', {
+                    attempts: MAX_RETRY_ATTEMPTS,
+                    hints: [
+                        'Verify MongoDB Atlas cluster is running',
+                        'Check MONGODB_URI in .env',
+                        'Ensure IP is whitelisted in Atlas',
+                        'Confirm database user permissions',
+                    ],
+                });
+        
+                // In development: hard-exit immediately so the developer knows right away.
+                // In production: let the caller decide whether to exit — but ALSO keep
+                // trying in the background, in case the caller swallows this error
+                // instead of exiting. Without this, a permanently failed first
+                // connection means the app never tries again for its whole lifetime.
+                if (process.env['NODE_ENV'] !== 'production') {
+                    process.exit(1);
+                }
+        
+                scheduleReconnect(0);
+        
+                throw err; // re-throw so the caller can still choose to exit
     }
 }
 
@@ -177,13 +186,21 @@ function setupConnectionListeners(): void {
 }
 
 let reconnectAttempt = 0;
+let reconnectScheduled = false;
 
 function scheduleReconnect(attempt: number): void {
+    // Prevent overlapping reconnect loops — mongoose can emit 'disconnected'
+    // even during connectDB()'s own manual retry sequence, which would
+    // otherwise trigger a second, parallel reconnect timer.
+    if (reconnectScheduled) return;
+    reconnectScheduled = true;
+
     const delay = Math.min(5_000 * Math.pow(2, attempt), 60_000); // cap at 60s
 
     logger.info('Scheduling MongoDB reconnect', { delay: `${delay / 1_000}s`, attempt });
 
     setTimeout(() => {
+        reconnectScheduled = false;
         reconnectAttempt = attempt + 1;
         connectDB().catch((err: Error) => {
             logger.error('Auto-reconnect failed', { error: err.message });
@@ -191,7 +208,6 @@ function scheduleReconnect(attempt: number): void {
         });
     }, delay);
 }
-
 // ==================== DISCONNECT ====================
 
 export async function disconnectDB(): Promise<void> {
