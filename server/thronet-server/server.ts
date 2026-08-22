@@ -3,9 +3,15 @@
  * server.ts
  * thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
- * ./version 4.0.2
+ * ./version 4.0.1-debug
  *
- * ✅ FIX (this version):
+ * 🟢 DEBUG (temporary):
+ *    - Added console.log tracing at 3 key points to find exactly where
+ *      startup is hanging on Railway (imports never finishing, or
+ *      initializeApp() being called but its first line never printing).
+ *      Remove these console.log lines once the root cause is confirmed.
+ *
+ * ✅ FIX (previous version):
  *    - DNS override (dns.setServers) is now restricted to NON-production
  *      environments only. It was previously running unconditionally,
  *      which broke mongodb+srv:// SRV record resolution on Railway —
@@ -57,6 +63,10 @@ import { initializeSocketIO } from './src/socket';
 // client (e.g. node-redis createCluster / ioredis Cluster mode).
 // import AuditConsumer from './src/shared/kafka/producers/audit.consumer';
 
+// 🟢 DEBUG: confirms every top-level import above has finished executing
+// (including any module-level side effects like DB clients, config loaders, etc.)
+console.log('🟢 DEBUG: imports finished, reached top-level code');
+
 const logger = LoggerUtil;
 
 interface AppLocals {
@@ -66,6 +76,9 @@ interface AppLocals {
 // ==================== INITIALIZE ====================
 
 async function initializeApp(): Promise<void> {
+    // 🟢 DEBUG: confirms the function body itself started executing
+    // (i.e. the call below actually invoked this function)
+    console.log('🟢 DEBUG: initializeApp() function body started');
     try {
         logger.info('Starting application initialization', {
             nodeEnv: process.env['NODE_ENV'],
@@ -141,6 +154,9 @@ async function initializeApp(): Promise<void> {
         logger.info('Application initialization complete');
 
     } catch (error: any) {
+        // 🟢 DEBUG: raw console.error as a backup in case the winston logger
+        // itself is the thing silently swallowing output in this environment
+        console.error('🔴 DEBUG: initializeApp() caught an error:', error?.message, error?.stack);
         logger.error('Application initialization failed', {
             error: (error as Error).message,
             stack: (error as Error).stack,
@@ -192,6 +208,8 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason) => {
+    // 🟢 DEBUG: raw console output in case this is firing silently
+    console.error('🔴 DEBUG: unhandledRejection fired:', reason);
     if ((reason as any)?.message?.includes('schemas/ids')) {
         logger.warn('Schema validation error ignored (OpenTelemetry)');
         return;
@@ -203,6 +221,8 @@ process.on('unhandledRejection', (reason) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
+    // 🟢 DEBUG: raw console output in case this is firing silently
+    console.error('🔴 DEBUG: uncaughtException fired:', error?.message, error?.stack);
     logger.error('Uncaught exception in server file', {
         error: error.message,
         stack: error.stack,
@@ -215,4 +235,6 @@ process.on('uncaughtException', (error: Error) => {
 });
 
 // ==================== START ====================
+// 🟢 DEBUG: confirms we actually reach the call site, immediately before invoking it
+console.log('🟢 DEBUG: about to call initializeApp()');
 initializeApp();
