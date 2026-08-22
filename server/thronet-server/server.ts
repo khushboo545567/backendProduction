@@ -3,18 +3,33 @@
  * server.ts
  * thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
- * ./version 4.0.1
+ * ./version 4.0.2
+ *
+ * ✅ FIX (this version):
+ *    - DNS override (dns.setServers) is now restricted to NON-production
+ *      environments only. It was previously running unconditionally,
+ *      which broke mongodb+srv:// SRV record resolution on Railway —
+ *      Railway's container network doesn't allow direct external DNS
+ *      queries the way local Windows dev environments do. This caused
+ *      MongoDB connection to hang/fail on every Railway deploy, which
+ *      cascaded into: fallback to localhost Mongo (also fails on
+ *      Railway) -> process.exit(1) -> Railway restarts container ->
+ *      infinite crash loop -> all API requests (login, etc.) timing out.
  */
 
 import dns from 'dns';
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Fix for Node on Windows DNS resolving MongoDB Atlas SRV records
-try {
-    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-} catch {
-    // ignore if not permitted
+// Fix for Node on Windows DNS resolving MongoDB Atlas SRV records.
+// ⚠️ ONLY apply this in local/dev — on Railway (or any Linux container
+// production environment) this can break SRV DNS resolution entirely.
+if (process.env['NODE_ENV'] !== 'production') {
+    try {
+        dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+    } catch {
+        // ignore if not permitted
+    }
 }
 
 if (process.env['NODE_ENV'] !== 'production') {
