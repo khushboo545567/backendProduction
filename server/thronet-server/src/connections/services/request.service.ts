@@ -3,7 +3,7 @@
 import { Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import logger, { LogCategory } from '@/shared/logger.util';
-import { Connection, ConnectionRequest, } from '../models/index';
+import { Connection, ConnectionRequest, Follow } from '../models/index';
 import { IConnectionRequest } from '@/connections/models/ConnectionRequest';
 import { User } from '@/shared/models/index.models';
 import { ErrorResponse } from '@/shared/response.util';
@@ -300,6 +300,48 @@ try {
       shardKey: connectionShardKey,
       metadata: { createdFromRequest: requestId },
     });
+
+    // ✅ NEW — Connection accept hote hi dono directions me Follow bhi create karo,
+    // taaki followers/following counts (jo profile pe dikhte hai) turant sync ho jaayein.
+    try {
+      await Promise.all([
+        Follow.findOneAndUpdate(
+          { followerId: request.fromUserId, followingId: request.toUserId },
+          {
+            $set: { status: 'active', isBlocked: false, updatedAt: new Date() },
+            $setOnInsert: {
+              followerId: request.fromUserId,
+              followingId: request.toUserId,
+              createdAt: new Date(),
+              notificationEnabled: true,
+            },
+          },
+          { upsert: true, new: true }
+        ),
+        Follow.findOneAndUpdate(
+          { followerId: request.toUserId, followingId: request.fromUserId },
+          {
+            $set: { status: 'active', isBlocked: false, updatedAt: new Date() },
+            $setOnInsert: {
+              followerId: request.toUserId,
+              followingId: request.fromUserId,
+              createdAt: new Date(),
+              notificationEnabled: true,
+            },
+          },
+          { upsert: true, new: true }
+        ),
+      ]);
+    } catch (followError) {
+      logger.error('Failed to create mutual follow relationship after connection accept (non-critical)', {
+        category: LogCategory.CONNECTION,
+        data: {
+          error: followError instanceof Error ? followError.message : 'Unknown error',
+          fromUserId: request.fromUserId,
+          toUserId: request.toUserId,
+        },
+      });
+    }
 
     // ✅ EMIT SOCKET EVENT
     try {
@@ -778,6 +820,46 @@ try {
     );
 
     await ConnectionRequest.bulkUpdateStatus(authorizedIds, 'accepted', userId);
+
+    // ✅ NEW — bulk accept ke case me bhi har accepted request ke liye
+    // mutual Follow relationship create karo
+    try {
+      await Promise.all(
+        authorizedRequests.flatMap((request) => [
+          Follow.findOneAndUpdate(
+            { followerId: request.fromUserId, followingId: request.toUserId },
+            {
+              $set: { status: 'active', isBlocked: false, updatedAt: new Date() },
+              $setOnInsert: {
+                followerId: request.fromUserId,
+                followingId: request.toUserId,
+                createdAt: new Date(),
+                notificationEnabled: true,
+              },
+            },
+            { upsert: true, new: true }
+          ),
+          Follow.findOneAndUpdate(
+            { followerId: request.toUserId, followingId: request.fromUserId },
+            {
+              $set: { status: 'active', isBlocked: false, updatedAt: new Date() },
+              $setOnInsert: {
+                followerId: request.toUserId,
+                followingId: request.fromUserId,
+                createdAt: new Date(),
+                notificationEnabled: true,
+              },
+            },
+            { upsert: true, new: true }
+          ),
+        ])
+      );
+    } catch (followError) {
+      logger.error('Failed to create mutual follow relationships after bulk accept (non-critical)', {
+        category: LogCategory.CONNECTION,
+        data: { error: followError instanceof Error ? followError.message : 'Unknown error' },
+      });
+    }
 
     Promise.all([
       ...authorizedIds.map((id) => connectionRequestService.manageRequestCaching(id, 'delete')),

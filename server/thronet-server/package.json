@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon",
-    "build": "tsc && tsc-alias",
+    "build": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc && tsc-alias",
     "start": "node dist/server.js"
   },
   "nodemonConfig": {
