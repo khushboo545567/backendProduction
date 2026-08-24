@@ -254,6 +254,16 @@ try {
       });
     });
 
+    // ✅ Invalidate feed cache for both users so home feed reflects pending status immediately
+    try {
+      await Promise.all([
+        redisService.deleteByPattern(`feed:v1:${fromUserId}:*`),
+        redisService.deleteByPattern(`feed:v1:${toUserId}:*`),
+      ]);
+    } catch (cacheErr) {
+      logger.warn('Failed to clear feed cache after connection request', cacheErr);
+    }
+
     return request;
   }
 
