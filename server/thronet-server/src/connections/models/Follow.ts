@@ -1,4 +1,4 @@
-// src/models/mongodb/Follow.ts
+// src/connections/models/Follow.ts
 
 import { Schema, model, Document, Types } from 'mongoose';
 // import { FollowStatus } from '../../types/follow.type';

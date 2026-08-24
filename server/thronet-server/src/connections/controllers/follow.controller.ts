@@ -1,4 +1,4 @@
-// src/controllers/followController.ts
+// src/connections/controllers/followController.ts
 
 import { Request, Response, NextFunction } from 'express';
 import logger, { LogCategory } from '@/shared/logger.util';
