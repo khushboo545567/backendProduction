@@ -343,56 +343,7 @@ class GroupService {
     }
   }
 
-  /**
-   * Update group session (mentor only)
-   */
-  async updateGroupSession(
-    sessionId: string,
-    mentorId: string,
-    updates: any,
-    authToken?: string
-  ): Promise<any> {
-    try {
-      const session = await this.getGroupSessionById(sessionId, authToken);
-
-      const mentor = await mentorRepository.findByUserId(mentorId); // mentorId param actually userId hai
-      if (!mentor) throw new ForbiddenError('Mentor profile not found');
-
-      if (session.mentorId !== mentor.mentorId) {
-        throw new ForbiddenError(
-          'Only the mentor can update this session',
-
-        );
-      }
-
-      // Allow only certain fields to be updated
-      const allowedUpdates = [
-        'title',
-        'description',
-        'agenda',
-        'outcomes',
-        'resources',
-      ];
-
-      Object.keys(updates).forEach((key) => {
-        if (allowedUpdates.includes(key)) {
-          (session as any)[key] = updates[key];
-        }
-      });
-
-      // await session.save();
-
-      logger.info(`Group session updated: ${sessionId}`);
-
-      return await groupRepository.updateBySessionId(sessionId, updates);
-
-
-      // return session;
-    } catch (error: any) {
-      logger.error(`Failed to update group session:${error}`);
-      throw error;
-    }
-  }
+  // NOTE: updateGroupSession is implemented below with full file upload + partial update support.
 
   /**
    * Start group session (mentor only)

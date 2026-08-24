@@ -1,6 +1,7 @@
 import mentorService from './mentor.service';
 import { SESSION_DURATIONS, SessionType } from '@/shared/constants/sessionTypes';
 import { PaymentMethod, PaymentStatus, ISessionMentor } from '@/Mentorship/interface/session.types';
+import { Types } from 'mongoose';
 import { Availability, Mentor, SessionMentor } from '../models';
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
@@ -292,9 +293,19 @@ class MentorshipSessionService {
    */
   async bookSession(input: any, authToken?: string): Promise<any> {
     try {
+      console.log('>>> [SERVICE] bookSession started with input:', JSON.stringify(input, null, 2));
       logger.info(`Booking session: ${input.sessionId} by mentee: ${input.menteeId}`);
 
-      const session = await SessionMentor.findOne({ sessionId: input.sessionId });
+      let query: any = { sessionId: input.sessionId };
+      if (Types.ObjectId.isValid(input.sessionId)) {
+        query = { 
+          $or: [
+            { sessionId: input.sessionId },
+            { _id: new Types.ObjectId(input.sessionId) }
+          ]
+        };
+      }
+      const session = await SessionMentor.findOne(query);
       if (!session) throw new NotFoundError('Session not found');
 
       // OLD IMPLEMENTATION (Reference)
@@ -399,6 +410,7 @@ class MentorshipSessionService {
         totalBookings: session.bookings.length,
       };
     } catch (error: any) {
+      console.log('>>> [SERVICE] ERROR in bookSession:', error);
       logger.error(`Failed to book session: ${error.message}`);
       throw error;
     }
@@ -1099,9 +1111,11 @@ Only produce the final architectural plan with the smallest possible implementat
         throw new BadRequestError('Booking not found');
       }
 
-      const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
+      // Use the specific booking's start time for the 24-hour check
+      const existingStartTime = booking.scheduledAt || session.scheduledAt;
+      const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
       if (hoursDiff < 24) {
-        throw new BadRequestError('Cannot reschedule within 24 hours of session');
+        throw new BadRequestError('Cannot reschedule less than 24 hours before start time');
       }
 
       if (newScheduledAt <= new Date()) {

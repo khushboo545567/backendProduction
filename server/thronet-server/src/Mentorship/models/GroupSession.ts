@@ -2,7 +2,6 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { PaymentMethod } from '@/Mentorship/interface/session.types';
 
 export interface IParticipant {
-  sessionId: string;
   menteeId: string;             
   registeredAt: Date;
   paymentStatus: 'pending' | 'completed' | 'failed' | 'refunded';
@@ -22,6 +21,7 @@ export interface IGroupSession {
   mentorId: string;
   title: string;
   description: string;
+  thumbnailImage?: string;
   topic: string;
   category?: string;
   scheduledAt: Date;
@@ -88,6 +88,7 @@ export interface IGroupSession {
 }
 
 export interface GroupSessionDocument extends Omit<IGroupSession, '_id'>, Document {
+  id?: string;
   isFull: boolean;
   hasMinParticipants: boolean;
   spotsRemaining: number;
@@ -105,10 +106,6 @@ export interface GroupSessionDocument extends Omit<IGroupSession, '_id'>, Docume
 const ParticipantSchema = new Schema<IParticipant>(
   {
     // ADD after opening of GroupSessionSchema fields
-    sessionId: {
-      type: String,
-      required: true,
-    },
     menteeId: { type: String, required: true },
     registeredAt: { type: Date, default: Date.now },
     paymentStatus: {

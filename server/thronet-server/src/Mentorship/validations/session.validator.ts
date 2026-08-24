@@ -159,6 +159,9 @@ class SessionValidator {
         'string.max': 'Reason cannot exceed 500 characters',
         'any.required': 'Cancellation reason is required',
       }),
+    bookingId: Joi.string().required().messages({
+      'any.required': 'bookingId is required to cancel a booking',
+    }),
   });
 
   /**
@@ -184,6 +187,10 @@ class SessionValidator {
         'string.min': 'Reason must be at least 3 characters',
         'string.max': 'Reason cannot exceed 500 characters',
       }),
+      
+    bookingId: Joi.string().required().messages({
+      'any.required': 'bookingId is required to reschedule a booking',
+    }),
   });
 
   /**

@@ -420,16 +420,19 @@ class SessionController {
         return;
       }
 
+      // 1. Identify the true scheduledAt to compare against the 24h baseline.
+      // If it's a specific booking, validate against the booking's start time instead of the overall parent session's start time.
+      let existingStartTime = session.scheduledAt;
+      if (bookingId && session.bookings && session.bookings.length > 0) {
+        const targetBooking = session.bookings.find((b: any) => b._id.toString() === bookingId);
+        if (targetBooking && targetBooking.scheduledAt) {
+          existingStartTime = targetBooking.scheduledAt;
+        }
+      }
+
+      const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
       
-
-      // if (session.menteeId !== userId && session.mentorId !== userId) {
-      //   ResponseHandler.forbidden(res, 'You do not have permission to reschedule this session');
-      //   return;
-      // }
-
-      // Permission check deferred to underlying service
-
-      const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
+      // LOGIC: The business rule prevents a user from rescheduling a meeting if the CURRENT EXISTNG start time is within 24 hours, or if it already passed.
       if (hoursDiff < 24) {
         ResponseHandler.badRequest(res, 'Cannot reschedule less than 24 hours before start time');
         return;
