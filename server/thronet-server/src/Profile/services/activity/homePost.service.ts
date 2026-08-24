@@ -267,16 +267,26 @@ class HomePostService {
                 };
             }
 
-            LoggerUtil.info('Home post created successfully', { entryId, userId, correlationId });
+             LoggerUtil.info('Home post created successfully', { entryId, userId, correlationId });
 
+            // ✅ FIX: userId, likesCount, commentsCount, likedBy explicitly add kiye.
+            // Pehle ye missing the, isliye jab frontend is response ko turant feed
+            // mein prepend karta tha, author identify nahi ho pata tha aur post
+            // "Unknown User" ke naam se dikhti thi ya prepend hi silently fail ho
+            // jaata tha.
             return {
                 success: true,
                 entryId: savedEntry.entryId,
+                userId,
                 title: savedEntry.title,
                 content: savedEntry.content,
                 mood: savedEntry.mood,
                 isPublic: savedEntry.isPublic,
                 postUrl: savedEntry.postUrl,
+                likesCount: savedEntry.likesCount || 0,
+                commentsCount: savedEntry.commentsCount || 0,
+                likedBy: savedEntry.likedBy || [],
+                isLikedByCurrentUser: false,
                 ...(savedEntry.images?.length > 0 && { images: savedEntry.images }),
                 ...(savedEntry.videos?.length > 0 && { videos: savedEntry.videos }),
                 ...(savedEntry.documents?.length > 0 && { documents: savedEntry.documents }),
