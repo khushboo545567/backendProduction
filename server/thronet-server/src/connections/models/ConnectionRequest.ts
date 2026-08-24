@@ -1,4 +1,4 @@
-﻿// src/connections/models/ConnectionRequest.ts
+// src/connections/models/ConnectionRequest.ts
 
 import { Schema, model, Document, Model, Types, Query, QueryOptions } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
@@ -93,9 +93,9 @@ const ConnectionRequestSchema: Schema<IConnectionRequest> = new Schema<IConnecti
       required: [true, 'From user ID is required'],
       validate: {
         validator: function (v: string) {
-          return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+          return typeof v === 'string' && v.trim().length > 0;
         },
-        message: 'Invalid fromUserId UUID format'
+        message: 'Invalid fromUserId'
       }
     },
     toUserId: {
@@ -103,9 +103,9 @@ const ConnectionRequestSchema: Schema<IConnectionRequest> = new Schema<IConnecti
       required: [true, 'To user ID is required'],
       validate: {
         validator: function (v: string) {
-          return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+          return typeof v === 'string' && v.trim().length > 0;
         },
-        message: 'Invalid toUserId UUID format'
+        message: 'Invalid toUserId'
       }
     },
     message: {
