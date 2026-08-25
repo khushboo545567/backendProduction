@@ -1179,6 +1179,52 @@ static async getPostAnalytics(
             return;
         }
     }
+
+    /**
+     * ✅ RECORD POST SEND
+     * POST /api/v1/profile/activity/posts/:postId/record-send
+     */
+    static async recordSend(
+        req: Request<{ postId: string }> & { user?: UserPayload },
+        res: Response
+    ): Promise<void> {
+        const correlationId = (req as any).correlationId || uuidv4();
+
+        try {
+            if (!req.user?.userId) {
+                ResponseUtil.unauthorized(res, 'Authentication required');
+                return;
+            }
+
+            const entryId = req.params.postId;
+            const userId = req.user.userId;
+            const { recipientCount } = req.body;
+
+            if (!entryId) {
+                ResponseUtil.badRequest(res, 'Post ID is required');
+                return;
+            }
+
+            const result = await PostService.recordSend(entryId, userId, recipientCount || 1);
+
+            ResponseUtil.success(res, result, 'Post send recorded successfully');
+            return;
+
+        } catch (error: any) {
+            LoggerUtil.error('Record post send failed', {
+                error: error.message,
+                entryId: req.params.postId,
+                correlationId,
+            });
+
+            if (error.message === 'Post not found') {
+                ResponseUtil.notFound(res, 'Post not found');
+                return;
+            }
+            ResponseUtil.internalError(res, error.message, error);
+            return;
+        }
+    }
 }
 
 export default PostController;

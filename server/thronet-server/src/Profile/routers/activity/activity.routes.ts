@@ -68,6 +68,11 @@ router.get(
      AuthMiddleware.authenticate as any, 
      PostController.getPostReactors as any
     );
+router.post(
+    '/posts/:postId/record-send',
+    AuthMiddleware.authenticate as any,
+    PostController.recordSend as any
+);
 /**
  * @route   GET /api/v1/activity/posts/:postId/analytics
  * @desc    Get detailed post analytics
