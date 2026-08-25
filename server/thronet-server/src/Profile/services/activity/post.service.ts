@@ -7,6 +7,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import mongoose from 'mongoose';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 import sharp from 'sharp';
 import Constants from '@/shared/constants.util';
@@ -1433,17 +1434,24 @@ class PostService {
             throw error;
         }
     }
-
     static async getPostReactors(entryId: string): Promise<any> {
         const correlationId = uuidv4();
 
         try {
-            const doc = await Post.findOne({ 'posts.entryId': entryId }).lean();
+            const isObjectId = mongoose.Types.ObjectId.isValid(entryId);
+            const doc = await Post.findOne({
+                $or: [
+                    { 'posts.entryId': entryId },
+                    { 'posts.postId': entryId },
+                    { postId: entryId },
+                    ...(isObjectId ? [{ _id: entryId }] : []),
+                ]
+            }).lean();
             if (!doc) throw new Error('Post not found');
 
-            const entry = (doc as any).posts.find(
-                (p: any) => p.entryId === entryId && !p.isDeleted
-            );
+            const entry = (doc as any).posts?.find(
+                (p: any) => (p.entryId === entryId || p.postId === entryId || (isObjectId && String(p._id) === entryId)) && !p.isDeleted
+            ) || (doc as any).posts?.[0];
             if (!entry) throw new Error('Post not found');
 
             const reactions = entry.reactions || [];

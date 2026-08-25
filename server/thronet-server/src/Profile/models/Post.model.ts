@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Post Model - Activity System
  * @module models/Post.model
  * @version 1.2.0 (added repostsCount/sendsCount + incrementSendsCount static)
@@ -369,6 +369,7 @@ const PostSchema = new Schema<IPost, IPostModel>(
     {
         timestamps: true,
         collection: 'posts',
+        versionKey: false,
     }
 );
 
