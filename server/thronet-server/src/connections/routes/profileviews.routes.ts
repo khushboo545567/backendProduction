@@ -11,6 +11,7 @@ import {
     createQuerySchema, 
     validateRequest 
 } from '@/shared/middlewares/connections/validations.middleware';
+import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 
 const router: Router = Router();
 
@@ -58,16 +59,12 @@ const RATE_LIMITS = {
     BATCH_OPS: 5,
 } as const;
 
-// ==================== MONGODB OBJECTID VALIDATION ====================
-// Helper function for MongoDB ObjectId validation
-const mongoObjectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid MongoDB ObjectId format');
-
 // ==================== ZOD SCHEMAS ====================
 // Define Zod schemas for type-safe validation (recommended for new endpoints)
 
 // Schema for recording profile views - FIXED for MongoDB ObjectIds
 const recordProfileViewSchema = z.object({
-    viewedUserId: mongoObjectId,
+    viewedUserId: z.string(),
     metadata: z.object({
         source: z.enum(['profile', 'search', 'suggestion', 'connection']).optional(),
         deviceType: z.enum(['mobile', 'desktop', 'tablet']).optional(),
@@ -113,7 +110,7 @@ const exportQuerySchema = z.object({
 const deleteHistoryQuerySchema = z.object({
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
-    viewerIds: z.array(mongoObjectId).optional(),
+    viewerIds: z.array(z.string()).optional(),
     confirmDelete: z.string()
         .transform((val) => val === 'true')
         .refine(val => val === true, {
@@ -149,7 +146,7 @@ router.get(
  */
 router.post(
     '/record',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(recordProfileViewSchema, 'body'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.RECORD_VIEW, storePrefix: 'record_view_' }),
     (req: Request, res: Response) => ProfileViewController.recordProfileView(req as any, res)
@@ -164,7 +161,7 @@ router.post(
  */
 router.get(
     '/viewers',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     // Option 1: Use Zod schema for better type safety
     validateRequest(createProfileViewQuerySchema(), 'query'),
     // Option 2: Fallback to existing ValidationChain for backward compatibility
@@ -180,7 +177,7 @@ router.get(
  */
 router.get(
     '/count',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(createQuerySchema(), 'query'),
     // Alternative: Use existing validator for backward compatibility
     validateRequest(profileViewValidators.getProfileViewCount, 'query'),
@@ -195,7 +192,7 @@ router.get(
  */
 router.get(
     '/analytics',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(analyticsQuerySchema, 'query'),
     // Alternative: Use existing validator
     validateRequest(profileViewValidators.getProfileViewAnalytics, 'query'),
@@ -210,7 +207,7 @@ router.get(
  */
 router.put(
     '/privacy',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(profileViewPrivacySchema, 'body'),
     // Alternative: Use existing validator
     // validateRequest(profileViewValidators.setProfileViewPrivacy, 'body'),
@@ -225,7 +222,7 @@ router.put(
  */
 router.delete(
     '/history',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(deleteHistoryQuerySchema, 'query'),
     // Alternative: Use existing validator
     // validateRequest(profileViewValidators.deleteProfileViewHistory, 'query'),
@@ -240,7 +237,7 @@ router.delete(
  */
 router.get(
     '/insights',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(analyticsQuerySchema, 'query'),
     // Alternative: Use existing validator
     validateRequest(profileViewValidators.getProfileViewInsights, 'query'),
@@ -255,7 +252,7 @@ router.get(
  */
 router.get(
     '/export',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(exportQuerySchema, 'query'),
     // Alternative: Use existing validator
     validateRequest(profileViewValidators.exportProfileViewData, 'query'),
@@ -270,7 +267,7 @@ router.get(
  */
 router.post(
     '/batch',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(batchOperationsSchema, 'body'),
     // Alternative: Use existing validator
     // validateRequest(profileViewValidators.batchOperations, 'body'),
@@ -284,7 +281,7 @@ router.post(
  */
 router.get(
     '/viewers-legacy',
-    // authMiddleware.authenticateJWT,
+    AuthMiddleware.authenticate as any,
     validateRequest(profileViewValidators.getWhoViewedProfile, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.GET_VIEWERS, storePrefix: 'get_viewers_legacy_' }),
     (req: Request, res: Response) => ProfileViewController.getWhoViewedProfile(req as any, res)

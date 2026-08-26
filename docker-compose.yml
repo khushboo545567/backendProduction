@@ -1,5 +1,5 @@
 services:
-
+ 
   redis-node-1:
     image: redis:7.2-alpine
     container_name: redis-node-1
@@ -39,8 +39,9 @@ services:
       app-network:
         aliases:
           - redis-node-1
+        ipv4_address: 172.30.0.11
     restart: unless-stopped
-
+ 
   redis-node-2:
     image: redis:7.2-alpine
     container_name: redis-node-2
@@ -80,8 +81,9 @@ services:
       app-network:
         aliases:
           - redis-node-2
+        ipv4_address: 172.30.0.12
     restart: unless-stopped
-
+ 
   redis-node-3:
     image: redis:7.2-alpine
     container_name: redis-node-3
@@ -121,8 +123,9 @@ services:
       app-network:
         aliases:
           - redis-node-3
+        ipv4_address: 172.30.0.13
     restart: unless-stopped
-
+ 
   redis-cluster-init:
     image: redis:7.2-alpine
     container_name: redis-cluster-init
@@ -134,7 +137,7 @@ services:
       - |
         echo "Waiting for Redis nodes to be ready..."
         sleep 10
-
+ 
         for i in 1 2 3 4 5; do
           if redis-cli -h redis-node-1 -p 7001 --no-auth-warning ping && \
              redis-cli -h redis-node-2 -p 7002 --no-auth-warning ping && \
@@ -145,13 +148,19 @@ services:
           echo "Attempt $$i: Waiting for nodes..."
           sleep 5
         done
-
+ 
         if redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster info 2>/dev/null | grep -q "cluster_state:ok"; then
           echo "Redis cluster already exists and is healthy"
           redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster nodes
           exit 0
         fi
-
+ 
+        echo "Cluster not healthy - resetting all nodes before recreating..."
+        redis-cli -h redis-node-1 -p 7001 --no-auth-warning cluster reset hard || true
+        redis-cli -h redis-node-2 -p 7002 --no-auth-warning cluster reset hard || true
+        redis-cli -h redis-node-3 -p 7003 --no-auth-warning cluster reset hard || true
+        sleep 2
+ 
         echo "Creating Redis 3-node cluster..."
         redis-cli --no-auth-warning --cluster create \
           redis-node-1:7001 \
@@ -159,7 +168,7 @@ services:
           redis-node-3:7003 \
           --cluster-replicas 0 \
           --cluster-yes
-
+ 
         if [ $? -eq 0 ]; then
           echo "Redis cluster created successfully"
           sleep 3
@@ -181,7 +190,7 @@ services:
     networks:
       - app-network
     restart: "no"
-
+ 
   thronet-server:
     build:
       context: ./server/thronet-server
@@ -191,31 +200,31 @@ services:
       - "4000:4000"
     env_file:
       - .env.production
-
+ 
     depends_on:
       redis-cluster-init:
         condition: service_completed_successfully
-
+ 
     volumes:
       - ./server/thronet-server/src:/app/src:ro
       - ./server/thronet-server/server.ts:/app/server.ts:ro
       - server_logs:/app/logs
       - /app/node_modules
-
+ 
     command: ["npx", "tsx", "server.ts"]
-
+ 
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:4000/api/v1/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
-
+ 
     networks:
       - app-network
-
+ 
     restart: unless-stopped
-
+ 
     deploy:
       resources:
         limits:
@@ -224,13 +233,13 @@ services:
         reservations:
           memory: 512M
           cpus: "0.5"
-
+ 
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "3"
-
+ 
   nginx:
     image: nginx:alpine
     container_name: nginx-gateway
@@ -252,7 +261,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
+ 
 networks:
   app-network:
     driver: bridge
@@ -260,7 +269,7 @@ networks:
       config:
         - subnet: 172.30.0.0/16
           gateway: 172.30.0.1
-
+ 
 volumes:
   redis-1-data:
     driver: local
