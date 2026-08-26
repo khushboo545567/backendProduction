@@ -129,28 +129,16 @@ class FollowService {
         followingId
       });
 
-      const existingFollow = await Follow.findOne({
-        followerId,
-        followingId
-      }).lean();
-
-      if (!existingFollow) {
-        throw new ErrorResponse('Follow relationship not found', HttpStatus.NOT_FOUND, ERROR_CODES.CONNECTION_NOT_FOUND);
-      }
-
       const result = await Follow.deleteOne({
         followerId,
         followingId
       });
 
-      if (result.deletedCount === 0) {
-        throw new ErrorResponse('Follow relationship not found', HttpStatus.NOT_FOUND, ERROR_CODES.CONNECTION_NOT_FOUND);
-      }
-
-      logger.info('User unfollowed successfully', {
+      logger.info('User unfollowed operation completed', {
         category: LogCategory.FOLLOW,
         followerId,
-        followingId
+        followingId,
+        deletedCount: result.deletedCount
       });
 
     } catch (error: any) {

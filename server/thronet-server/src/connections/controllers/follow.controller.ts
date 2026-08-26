@@ -159,7 +159,7 @@ res.status(HttpStatus.CREATED).json(
    */
   async unfollowUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.userId || (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id || (req as any).user?._id;
       const { userId: followingId } = req.params;
 
       if (!followerId) {
@@ -181,29 +181,28 @@ res.status(HttpStatus.CREATED).json(
         followingId
       });
 
-      if (result.deletedCount === 0) {
-        return next(new ErrorResponse('Follow relationship not found', HttpStatus.NOT_FOUND, ERROR_CODES.CONNECTION_NOT_FOUND));
-      }
-
-      logger.info('User unfollowed successfully', {
+      logger.info('User unfollowed operation completed', {
         category: LogCategory.FOLLOW,
         followerId,
-        followingId
+        followingId,
+        deletedCount: result.deletedCount
       });
 
-      // ✅ Emit real-time unfollow event to the unfollowed user
-try {
-  const io = getIO();
-  emitUnfollowReceived(io, followingId, {
-      followerId,
-      timestamp: new Date().toISOString()
-  });
-} catch (socketError) {
-  logger.error('Failed to emit unfollow event', {
-      category: LogCategory.FOLLOW,
-      error: socketError instanceof Error ? socketError.message : 'Unknown error'
-  });
-}
+      // ✅ Emit real-time unfollow event to the unfollowed user (non-blocking)
+      try {
+        const io = getIO();
+        if (io) {
+          emitUnfollowReceived(io, followingId, {
+            followerId,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (socketError) {
+        logger.error('Failed to emit unfollow event (non-critical)', {
+          category: LogCategory.FOLLOW,
+          error: socketError instanceof Error ? socketError.message : 'Unknown error'
+        });
+      }
 
       res.status(HttpStatus.OK).json(
         SuccessResponse(null, 'User unfollowed successfully')
@@ -213,7 +212,7 @@ try {
       logger.error('Error unfollowing user', {
         category: LogCategory.FOLLOW,
         error: error instanceof Error ? error.message : 'Unknown error',
-        followerId: (req as any).user?.id
+        followerId: (req as any).user?.userId || (req as any).user?.id
       });
       next(error);
     }
