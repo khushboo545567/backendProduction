@@ -60,7 +60,7 @@ class FollowController {
    */
   async followUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id;
       if (!followerId) {
         return next(new ErrorResponse('User not authenticated', HttpStatus.UNAUTHORIZED, ERROR_CODES.AUTH_FAILED));
       }
@@ -159,7 +159,7 @@ res.status(HttpStatus.CREATED).json(
    */
   async unfollowUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id;
       const { userId: followingId } = req.params;
 
       if (!followerId) {
@@ -225,7 +225,7 @@ try {
    */
   async updateFollowStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id;
       const { userId: followingId } = req.params;
 
       if (!followerId) {
@@ -278,7 +278,7 @@ try {
    */
   async bulkFollow(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id;
 
       if (!followerId) {
         return next(new ErrorResponse('User not authenticated', HttpStatus.UNAUTHORIZED, ERROR_CODES.AUTH_FAILED));
@@ -624,7 +624,7 @@ try {
    */
   async checkFollowStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id;
       const { userId: followingId } = req.params;
 
       if (!followerId) {
@@ -667,7 +667,7 @@ try {
    */
   async batchCheckFollowStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const followerId = (req as any).user?.id;
+      const followerId = (req as any).user?.userId || (req as any).user?.id;
 
       if (!followerId) {
         return next(new ErrorResponse('User not authenticated', HttpStatus.UNAUTHORIZED, ERROR_CODES.AUTH_FAILED));
