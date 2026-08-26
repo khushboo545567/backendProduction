@@ -33,8 +33,6 @@ import AuthRoutes from './routes/index';
 console.log("Verifiy route import mounting....")
 // import verifyRoutes from './auth/routes/index';
 import mentorRoutes from './Mentorship/routers';
-// 🟢 DEBUG: temporarily disabled — prime suspect for the import hang.
-// Re-enable once confirmed safe (see note above).
 // import seniorMentorRoutes from './SeniorMentorship/routers';
 console.log('🔍 mentorRoutes imported successfully');
 import companyRoutes from './company/routers';
@@ -238,8 +236,6 @@ console.log('🔍 AuthRoutes mounted successfully in app');
 console.log("Verifiy route mounting....")
 // app.use('/api/v1/verify', verifyRoutes);
 console.log('🔍 VerifyRoutes mounted successfully in app');
-app.use('/api/v1/mentorship', mentorRoutes);
-// 🟢 DEBUG: temporarily disabled along with the import above.
 // app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
 console.log('🔍 MentorRoutes mounted successfully in app');
 app.use('/api/v1/company', companyRoutes);

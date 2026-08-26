@@ -14,6 +14,7 @@
     "bcryptjs": "^3.0.3",
     "connect-mongo": "^6.0.0",
     "express-mongo-sanitize": "^2.2.0",
+    "isomorphic-dompurify": "^3.19.0",
     "lucide-react": "^1.24.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.3",

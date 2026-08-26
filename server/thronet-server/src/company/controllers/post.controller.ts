@@ -1,10 +1,71 @@
 import { Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
+import { v4 as uuidv4 } from 'uuid';
 import { postService } from '@/services';
 import { CreatePostDTO, UpdatePostDTO, PostFilterQuery, PostStatus, PostType } from '../interfaces';
 import logger from '@/shared/logger.util';
 import ResponseUtil from '@/shared/response.util';
+import CompanyPostLike from '../models/CompanyPostLike.model';
+import CompanyPostComment from '../models/CompanyPostComment.model';
+import CompanyActivity from '../models/CompanyActivity.model';
+import CompanyPost from '../models/companyPost.model';
+
+function extractIdString(val: any): string {
+  if (!val) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'object' && val !== null) {
+    if (val._id) return val._id.toString();
+    if (val.companyId) return String(val.companyId);
+    if (val.id) return String(val.id);
+  }
+  return String(val);
+}
+
+function getInitials(name?: string): string {
+  if (!name || !name.trim()) return 'US';
+  const parts = name.trim().split(' ');
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+function timeAgo(dateInput: Date | string | undefined): string {
+  if (!dateInput) return 'Recently';
+  const date = new Date(dateInput);
+  const now = new Date();
+  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+  if (seconds < 60) return 'Just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
 
 class PostController {
+  private async enrichPostsWithLiked(posts: any[], userId?: string): Promise<any[]> {
+    if (!userId || !Array.isArray(posts) || posts.length === 0) return posts;
+
+    const postIds = posts.map(p => p.postId || String(p._id));
+    const userLikes = await CompanyPostLike.find({ userId, postId: { $in: postIds } }).lean();
+    const likedPostIdSet = new Set(userLikes.map(l => l.postId));
+
+    return posts.map(p => {
+      const pId = p.postId || String(p._id);
+      return {
+        ...p,
+        liked: likedPostIdSet.has(pId),
+      };
+    });
+  }
+
   // =====================================================
   // CREATE POST
   // =====================================================
@@ -19,7 +80,6 @@ class PostController {
       const scheduledFor = req.body.scheduledFor || req.body.scheduledAt;
       const tags = req.body.tags;
 
-      // ✅ Files extract karo
       const files = req.files as {
         [fieldname: string]: Express.Multer.File[]
       } | undefined;
@@ -28,7 +88,6 @@ class PostController {
       const videos = files?.videos || [];
       const documents = files?.documents || [];
 
-      // ✅ pollData parse karo (form-data mein string aata hai)
       let pollData;
       if (req.body.pollData) {
         try {
@@ -89,7 +148,8 @@ class PostController {
   // =====================================================
   async getPostById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ resolvePostUUID middleware se
+      const objectId = (req as any).resolvedObjectId;
+      const userId = (req as any).user?.id || (req as any).user?.userId;
 
       const post = await postService.getPostById(objectId);
       if (!post) {
@@ -98,10 +158,13 @@ class PostController {
       }
 
       postService.incrementViews(objectId).catch((err) =>
-        logger.error('Error incrementing views:', err)
+        logger.error('Failed to increment post views:', err)
       );
 
-      ResponseUtil.success(res, post, 'Post retrieved successfully');
+      const postObj = post.toObject ? post.toObject() : post;
+      const [enriched] = await this.enrichPostsWithLiked([postObj], userId);
+
+      ResponseUtil.success(res, enriched, 'Post retrieved successfully');
     } catch (error: any) {
       logger.error('Error in getPostById controller:', error);
       next(error);
@@ -109,11 +172,12 @@ class PostController {
   }
 
   // =====================================================
-  // GET POST BY SLUG — NO CHANGE (slug se ObjectId nahi chahiye)
+  // GET POST BY SLUG
   // =====================================================
   async getPostBySlug(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { slug } = req.params;
+      const userId = (req as any).user?.id || (req as any).user?.userId;
 
       const post = await postService.getPostBySlug(slug);
       if (!post) {
@@ -121,11 +185,10 @@ class PostController {
         return;
       }
 
-      postService.incrementViews(post._id.toString()).catch((err) =>
-        logger.error('Error incrementing views:', err)
-      );
+      const postObj = post.toObject ? post.toObject() : post;
+      const [enriched] = await this.enrichPostsWithLiked([postObj], userId);
 
-      ResponseUtil.success(res, post, 'Post retrieved successfully');
+      ResponseUtil.success(res, enriched, 'Post retrieved successfully');
     } catch (error: any) {
       logger.error('Error in getPostBySlug controller:', error);
       next(error);
@@ -133,10 +196,11 @@ class PostController {
   }
 
   // =====================================================
-  // LIST POSTS — NO CHANGE
+  // LIST POSTS
   // =====================================================
   async listPosts(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = (req as any).user?.id || (req as any).user?.userId;
       const filters: PostFilterQuery = {
         page: parseInt(req.query.page as string) || 1,
         pageSize: parseInt(req.query.pageSize as string) || 20,
@@ -150,7 +214,9 @@ class PostController {
       };
 
       const result = await postService.listPosts(filters);
-      ResponseUtil.success(res, { items: result.items, pagination: result.pagination }, 'Posts retrieved successfully');
+      const enrichedItems = await this.enrichPostsWithLiked(result.items, userId);
+
+      ResponseUtil.success(res, { items: enrichedItems, pagination: result.pagination }, 'Posts retrieved successfully');
     } catch (error: any) {
       logger.error('Error in listPosts controller:', error);
       next(error);
@@ -158,11 +224,13 @@ class PostController {
   }
 
   // =====================================================
-  // GET POSTS BY COMPANY — NO CHANGE (already resolvedObjectId use kar raha hai)
+  // GET POSTS BY COMPANY
   // =====================================================
   async getPostsByCompany(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const companyObjectId = (req as any).resolvedObjectId;
+      const userId = (req as any).user?.id || (req as any).user?.userId;
+
       if (!companyObjectId) {
         ResponseUtil.badRequest(res, 'Company not found');
         return;
@@ -171,7 +239,16 @@ class PostController {
       const pageSize = parseInt(req.query.pageSize as string) || 20;
 
       const result = await postService.getPostsByCompany(companyObjectId, page, pageSize);
-      ResponseUtil.success(res, result, 'Company posts retrieved successfully');
+      const rawPosts = result.posts || result.items || (Array.isArray(result) ? result : []);
+      const enriched = await this.enrichPostsWithLiked(rawPosts, userId);
+
+      if (result.posts) {
+        result.posts = enriched;
+      } else if (result.items) {
+        result.items = enriched;
+      }
+
+      ResponseUtil.success(res, Array.isArray(result) ? enriched : result, 'Company posts retrieved successfully');
     } catch (error: any) {
       next(error);
     }
@@ -183,10 +260,12 @@ class PostController {
   async updatePost(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const objectId = (req as any).resolvedObjectId;
+      const title = req.body.title;
+      const content = req.body.content;
+      const type = req.body.type;
+      const status = req.body.status;
+      const tags = req.body.tags;
 
-      const { title, content, tags, status, type, existingMedia, media } = req.body;
-
-      // Extract uploaded files
       const files = req.files as {
         [fieldname: string]: Express.Multer.File[]
       } | undefined;
@@ -195,7 +274,7 @@ class PostController {
       const videos = files?.videos || [];
       const documents = files?.documents || [];
 
-      let parsedExistingMedia = existingMedia || media;
+      let parsedExistingMedia = req.body.existingMedia;
       if (typeof parsedExistingMedia === 'string') {
         try {
           parsedExistingMedia = JSON.parse(parsedExistingMedia);
@@ -251,7 +330,7 @@ class PostController {
   // =====================================================
   async deletePost(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ CHANGED
+      const objectId = (req as any).resolvedObjectId;
 
       const deleted = await postService.deletePost(objectId);
       if (!deleted) {
@@ -271,7 +350,7 @@ class PostController {
   // =====================================================
   async publishPost(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ CHANGED
+      const objectId = (req as any).resolvedObjectId;
 
       const post = await postService.publishPost(objectId);
       if (!post) {
@@ -291,7 +370,7 @@ class PostController {
   // =====================================================
   async schedulePost(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ CHANGED
+      const objectId = (req as any).resolvedObjectId;
       const { scheduledFor } = req.body;
 
       if (!scheduledFor) {
@@ -319,25 +398,249 @@ class PostController {
   }
 
   // =====================================================
-  // INCREMENT LIKES
+  // TOGGLE LIKE (Database Persisted Like / Unlike)
   // =====================================================
-  async incrementLikes(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async toggleLike(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ CHANGED
-      await postService.incrementLikes(objectId);
-      ResponseUtil.success(res, { success: true }, 'Like recorded');
+      const postId = req.params.id;
+      const userId = (req as any).user?.id || (req as any).user?.userId;
+
+      if (!userId) {
+        ResponseUtil.unauthorized(res, 'Authentication required');
+        return;
+      }
+
+      const post = await CompanyPost.findOne({
+        $or: [
+          { postId },
+          { _id: mongoose.Types.ObjectId.isValid(postId) ? postId : null },
+        ],
+      });
+
+      if (!post) {
+        ResponseUtil.notFound(res, 'Post not found');
+        return;
+      }
+
+      const postUUID = post.postId || String(post._id);
+      const companyIdStr = extractIdString(post.company);
+
+      const existingLike = await CompanyPostLike.findOne({ postId: postUUID, userId });
+      let isLiked = false;
+
+      if (existingLike) {
+        // UNLIKE: Remove like document & decrement count in DB
+        await CompanyPostLike.deleteOne({ _id: existingLike._id });
+        await CompanyPost.updateOne({ _id: post._id }, { $inc: { 'engagementMetrics.likesCount': -1 } });
+        const currentLikes = Math.max(0, (post.engagementMetrics?.likesCount || 1) - 1);
+        await CompanyActivity.deleteOne({ targetId: `like-${postUUID}-${userId}` });
+        isLiked = false;
+        ResponseUtil.success(res, { liked: false, likesCount: currentLikes }, 'Post unliked successfully');
+      } else {
+        // LIKE: Create like document & increment count & write Activity record to DB
+        await CompanyPostLike.create({ postId: postUUID, userId });
+        await CompanyPost.updateOne({ _id: post._id }, { $inc: { 'engagementMetrics.likesCount': 1 } });
+        const currentLikes = (post.engagementMetrics?.likesCount || 0) + 1;
+        isLiked = true;
+
+        const userName = `${(req as any).user?.firstName || ''} ${(req as any).user?.lastName || ''}`.trim() || (req as any).user?.email || 'User';
+
+        if (companyIdStr) {
+          await CompanyActivity.create({
+            activityId: `act-like-${postUUID}-${userId}-${Date.now()}`,
+            companyId: companyIdStr,
+            type: 'like',
+            user: userName,
+            avatar: getInitials(userName),
+            color: 'bg-blue-500',
+            action: `liked your post "${(post.title || '').slice(0, 30)}"`,
+            read: false,
+            targetId: `like-${postUUID}-${userId}`,
+          });
+        }
+
+        ResponseUtil.success(res, { liked: true, likesCount: currentLikes }, 'Post liked successfully');
+      }
     } catch (error: any) {
-      logger.error('Error in incrementLikes controller:', error);
+      logger.error('Error in toggleLike controller:', error);
       next(error);
     }
   }
 
   // =====================================================
-  // INCREMENT SHARES
+  // GET COMMENTS (Database Persisted Comments)
   // =====================================================
+  async getPostComments(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const postId = req.params.id;
+      const post = await CompanyPost.findOne({
+        $or: [
+          { postId },
+          { _id: mongoose.Types.ObjectId.isValid(postId) ? postId : null },
+        ],
+      });
+
+      const postUUIDs = post
+        ? Array.from(new Set([post.postId, String(post._id), postId].filter(Boolean)))
+        : [postId];
+
+      const comments = await CompanyPostComment.find({ postId: { $in: postUUIDs } })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const formatted = comments.map(c => ({
+        id: c.commentId || String(c._id),
+        commentId: c.commentId,
+        postId: c.postId,
+        userId: c.userId,
+        userName: c.userName,
+        userAvatar: c.userAvatar,
+        text: c.text,
+        createdAt: c.createdAt,
+        time: timeAgo(c.createdAt),
+      }));
+
+      ResponseUtil.success(res, formatted, 'Comments retrieved successfully');
+    } catch (error: any) {
+      logger.error('Error in getPostComments controller:', error);
+      next(error);
+    }
+  }
+
+  // =====================================================
+  // ADD COMMENT (Database Persisted Comment)
+  // =====================================================
+  async addPostComment(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const postId = req.params.id;
+      const text = req.body.text || req.body.content;
+      const userId = (req as any).user?.id || (req as any).user?.userId;
+
+      if (!userId) {
+        ResponseUtil.unauthorized(res, 'Authentication required');
+        return;
+      }
+      if (!text || !text.trim()) {
+        ResponseUtil.badRequest(res, 'Comment text is required');
+        return;
+      }
+
+      const post = await CompanyPost.findOne({
+        $or: [
+          { postId },
+          { _id: mongoose.Types.ObjectId.isValid(postId) ? postId : null },
+        ],
+      });
+
+      if (!post) {
+        ResponseUtil.notFound(res, 'Post not found');
+        return;
+      }
+
+      const postUUID = post.postId || String(post._id);
+      const companyIdStr = extractIdString(post.company);
+      const userName = `${(req as any).user?.firstName || ''} ${(req as any).user?.lastName || ''}`.trim() || (req as any).user?.email || 'User';
+      const userAvatar = (req as any).user?.profilePhotoId || (req as any).user?.avatar || null;
+
+      // 1. Save Comment document in MongoDB
+      const commentDoc = await CompanyPostComment.create({
+        commentId: `c-${uuidv4()}`,
+        postId: postUUID,
+        companyId: companyIdStr,
+        userId,
+        userName,
+        userAvatar,
+        text: text.trim(),
+      });
+
+      // 2. Increment commentsCount on Post in MongoDB
+      await CompanyPost.updateOne({ _id: post._id }, { $inc: { 'engagementMetrics.commentsCount': 1 } });
+
+      // 3. Create Activity record in MongoDB
+      if (companyIdStr) {
+        await CompanyActivity.create({
+          activityId: `act-comment-${commentDoc.commentId}`,
+          companyId: companyIdStr,
+          type: 'comment',
+          user: userName,
+          avatar: getInitials(userName),
+          color: 'bg-orange-500',
+          action: `commented: "${text.trim().slice(0, 35)}${text.length > 35 ? '...' : ''}" on "${(post.title || '').slice(0, 25)}"`,
+          read: false,
+          targetId: `comment-${commentDoc.commentId}`,
+        });
+      }
+
+      const responseData = {
+        id: commentDoc.commentId,
+        commentId: commentDoc.commentId,
+        postId: postUUID,
+        userId,
+        userName,
+        userAvatar,
+        text: commentDoc.text,
+        createdAt: commentDoc.createdAt,
+        time: 'Just now',
+      };
+
+      ResponseUtil.created(res, responseData, 'Comment added successfully');
+    } catch (error: any) {
+      logger.error('Error in addPostComment controller:', error);
+      next(error);
+    }
+  }
+
+  // =====================================================
+  // DELETE COMMENT (Database Persisted Comment Deletion)
+  // =====================================================
+  async deletePostComment(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { commentId } = req.params;
+      const userId = (req as any).user?.id || (req as any).user?.userId;
+
+      if (!userId) {
+        ResponseUtil.unauthorized(res, 'Authentication required');
+        return;
+      }
+
+      const comment = await CompanyPostComment.findOne({
+        $or: [
+          { commentId },
+          { _id: mongoose.Types.ObjectId.isValid(commentId) ? commentId : null },
+        ],
+      });
+
+      if (!comment) {
+        ResponseUtil.notFound(res, 'Comment not found');
+        return;
+      }
+
+      if (comment.userId !== userId && !(req as any).user?.isAdmin) {
+        ResponseUtil.forbidden(res, 'You can only delete your own comments');
+        return;
+      }
+
+      await CompanyPostComment.deleteOne({ _id: comment._id });
+      await CompanyPost.updateOne({ postId: comment.postId }, { $inc: { 'engagementMetrics.commentsCount': -1 } });
+      await CompanyActivity.deleteOne({ targetId: `comment-${comment.commentId}` });
+
+      ResponseUtil.success(res, { deleted: true }, 'Comment deleted successfully');
+    } catch (error: any) {
+      logger.error('Error in deletePostComment controller:', error);
+      next(error);
+    }
+  }
+
+  // =====================================================
+  // INCREMENT LIKES / INCREMENT SHARES
+  // =====================================================
+  async incrementLikes(req: Request, res: Response, next: NextFunction): Promise<void> {
+    return this.toggleLike(req, res, next);
+  }
+
   async incrementShares(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ CHANGED
+      const objectId = (req as any).resolvedObjectId;
       await postService.incrementShares(objectId);
       ResponseUtil.success(res, { success: true }, 'Share recorded');
     } catch (error: any) {
@@ -347,7 +650,7 @@ class PostController {
   }
 
   // =====================================================
-  // SEARCH POSTS — NO CHANGE
+  // SEARCH / TRENDING / POPULAR POSTS
   // =====================================================
   async searchPosts(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -368,9 +671,6 @@ class PostController {
     }
   }
 
-  // =====================================================
-  // GET TRENDING POSTS — NO CHANGE
-  // =====================================================
   async getTrendingPosts(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const limit = parseInt(req.query.limit as string) || 10;
@@ -382,9 +682,6 @@ class PostController {
     }
   }
 
-  // =====================================================
-  // GET POPULAR POSTS — NO CHANGE
-  // =====================================================
   async getPopularPosts(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const limit = parseInt(req.query.limit as string) || 10;
@@ -396,12 +693,8 @@ class PostController {
     }
   }
 
-  // =====================================================
-  // ADD: GET POSTS BY AUTHOR (employee UUID se)
-  // =====================================================
   async getPostsByAuthor(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      // ✅ resolveEmployeeUUID middleware se aayega
       const authorObjectId = (req as any).resolvedObjectId;
       if (!authorObjectId) {
         ResponseUtil.badRequest(res, 'Author not found');
@@ -417,12 +710,9 @@ class PostController {
     }
   }
 
-  // =====================================================
-  // GET POST STATS
-  // =====================================================
   async getPostStats(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const objectId = (req as any).resolvedObjectId; // ✅ CHANGED
+      const objectId = (req as any).resolvedObjectId;
 
       const post = await postService.getPostById(objectId);
       if (!post) {
@@ -431,7 +721,7 @@ class PostController {
       }
 
       const stats = {
-        postId: post.postId,  // ✅ UUID expose karo, ObjectId nahi
+        postId: post.postId,
         title: post.title,
         engagementMetrics: post.engagementMetrics,
         totalEngagement:

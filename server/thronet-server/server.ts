@@ -1,26 +1,7 @@
 /**
  * /server/thronet-server/server.ts
- * server.ts
- * thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
- * ./version 4.0.1-debug
- *
- * 🟢 DEBUG (temporary):
- *    - Added console.log tracing at 3 key points to find exactly where
- *      startup is hanging on Railway (imports never finishing, or
- *      initializeApp() being called but its first line never printing).
- *      Remove these console.log lines once the root cause is confirmed.
- *
- * ✅ FIX (previous version):
- *    - DNS override (dns.setServers) is now restricted to NON-production
- *      environments only. It was previously running unconditionally,
- *      which broke mongodb+srv:// SRV record resolution on Railway —
- *      Railway's container network doesn't allow direct external DNS
- *      queries the way local Windows dev environments do. This caused
- *      MongoDB connection to hang/fail on every Railway deploy, which
- *      cascaded into: fallback to localhost Mongo (also fails on
- *      Railway) -> process.exit(1) -> Railway restarts container ->
- *      infinite crash loop -> all API requests (login, etc.) timing out.
+ * Version 4.0.1
  */
 
 import dns from 'dns';
@@ -31,16 +12,26 @@ import path from 'path';
 // ⚠️ ONLY apply this in local/dev — on Railway (or any Linux container
 // production environment) this can break SRV DNS resolution entirely.
 if (process.env['NODE_ENV'] !== 'production') {
-    try {
-        dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-    } catch {
-        // ignore if not permitted
-    }
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+  } catch {
+    // ignore if not permitted
+  }
 }
 
+// ============================================================
+// ENVIRONMENT
+// ============================================================
+
 if (process.env['NODE_ENV'] !== 'production') {
-    dotenv.config({ path: path.join(__dirname, '../../.env') });
+  dotenv.config({
+    path: path.join(__dirname, '../../.env'),
+  });
 }
+
+// ============================================================
+// IMPORTS
+// ============================================================
 
 import { Server } from 'http';
 import mongoose from 'mongoose';
@@ -54,187 +45,359 @@ import MongoConnection from './src/database/sharding/connection';
 // Utils
 import CacheUtil from './src/shared/cache.util';
 import { LoggerUtil } from './src/shared/logger.util';
+
+// Socket
 import { initializeSocketIO } from './src/socket';
 
-// Audit Logs
-// NOTE: AuditConsumer temporarily disabled — not cluster-aware, causes
-// repeated "MOVED <slot> <host>:<port>" errors when running against
-// Redis Cluster (redis-node-1/2/3). Re-enable once it uses a cluster-aware
-// client (e.g. node-redis createCluster / ioredis Cluster mode).
-// import AuditConsumer from './src/shared/kafka/producers/audit.consumer';
-
-// 🟢 DEBUG: confirms every top-level import above has finished executing
-// (including any module-level side effects like DB clients, config loaders, etc.)
-console.log('🟢 DEBUG: imports finished, reached top-level code');
+// ============================================================
+// LOGGER
+// ============================================================
 
 const logger = LoggerUtil;
 
+// ============================================================
+// TYPES
+// ============================================================
+
 interface AppLocals {
-    server?: Server;
+  server?: Server;
 }
 
-// ==================== INITIALIZE ====================
+// ============================================================
+// APPLICATION INITIALIZATION
+// ============================================================
 
 async function initializeApp(): Promise<void> {
-    // 🟢 DEBUG: confirms the function body itself started executing
-    // (i.e. the call below actually invoked this function)
-    console.log('🟢 DEBUG: initializeApp() function body started');
+  try {
+    // ========================================================
+    // STEP 1 — APPLICATION START
+    // ========================================================
+
+    logger.info('========================================');
+    logger.info('Starting application initialization');
+    logger.info('========================================');
+
+    logger.info('Environment information', {
+      nodeEnv: process.env['NODE_ENV'],
+      nodeVersion: process.version,
+      port: process.env['PORT'] || '4000',
+    });
+
+    // ========================================================
+    // STEP 2 — MONGODB
+    // ========================================================
+
+    logger.info('STEP 1: Starting MongoDB connection...');
+
+    await MongoConnection.connect();
+
+    logger.info('MongoDB connected');
+
+    // ========================================================
+    // STEP 3 — REDIS / CACHE
+    // ========================================================
+
+    logger.info('STEP 2: Starting Redis initialization...');
+
     try {
-        logger.info('Starting application initialization', {
-            nodeEnv: process.env['NODE_ENV'],
-            nodeVersion: process.version,
-        });
+      logger.info('CACHE INIT START');
 
-        /// MongoDB
-        await MongoConnection.connect();
-        logger.info('MongoDB connected');
+      const cacheResult = await CacheUtil.init();
 
-        // Cache — ✅ FIX: ab await kiya, kyunki mutualService.initialize() ko
-        // Redis client ready chahiye. Non-blocking rehne dene se mutualService
-        // race condition mein mock mode mein fix ho sakti thi.
-        try {
-            await CacheUtil.init();
-            logger.info('Cache initialized');
-        } catch (err: any) {
-            logger.warn('Cache initialization failed, using in-memory fallback', {
-                error: err.message,
-            });
-        }
+      logger.info('CACHE INIT FINISHED', {
+        result: cacheResult,
+        status: CacheUtil.status,
+      });
 
-        // ✅ FIX: Mutual connections service — Neo4j + Redis se connect karta hai.
-        // Iske bina ye hamesha mock mode mein rehti hai (fake "Mock User 1/2" data).
-        try {
-            const { mutualService } = await import('./src/connections/services/mutual.service');
-            await mutualService.initialize();
-            logger.info('Mutual connections service initialized');
-        } catch (err: any) {
-            logger.warn('Mutual service initialization failed, using mock mode', {
-                error: err.message,
-            });
-        }
+      if (cacheResult) {
+        logger.info('Redis cache initialized successfully');
+      } else {
+        logger.warn(
+          'Redis cache initialization returned false. Using in-memory fallback.'
+        );
+      }
 
-        // Notification Service
-        try {
-            const notificationInitialized = await NotificationService.initialize();
-            if (notificationInitialized) {
-                logger.info('Notification service initialized');
-            } else {
-                logger.warn('Notification service initialization failed (non-critical)');
-            }
-        } catch (error) {
-            logger.warn('Notification service initialization failed (non-critical)', {
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
-        }
+      logger.info('Cache initialized');
+    } catch (err: any) {
+      logger.error('CACHE INIT ERROR', {
+        error: err?.message || 'Unknown Redis error',
+        stack: err?.stack,
+      });
 
-        // HTTP Server
-        const port: number = Number(process.env['PORT']) || 4000;
-        const server = app.listen(port, () => {
-            logger.info('Server started successfully', {
-                port,
-                environment: process.env['NODE_ENV'],
-                version: process.env['APP_VERSION'] || '1.0.0',
-            });
-
-            try {
-                initializeSocketIO(server);
-                logger.info('Socket.IO initialized');
-            } catch (error: any) {
-                logger.error('Socket.IO initialization failed', {
-                    error: error instanceof Error ? error.message : 'Unknown error',
-                });
-            }
-
-            // TODO: Re-enable once AuditConsumer is made cluster-aware
-            // (MOVED errors on Redis Cluster mode).
-            // AuditConsumer.startConsuming();
-        });
-
-        (app.locals as AppLocals)['server'] = server;
-        logger.info('Application initialization complete');
-
-    } catch (error: any) {
-        // 🟢 DEBUG: raw console.error as a backup in case the winston logger
-        // itself is the thing silently swallowing output in this environment
-        console.error('🔴 DEBUG: initializeApp() caught an error:', error?.message, error?.stack);
-        logger.error('Application initialization failed', {
-            error: (error as Error).message,
-            stack: (error as Error).stack,
-        });
-        process.exit(1);
+      logger.warn(
+        'Cache initialization failed, continuing with in-memory fallback'
+      );
     }
+
+    // ========================================================
+    // STEP 4 — MUTUAL CONNECTIONS SERVICE
+    // ========================================================
+
+    logger.info('STEP 3: Starting Mutual Connections Service...');
+
+    try {
+      const { mutualService } = await import(
+        './src/connections/services/mutual.service'
+      );
+
+      logger.info('Mutual service module loaded');
+
+      await mutualService.initialize();
+
+      logger.info('Mutual connections service initialized');
+    } catch (err: any) {
+      logger.warn(
+        'Mutual service initialization failed, using mock mode',
+        {
+          error: err?.message || 'Unknown mutual service error',
+          stack: err?.stack,
+        }
+      );
+    }
+
+    // ========================================================
+    // STEP 5 — NOTIFICATION SERVICE
+    // ========================================================
+
+    logger.info('STEP 4: Starting Notification Service...');
+
+    try {
+      logger.info('Notification service initialization START');
+
+      const notificationInitialized =
+        await NotificationService.initialize();
+
+      logger.info('Notification service initialization FINISHED', {
+        initialized: notificationInitialized,
+      });
+
+      if (notificationInitialized) {
+        logger.info('Notification service initialized');
+      } else {
+        logger.warn(
+          'Notification service initialization failed (non-critical)'
+        );
+      }
+    } catch (error: any) {
+      logger.warn(
+        'Notification service initialization failed (non-critical)',
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Unknown notification error',
+
+          stack:
+            error instanceof Error
+              ? error.stack
+              : undefined,
+        }
+      );
+    }
+
+    // ========================================================
+    // STEP 6 — HTTP SERVER
+    // ========================================================
+
+    logger.info('STEP 5: Starting HTTP server...');
+
+    const port: number = Number(process.env['PORT']) || 4000;
+
+    const server = app.listen(port, () => {
+      logger.info('========================================');
+      logger.info('Server started successfully');
+      logger.info('========================================');
+
+      logger.info('Server information', {
+        port,
+        environment: process.env['NODE_ENV'],
+        version: process.env['APP_VERSION'] || '1.0.0',
+      });
+
+      // ====================================================
+      // SOCKET.IO
+      // ====================================================
+
+      try {
+        logger.info('Starting Socket.IO initialization...');
+
+        initializeSocketIO(server);
+
+        logger.info('Socket.IO initialized');
+      } catch (error: any) {
+        logger.error('Socket.IO initialization failed', {
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Unknown Socket.IO error',
+
+          stack:
+            error instanceof Error
+              ? error.stack
+              : undefined,
+        });
+      }
+    });
+
+    // ========================================================
+    // SAVE SERVER INSTANCE
+    // ========================================================
+
+    (app.locals as AppLocals).server = server;
+
+    logger.info('Application initialization complete');
+
+    logger.info('========================================');
+    logger.info('APPLICATION READY');
+    logger.info('========================================');
+  } catch (error: any) {
+    logger.error('Application initialization failed', {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Unknown initialization error',
+
+      stack:
+        error instanceof Error
+          ? error.stack
+          : undefined,
+    });
+
+    process.exit(1);
+  }
 }
 
-// ==================== GRACEFUL SHUTDOWN ====================
+// ============================================================
+// GRACEFUL SHUTDOWN
+// ============================================================
 
 async function gracefulShutdown(signal: string): Promise<void> {
-    logger.info(`${signal} received, starting graceful shutdown...`);
+  logger.info(`${signal} received, starting graceful shutdown...`);
+
+  try {
+    const locals = app.locals as AppLocals;
+
+    if (locals.server) {
+      logger.info('Closing HTTP server...');
+
+      await new Promise<void>((resolve) => {
+        locals.server!.close(() => {
+          resolve();
+        });
+      });
+
+      logger.info('HTTP server closed');
+    }
 
     try {
-        const locals = app.locals as AppLocals;
-        if (locals['server']) {
-            await new Promise<void>((resolve) => {
-                locals['server']!.close(() => resolve());
-            });
-            logger.info('HTTP server closed');
-        }
+      logger.info('Closing MongoDB connection...');
 
-        // AuditConsumer.stopConsuming();
+      await mongoose.connection.close();
 
-        await mongoose.connection.close();
-        logger.info('MongoDB disconnected');
-
-        try {
-            await CacheUtil.shutdown();
-            logger.info('Cache shutdown complete');
-        } catch (err) {
-            logger.warn('Cache shutdown failed');
-        }
-
-        logger.info('Graceful shutdown complete');
-        process.exit(0);
+      logger.info('MongoDB disconnected');
     } catch (error: any) {
-        logger.error('Error during graceful shutdown', {
-            error: (error as Error).message,
-            stack: (error as Error).stack,
-        });
-        process.exit(1);
+      logger.warn('MongoDB shutdown failed', {
+        error: error?.message,
+      });
     }
+
+    try {
+      logger.info('Closing Redis connection...');
+
+      await CacheUtil.shutdown();
+
+      logger.info('Cache shutdown complete');
+    } catch (err: any) {
+      logger.warn('Cache shutdown failed', {
+        error: err?.message,
+      });
+    }
+
+    logger.info('Graceful shutdown complete');
+
+    process.exit(0);
+  } catch (error: any) {
+    logger.error('Error during graceful shutdown', {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Unknown shutdown error',
+
+      stack:
+        error instanceof Error
+          ? error.stack
+          : undefined,
+    });
+
+    process.exit(1);
+  }
 }
 
-// ==================== PROCESS HANDLERS ====================
+// ============================================================
+// PROCESS SIGNAL HANDLERS
+// ============================================================
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-process.on('unhandledRejection', (reason) => {
-    // 🟢 DEBUG: raw console output in case this is firing silently
-    console.error('🔴 DEBUG: unhandledRejection fired:', reason);
-    if ((reason as any)?.message?.includes('schemas/ids')) {
-        logger.warn('Schema validation error ignored (OpenTelemetry)');
-        return;
-    }
-    logger.error('Unhandled promise rejection', {
-        reason: (reason as Error)?.message || reason,
-        stack: (reason as Error)?.stack,
-    });
+process.on('SIGTERM', () => {
+  gracefulShutdown('SIGTERM');
 });
+
+process.on('SIGINT', () => {
+  gracefulShutdown('SIGINT');
+});
+
+// ============================================================
+// UNHANDLED PROMISE REJECTION
+// ============================================================
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const errorMessage =
+    (reason as any)?.message ||
+    String(reason);
+
+  const errorStack =
+    (reason as any)?.stack;
+
+  if (errorMessage.includes('schemas/ids')) {
+    logger.warn(
+      'Schema validation error ignored (OpenTelemetry)'
+    );
+    return;
+  }
+
+  logger.error('Unhandled promise rejection', {
+    reason: errorMessage,
+    stack: errorStack,
+  });
+});
+
+// ============================================================
+// UNCAUGHT EXCEPTION
+// ============================================================
 
 process.on('uncaughtException', (error: Error) => {
-    // 🟢 DEBUG: raw console output in case this is firing silently
-    console.error('🔴 DEBUG: uncaughtException fired:', error?.message, error?.stack);
-    logger.error('Uncaught exception in server file', {
-        error: error.message,
-        stack: error.stack,
-    });
-    // Sirf critical errors pe shutdown karo
-    const criticalErrors = ['EADDRINUSE', 'MODULE_NOT_FOUND'];
-    if (criticalErrors.some(e => error.message.includes(e))) {
-        gracefulShutdown('UNCAUGHT_EXCEPTION');
-    }
+  logger.error('Uncaught exception in server file', {
+    error: error.message,
+    stack: error.stack,
+  });
+
+  const criticalErrors = [
+    'EADDRINUSE',
+    'MODULE_NOT_FOUND',
+  ];
+
+  const isCritical = criticalErrors.some((criticalError) =>
+    error.message.includes(criticalError)
+  );
+
+  if (isCritical) {
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
+  }
 });
 
-// ==================== START ====================
-// 🟢 DEBUG: confirms we actually reach the call site, immediately before invoking it
-console.log('🟢 DEBUG: about to call initializeApp()');
+// ============================================================
+// START APPLICATION
+// ============================================================
+
+logger.info('BOOTSTRAP: Calling initializeApp()');
+
 initializeApp();

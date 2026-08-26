@@ -197,6 +197,33 @@ router.patch(
   postController.incrementLikes.bind(postController)
 );
 
+router.post(
+  ['/:id/like', '/:id/likes'],
+  validationMiddleware.validateParamsJoi(postValidators.id),
+  resolvePostUUID,
+  postController.toggleLike.bind(postController)
+);
+
+router.get(
+  '/:id/comments',
+  validationMiddleware.validateParamsJoi(postValidators.id),
+  resolvePostUUID,
+  postController.getPostComments.bind(postController)
+);
+
+router.post(
+  '/:id/comments',
+  validationMiddleware.validateParamsJoi(postValidators.id),
+  resolvePostUUID,
+  postController.addPostComment.bind(postController)
+);
+
+router.delete(
+  '/:id/comments/:commentId',
+  resolvePostUUID,
+  postController.deletePostComment.bind(postController)
+);
+
 /**
  * @route   PATCH /api/v1/company/posts/:id/shares
  * @desc    Increment post shares

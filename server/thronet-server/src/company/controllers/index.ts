@@ -8,13 +8,14 @@ import healthController from "./health.controller";
 import { companyReviewController } from "./companyReview.controller";
 import companyAnalyticsController from './companyAnalytics.controller';
 import { followerController } from './follower.controller';
+import companyActivityController from './companyActivity.controller';
 
 
 export {
     //company-service
     companyController, 
     getCompanyPageController, 
-    employeeReviewsController, 
+    employeeReviewsController,  
     getCompanyCultureInfoController,
     healthController, 
     companyReviewController, 
@@ -23,4 +24,5 @@ export {
     employeeController, 
     eventController, 
     followerController,
+    companyActivityController,
 }
