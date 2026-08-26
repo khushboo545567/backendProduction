@@ -32,11 +32,15 @@ export const ProfileViewController = {
   /** Feature 1: POST /record */
   async recordProfileView(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
     try {
+      console.log('--- ENTERING recordProfileView ---');
       const viewerId = getUserId(req);
       const { viewedUserId, metadata, anonymous } = req.body;
+      console.log('Payload received:', { viewerId, viewedUserId, metadata, anonymous });
       const result = await profileViewService.recordProfileView(viewerId, { viewedUserId, metadata, anonymous });
       res.status(HttpStatus.CREATED).json(SuccessResponse(result, 'Profile view recorded'));
     } catch (error) {
+      console.error('🔥🔥🔥 ERROR IN recordProfileView 🔥🔥🔥');
+      console.error(error);
       next(error);
     }
   },

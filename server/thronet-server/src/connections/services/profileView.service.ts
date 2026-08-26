@@ -80,6 +80,8 @@ class ProfileViewService {
 
       return { recorded: true, viewId: view.viewId };
     } catch (error: any) {
+      console.error('🔥🔥🔥 ERROR IN profileViewService.recordProfileView 🔥🔥🔥');
+      console.error(error);
       if (error instanceof ErrorResponse) throw error;
       logger.error('Error recording profile view', {
         category: LogCategory.CONNECTION,
