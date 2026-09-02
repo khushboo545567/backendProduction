@@ -2,11 +2,11 @@
   "name": "throne8-entry-server",
   "version": "1.0.0",
   "description": "",
-  "main": "dist/server.js",
+  "main": "server.ts",
   "scripts": {
     "dev": "nodemon",
     "build": "echo 'No build step required'",
-    "start": "node dist/server.js"
+    "start": "npx tsx server.ts"
   },
   "nodemonConfig": {
     "watch": [
