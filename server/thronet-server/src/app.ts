@@ -69,15 +69,17 @@ app.disable('x-powered-by');
 // ==================== CORS ====================
 app.use(cors({
     origin: (origin, callback) => {
-        const allowedOrigins = process.env['CORS_ORIGIN']
-            ? process.env['CORS_ORIGIN'].split(',').map(o => o.trim())
-            : ['http://localhost:3000', 'http://localhost:3001'];
+        const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] || '';
+        const allowedOrigins = envOrigins
+            ? envOrigins.split(',').map(o => o.trim())
+            : ['http://localhost:3000', 'http://localhost:3001', 'https://throne8-client-main.vercel.app'];
 
         // Server-to-server calls (no origin) allow karo
         if (!origin) return callback(null, true);
 
-        if (allowedOrigins.includes(origin)) {
-            return callback(null, true);
+        const isVercel = /\.vercel\.app$/.test(origin);
+        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel) {
+            return callback(null, origin);
         }
 
         const corsError: CustomError = new Error(`CORS: Origin ${origin} not allowed`);
