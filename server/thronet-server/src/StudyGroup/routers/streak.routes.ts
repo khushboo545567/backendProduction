@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
-import streakController  from '../controllers/streak.controller';
+import streakController from '../controllers/streak.controller';
 
 const router = Router();
 
@@ -17,7 +17,7 @@ const router = Router();
 router.use(AuthMiddleware.authenticate as any);
 
 /**
- * @route   GET /api/streak/current
+ * @route   GET /api/v1/study-group/streak/current
  * @desc    Get current streak
  * @access  Private
  */
@@ -26,7 +26,7 @@ router.get('/current',
 );
 
 /**
- * @route   GET /api/streak/longest
+ * @route   GET /api/v1/study-group/streak/longest
  * @desc    Get longest streak
  * @access  Private
  */
@@ -35,7 +35,7 @@ router.get('/longest',
 );
 
 /**
- * @route   GET /api/streak/history
+ * @route   GET /api/v1/study-group/streak/history
  * @desc    Get streak history with milestones
  * @access  Private
  */
@@ -44,7 +44,7 @@ router.get('/history',
 );
 
 /**
- * @route   GET /api/streak/leaderboard
+ * @route   GET /api/v1/study-group/streak/leaderboard
  * @desc    Get global streak leaderboard
  * @query   limit: number (default: 100)
  * @access  Private
@@ -54,7 +54,7 @@ router.get('/leaderboard',
 );
 
 /**
- * @route   GET /api/streak/group-leaderboard/:groupId
+ * @route   GET /api/v1/study-group/streak/group-leaderboard/:groupId
  * @desc    Get group streak leaderboard
  * @query   limit: number (default: 50)
  * @access  Private
@@ -64,7 +64,16 @@ router.get('/group-leaderboard/:groupId',
 );
 
 /**
- * @route   POST /api/streak/update
+ * @route   GET /api/v1/study-group/streak/public/:userId
+ * @desc    Get any user's public streak stats (for profile page — owner or visitor)
+ * @access  Private (any authenticated user)
+ */
+router.get('/public/:userId', 
+  streakController.getPublicStreak
+);
+
+/**
+ * @route   POST /api/v1/study-group/streak/update
  * @desc    Manually update streak (for testing)
  * @access  Private
  */

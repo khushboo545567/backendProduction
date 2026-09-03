@@ -15,6 +15,7 @@ import analyticsRoutes from './analytics.routes'; // ✅ PHASE 11
 import adminRoutes from './admin.routes'; // ✅ PHASE 11
 import notificationRoutes from './notification.routes'; // ✅ PHASE 11 - NEW
 import seniorMentorApplicationRoutes from './seniorMentorApplication.routes';
+import trustScoreRoutes from './trustScore.routes';
 
 const router = Router();
 
@@ -60,5 +61,6 @@ router.use('/analytics', analyticsRoutes);
 router.use('/admin', adminRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/senior-mentor-applications', seniorMentorApplicationRoutes);
+router.use('/', trustScoreRoutes);
 
 export default router;

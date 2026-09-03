@@ -19,22 +19,20 @@ export class TrustScoreService {
         return null;
       }
 
-      // Aggregate Reviews
       const reviewStats = await MentorshipReview.aggregate([
         { $match: { mentorId } },
-        { 
-          $group: { 
-            _id: null, 
+        {
+          $group: {
+            _id: null,
             averageRating: { $avg: '$rating' },
             totalReviews: { $sum: 1 }
-          } 
+          }
         }
       ]);
 
       const averageRating = reviewStats[0]?.averageRating || 0;
       const totalReviews = reviewStats[0]?.totalReviews || 0;
 
-      // Aggregate 1:1 Sessions
       const oneOnOneStats = await SessionMentor.aggregate([
         { $match: { mentorId } },
         {
@@ -51,7 +49,6 @@ export class TrustScoreService {
         }
       ]);
 
-      // Aggregate Group Sessions
       const groupStats = await GroupSession.aggregate([
         { $match: { mentorId } },
         {
@@ -91,15 +88,55 @@ export class TrustScoreService {
 
       const newTrustScore = TrustScoreCalculator.calculate(metrics);
 
-      // Persist without mutating unrelated fields
       await mentorRepository.updateByMentorId(mentorId, { trustScore: newTrustScore });
 
       console.info(`[TrustScore] Recalculated for Mentor ${mentorId}: Overall ${newTrustScore.overall}`);
       return newTrustScore;
     } catch (error) {
       console.error(`[TrustScore] Error recalculating for mentor ${mentorId}:`, error);
-      // We do not throw because we don't want to crash event listeners.
       return null;
+    }
+  }
+
+  /**
+   * ✅ NEW — Profile page ke liye lightweight getter.
+   * userId se lookup karta hai (mentorId se nahi), kyunki profile page
+   * ko sirf platform userId pata hota hai.
+   *
+   * Agar user mentor nahi hai, to null return karta hai — controller
+   * isko `isMentor: false` me convert karke frontend ko bhejega, taaki
+   * badge simply hide ho jaaye, error na dikhe.
+   */
+  public static async getByUserId(userId: string): Promise<any | null> {
+    try {
+      const mentor = await Mentor.findOne({ userId, isDeleted: false })
+        .select('mentorId userId trustScore title verification stats')
+        .lean();
+
+      if (!mentor) {
+        return null;
+      }
+
+      return {
+        mentorId: mentor.mentorId,
+        userId: mentor.userId,
+        title: mentor.title,
+        isVerified: mentor.verification?.isVerified || false,
+        trustScore: mentor.trustScore || {
+          overall: 0,
+          breakdown: {
+            profileCompleteness: 0,
+            reliability: 0,
+            studentSatisfaction: 0,
+            engagement: 0,
+          },
+        },
+        averageRating: mentor.stats?.averageRating || 0,
+        totalReviews: mentor.stats?.totalReviews || 0,
+      };
+    } catch (error) {
+      console.error(`[TrustScore] Error fetching trust score for user ${userId}:`, error);
+      throw error;
     }
   }
 }
