@@ -625,6 +625,27 @@ class ContactController {
             return;
         }
     }
+
+    /**
+     * ✅ GET PUBLIC CONTACT BY USER ID
+     * GET /api/v1/contact/get-contact-public/:userId
+     */
+    static async getPublicContact(
+        req: Request<{ userId: string }>,
+        res: Response
+    ): Promise<void> {
+        try {
+            const { userId } = req.params;
+            if (!userId) {
+                ResponseUtil.badRequest(res, 'User ID is required');
+                return;
+            }
+            const contact = await ContactService.getPublicContactByUserId(userId);
+            ResponseUtil.success(res, { contact }, 'Public contact fetched successfully');
+        } catch (error: any) {
+            ResponseUtil.internalError(res, error.message, error);
+        }
+    }
 }
 
 export default ContactController;

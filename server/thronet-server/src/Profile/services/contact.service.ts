@@ -536,6 +536,24 @@ class ContactService {
             updatedAt: contact.updatedAt,
         };
     }
+
+
+
+    /**
+ * ✅ Get PUBLIC contact info by userId (for viewing someone else's profile)
+ * Sirf woh fields return karo jo publicly dikhni chahiye — abhi sirf websites
+ */
+static async getPublicContactByUserId(targetUserId: string): Promise<any> {
+    const contact = await Contact.findByUserId(targetUserId);
+    if (!contact) return { websites: [] };
+
+    return {
+        websites: contact.websites || [],
+        // future me chaho to yahan privacy check laga sakte ho
+        // e.g. sirf phones/address ka privacy check hoga, websites hamesha public hai
+    };
+}
+
 }
 
 export default ContactService;
