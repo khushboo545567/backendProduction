@@ -36,6 +36,25 @@ const sanitizeInput = (req: Request, res: Response, next: NextFunction) => {
     next();
 };
 
+
+/**
+ * @route   GET /api/v1/contact/public/:userId
+ * @desc    Get public contact info (website etc.) for ANY user — profile viewers ke liye
+ * @access  Public / any logged-in user
+ */
+router.get(
+    '/get-contact-public/:userId',
+    rateLimitMiddleware({ maxRequests: 100, windowMs: 60000 }),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            await ContactController.getPublicContact(req as any, res);
+        } catch (error: any) {
+            next(error);
+        }
+    }
+);
+
+
 // ==================== VALIDATION SCHEMAS ====================
 
 /**
