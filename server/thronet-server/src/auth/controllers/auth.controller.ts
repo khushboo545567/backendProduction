@@ -441,17 +441,17 @@ class AuthController {
                     Constants.CACHE_TTLS.SESSION
                 );
 
-                await CacheUtil.set(
-                    `${Constants.CACHE_PREFIXES.USER}${result.userId}`,
-                    {
-                        userId: result.userId,
-                        email: validation.data!.email,
-                        firstName: validation.data!.firstName,
-                        lastName: validation.data!.lastName,
-                        role: result.role || 'user',
-                    },
-                    Constants.CACHE_TTLS.USER
-                );
+               await AuthCacheRepository.setLoginSessionUser(
+    result.userId,
+    {
+        userId: result.userId,
+        email: validation.data!.email,
+        firstName: validation.data!.firstName,
+        lastName: validation.data!.lastName,
+        role: result.role || 'user',
+    },
+    Constants.CACHE_TTLS.USER
+);
 
                 await CacheUtil.set(
                     `access_token:${accessToken}`,
