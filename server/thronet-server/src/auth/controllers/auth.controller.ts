@@ -47,6 +47,7 @@ import { User, AuditLog, Session } from '@/shared/models/index.models';
 import { AuthService } from '@/shared/services/index.service';
 import TokenBlacklistUtil from '@/shared/utils/tokenBlacklist.util';
 import { GetAllUsersParams } from '../interfaces/auth.interfaces';
+import { AuthCacheRepository } from '../repository/auth.repository';
 
 // ==================== INTERFACES ====================
 
@@ -224,7 +225,7 @@ class AuthController {
      * @param {Response} res - Express response
      * @returns {Promise<void>}
      */
-    
+
     static async register(req: Request<{}, any, RegisterBody>, res: Response): Promise<void> {
         const startTime = Date.now();
         const correlationId = (req as any).correlationId || uuidv4();
@@ -729,6 +730,15 @@ class AuthController {
                     ? Constants.CACHE_TTLS.SESSION_LONG
                     : Constants.CACHE_TTLS.SESSION;
 
+                // ✅ FIX: this used to write to the SAME "user:<userId>"
+                // cache key that AuthService.getUserById() reads for the
+                // full public profile ("/profile/[userId]"). Since this
+                // object only has 7 fields (no location, coverPhotoId,
+                // experienceIds, etc.), it was silently overwriting the
+                // full profile cache for 24h after every login — so
+                // anyone viewing that user's profile during that window
+                // got a stripped-down object missing location/cover photo.
+                // Now it writes to its own "session:user:<userId>" key.
                 await Promise.all([
                     CacheUtil.set(
                         `${Constants.CACHE_PREFIXES.SESSION}${result.sessionId}`,
@@ -739,8 +749,8 @@ class AuthController {
                         },
                         sessionTTL
                     ),
-                    CacheUtil.set(
-                        `${Constants.CACHE_PREFIXES.USER}${result.userId}`,
+                    AuthCacheRepository.setLoginSessionUser(
+                        result.userId,
                         {
                             userId: result.userId,
                             email: result.email,

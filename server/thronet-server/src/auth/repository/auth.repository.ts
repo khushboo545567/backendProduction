@@ -300,7 +300,7 @@ export class SessionRepository {
         userId: string;
         ipAddress: string;
         deviceId: string;
-        sessionType: string;
+        sessionType: 'mobile' | 'web' | 'api' | 'oauth';
         deviceInfo?: Record<string, any>;
     }): Promise<any> {
         return Session.createSession(data);
@@ -436,8 +436,8 @@ export class AuditLogRepository {
         userEmail: string;
         action: string;
         ipAddress: string;
-        status: string;
-        severity: string;
+        status: 'WARNING' | 'SUCCESS' | 'FAILURE' | 'FAILED';
+        severity: 'LOW' | 'MEDIUM' | 'HIGH';
         metadata: Map<string, any>;
     }): Promise<void> {
         await AuditLog.logAction(data);
@@ -490,7 +490,8 @@ export class AuthCacheRepository {
     }
 
     /**
-     * Get cached user by userId (generic)
+     * Get cached user by userId (generic) — this is the FULL profile
+     * cache read by AuthService.getUserById(), used by /profile/[userId].
      */
     static async getCachedUser(userId: string): Promise<any | null> {
         const data = await CacheUtil.get(`user:${userId}`);
@@ -505,6 +506,24 @@ export class AuthCacheRepository {
         await CacheUtil.set(`user:${userId}`, JSON.stringify(user), 900);
     }
 
+    // ✅ FIX: login() writes a small, session-scoped subset of user fields
+    // (used for JWT/session bookkeeping, not the public profile view).
+    // Previously it wrote to the SAME "user:<userId>" key that
+    // getCachedUser()/getUserById() reads for the full public profile —
+    // so for up to 24h after any login, viewing that user's profile
+    // returned the stripped-down login snapshot instead of the real
+    // profile (location, coverPhotoId, etc. silently missing).
+    // This gives login its own key namespace so the two never collide.
+    static async setLoginSessionUser(userId: string, data: any, ttl: number): Promise<void> {
+        await CacheUtil.set(`session:user:${userId}`, data, ttl);
+    }
+
+    static async getLoginSessionUser(userId: string): Promise<any | null> {
+        const data = await CacheUtil.get(`session:user:${userId}`);
+        if (!data) return null;
+        return typeof data === 'string' ? JSON.parse(data) : data;
+    }
+
     /**
      * Invalidate all user-related caches
      */
@@ -513,6 +532,7 @@ export class AuthCacheRepository {
             await Promise.all([
                 CacheUtil.del(`user:profile:${userId}`),
                 CacheUtil.del(`user:${userId}`),
+                CacheUtil.del(`session:user:${userId}`), // ✅ FIX: also clear the new login-session key
                 CacheUtil.del(`${Constants.CACHE_PREFIXES.USER}${userId}`),
                 CacheUtil.clearByPattern(`session:user:${userId}:*`),
                 CacheUtil.clearByPattern(`user:*:${userId}:*`),
@@ -537,6 +557,7 @@ export class AuthCacheRepository {
                 CacheUtil.del(`session:${sessionId}`),
                 CacheUtil.del(`user:session:${userId}:${sessionId}`),
                 CacheUtil.del(`user:profile:${userId}`),
+                CacheUtil.del(`session:user:${userId}`), // ✅ FIX
                 CacheUtil.del(`${Constants.CACHE_PREFIXES?.USER}${userId}`),
                 CacheUtil.del(`${Constants.CACHE_PREFIXES?.SESSION}${sessionId}`),
             ]);

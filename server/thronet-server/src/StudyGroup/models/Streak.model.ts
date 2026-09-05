@@ -1,4 +1,5 @@
 ﻿import mongoose, { Schema, Document } from 'mongoose';
+import crypto from 'crypto';
 import { IStreak } from '../interfaces/IStreak';
 
 interface IStreakDoc extends IStreak, Document {}
@@ -8,6 +9,7 @@ const streakSchema = new Schema(
     streakId: {
       type: String,
       required: true,
+      unique: true,
     },
     user: {
       type: String,
@@ -80,19 +82,30 @@ const streakSchema = new Schema(
   {
     timestamps: true,
     toJSON: {
-  virtuals: true,
-  transform: function (_doc, ret) {
-    const r = ret as any;
-    r.id = r.streakId;
-    delete r._id;
-    delete r.__v;
-    return r;
-  },
-},
+      virtuals: true,
+      transform: function (_doc, ret) {
+        const r = ret as any;
+        r.id = r.streakId;
+        delete r._id;
+        delete r.__v;
+        return r;
+      },
+    },
     toObject: { virtuals: true },
   }
 );
 
+// ✅ FIX: auto-generate streakId before validation runs, so `required`
+// never fails regardless of what the repository/service passes in.
+streakSchema.pre('validate', function (this: IStreakDoc, next) {
+  if (!this.streakId) {
+    this.streakId = `streak_${crypto.randomUUID()}`;
+  }
+  next();
+});
+
+// Note: `user` already has a unique index below, so streakId's own
+// uniqueness is just an extra guarantee, not the primary key.
 streakSchema.index({ streakId: 1 }, { unique: true });
 streakSchema.index({ user: 1 }, { unique: true });
 streakSchema.index({ currentStreak: -1 });
