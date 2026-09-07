@@ -1102,11 +1102,14 @@ export const eventValidators = {
   }).required(),
 
   id: Joi.object({
-    id: Joi.string()
-      .uuid({ version: ['uuidv4'] })
+    id: Joi.alternatives()
+      .try(
+        Joi.string().uuid({ version: ['uuidv4'] }),
+        Joi.string().regex(/^[0-9a-fA-F]{24}$/)
+      )
       .required()
       .messages({
-        'string.guid': 'Event ID must be a valid UUID v4',
+        'alternatives.match': 'Event ID must be a valid UUID v4 or ObjectId',
         'any.required': 'Event ID is required',
       }),
   }).required(),

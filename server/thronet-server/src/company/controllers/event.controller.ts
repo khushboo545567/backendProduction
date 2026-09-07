@@ -377,6 +377,31 @@ class EventController {
       ResponseUtil.error(res, error.message || 'Failed to fetch statistics');
     }
   }
+
+  // =====================================================
+  // DELETE EVENT ✅ resolvedObjectId use karo
+  // =====================================================
+  async deleteEvent(req: Request, res: Response): Promise<void> {
+    try {
+      const objectId = (req as any).resolvedObjectId;
+      if (!objectId) {
+        ResponseUtil.badRequest(res, 'Event ID not resolved');
+        return;
+      }
+
+      await eventService.deleteEvent(objectId);
+      ResponseUtil.success(res, { deleted: true, eventId: objectId }, 'Event deleted successfully');
+    } catch (error: any) {
+      logger.error(`[${req.user?.id}] Error deleting event:`, error);
+      if (error.message === 'Event not found') {
+        ResponseUtil.notFound(res, 'Event not found');
+      } else if (error.statusCode === 403 || error.message?.includes('Unauthorized')) {
+        ResponseUtil.forbidden(res, error.message || 'Forbidden: You do not have permission to delete this event');
+      } else {
+        ResponseUtil.error(res, error.message || 'Failed to delete event');
+      }
+    }
+  }
 }
 
 export const eventController = new EventController();
