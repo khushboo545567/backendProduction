@@ -1853,14 +1853,13 @@ class AuthService {
                 return null;
             }
 
-            // Cache check
-            const cacheKey = `user:${userId}`;
-            const cached = await AuthCacheRepository.get(cacheKey);
+            // ✅ FIX: own cache namespace ("verify:user:<userId>") instead
+            // of the shared "user:<userId>" key that getUserById() reads
+            // for the full profile — see fix note in auth.repository.ts.
+            const cached = await AuthCacheRepository.getCachedVerificationUser(userId);
 
-            if (cached) {
-                const parsed =
-                    typeof cached === 'string' ? JSON.parse(cached) : cached;
-                if (parsed.status === 'active') return parsed as UserForVerification;
+            if (cached && cached.status === 'active') {
+                return cached as UserForVerification;
             }
 
             // DB fallback
@@ -1869,7 +1868,7 @@ class AuthService {
 
             // Cache result
             try {
-                await AuthCacheRepository.set(cacheKey, JSON.stringify(user), 300);
+                await AuthCacheRepository.setCachedVerificationUser(userId, user, 300);
             } catch (_) { }
 
             return user;
@@ -1882,7 +1881,6 @@ class AuthService {
             throw error;
         }
     }
-
     // ==================== VERIFY EMAIL ====================
 
     static async verifyEmail(

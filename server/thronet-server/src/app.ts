@@ -239,6 +239,8 @@ console.log("Verifiy route mounting....")
 // app.use('/api/v1/verify', verifyRoutes);
 console.log('🔍 VerifyRoutes mounted successfully in app');
 // app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
+
+app.use('/api/v1/mentorship', mentorRoutes);          // 👈 YE LINE ADD KARO
 console.log('🔍 MentorRoutes mounted successfully in app');
 app.use('/api/v1/company', companyRoutes);
 console.log('🔍 CompanyRoutes mounted successfully in app');

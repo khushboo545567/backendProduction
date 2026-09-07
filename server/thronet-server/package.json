@@ -5,8 +5,9 @@
   "main": "server.ts",
   "scripts": {
     "dev": "nodemon",
-    "build": "echo 'No build step required'",
-    "start": "npx tsx server.ts"
+    "build": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
+    "start": "node dist/server.js"
+
   },
   "nodemonConfig": {
     "watch": [

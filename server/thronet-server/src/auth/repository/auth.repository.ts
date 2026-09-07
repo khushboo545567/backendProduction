@@ -570,6 +570,25 @@ export class AuthCacheRepository {
         }
     }
 
+       // ✅ FIX: getUserForVerification() used to cache its minimal
+    // verification-only subset (userId, email, firstName, lastName,
+    // status, accountStatus) under the SAME "user:<userId>" key that
+    // getCachedUser()/getUserById() reads for the FULL public profile.
+    // For 5 minutes after any verification check, profile lookups would
+    // silently get this stripped-down object instead of the real
+    // profile — exactly the same collision that login() had (see the
+    // fix note on setLoginSessionUser above). Giving verification its
+    // own namespace stops the two from ever colliding.
+    static async getCachedVerificationUser(userId: string): Promise<any | null> {
+        const data = await CacheUtil.get(`verify:user:${userId}`);
+        if (!data) return null;
+        return typeof data === 'string' ? JSON.parse(data) : data;
+    }
+
+    static async setCachedVerificationUser(userId: string, user: any, ttl: number): Promise<void> {
+        await CacheUtil.set(`verify:user:${userId}`, JSON.stringify(user), ttl);
+    }
+
     /**
      * Get rate limit counter
      */

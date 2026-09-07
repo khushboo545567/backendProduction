@@ -8,6 +8,8 @@ import authRoutes from '@/auth/routes/auth.routes';
 import profileRoutes from '@/Profile/routers/index';
 import connectionRouter from '@/connections/routes/index';
 import companyRouter from '@/company/routers/index';
+import mentorshipRoutes from '@/Mentorship/routers/index';   // 👈 ADD THIS
+
 import { healthCheck as dbHealthCheck } from '@/database/connection';
 import CacheUtil from '@/shared/cache.util';
 
@@ -81,6 +83,11 @@ import companyRoutes from '@/company/routers';
 
 router.use('/company', companyRoutes);
 console.log('🔍 CompanyRoutes mounted successfully in routes/index.ts');
+
+
+
+router.use('/mentorship', mentorshipRoutes);   // 👈 ADD THIS
+console.log('🔍 MentorshipRoutes mounted successfully in routes/index.ts');
 
 export default router;
 

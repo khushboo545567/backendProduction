@@ -231,7 +231,7 @@ router.post(
     AuthMiddleware.authenticate as any,
     sanitizeInput,
     validateCreateSkill,
-    rateLimitMiddleware({ maxRequests: 20, windowMs: 60000 }),
+    rateLimitMiddleware({ maxRequests: 100, windowMs: 60000 }),
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             console.log('🎯 CREATE SKILL ROUTE HIT');
@@ -253,7 +253,7 @@ router.post(
 router.get(
     '/get-all-skills',
     AuthMiddleware.authenticate as any,
-    rateLimitMiddleware({ maxRequests: 50, windowMs: 60000 }),
+    rateLimitMiddleware({ maxRequests: 200, windowMs: 60000 }),
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             console.log('🎯 GET ALL SKILLS ROUTE HIT');
@@ -274,7 +274,7 @@ router.get(
 router.get(
     '/get-all-skills/:userId',
     AuthMiddleware.authenticate as any,
-    rateLimitMiddleware({ maxRequests: 50, windowMs: 60000 }),
+    rateLimitMiddleware({ maxRequests: 200, windowMs: 60000 }),
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             console.log('🎯 GET SKILLS BY USER ID ROUTE HIT');
