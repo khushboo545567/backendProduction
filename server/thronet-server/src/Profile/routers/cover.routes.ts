@@ -75,6 +75,29 @@ router.get(
         }
     }
 );
+/**
+ * @route   GET /api/v1/cover-photo/user/:userId/active
+ * @desc    Get a user's active cover photo — PUBLIC, no auth required
+ *          (used for viewing other people's profiles, e.g. Mentor page banner)
+ * @access  Public
+ */
+router.get(
+    '/user/:userId/active',
+    rateLimitMiddleware({ maxRequests: 100, windowMs: 60000 }),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            console.log('🎯 GET ACTIVE COVER BY USERID ROUTE HIT');
+            console.log('🆔 Target userId:', req.params.userId);
+
+            await CoverPhotoController.getActiveCoverByUserId(req as any, res);
+
+            console.log('✅ GET ACTIVE COVER BY USERID ROUTE COMPLETED');
+        } catch (error: any) {
+            console.error('❌ GET ACTIVE COVER BY USERID ROUTE ERROR:', error);
+            next(error);
+        }
+    }
+);
 
 /**
  * @route   GET /api/v1/cover-photo/get-cover/:coverId

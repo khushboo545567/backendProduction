@@ -305,6 +305,39 @@ class CoverPhotoService {
         }
     }
 
+
+        /**
+     * ✅ GET ACTIVE COVER BY USER ID (Public — for viewing other users' profiles e.g. Mentor page)
+     * No ownership check — anyone can view another user's active cover, like a public banner.
+     */
+    static async getActiveCoverByUserId(userId: string): Promise<any> {
+        const correlationId = uuidv4();
+
+        try {
+            LoggerUtil.info('Fetching active cover by userId', {
+                userId,
+                correlationId,
+            });
+
+            const cover = await CoverPhoto.findActiveCover(userId);
+
+            LoggerUtil.info('Active cover lookup complete', {
+                userId,
+                found: !!cover,
+                correlationId,
+            });
+
+            return cover; // null if user has no active cover — that's fine, not an error
+        } catch (error: any) {
+            LoggerUtil.error('Get active cover by userId failed', {
+                error: error.message,
+                userId,
+                correlationId,
+            });
+            throw error;
+        }
+    }
+
     /**
      * ✅ Update cover photo (replace with new image)
      */

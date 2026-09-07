@@ -264,6 +264,44 @@ class CoverPhotoController {
         }
     }
 
+        /**
+     * ✅ GET ACTIVE COVER BY USER ID (Public)
+     * GET /api/v1/cover-photo/user/:userId/active
+     */
+    static async getActiveCoverByUserId(
+        req: Request<{ userId: string }>,
+        res: Response
+    ): Promise<void> {
+        const correlationId = (req as any).correlationId || uuidv4();
+
+        try {
+            const { userId } = req.params;
+
+            if (!userId) {
+                ResponseUtil.badRequest(res, 'User ID is required');
+                return;
+            }
+
+            const cover = await CoverPhotoService.getActiveCoverByUserId(userId);
+
+            ResponseUtil.success(
+                res,
+                { cover: cover || null },
+                cover ? 'Active cover fetched successfully' : 'No active cover found'
+            );
+            return;
+
+        } catch (error: any) {
+            LoggerUtil.error('Get active cover by userId failed', {
+                error: error.message,
+                userId: req.params.userId,
+                correlationId,
+            });
+
+            ResponseUtil.internalError(res, error.message, error);
+            return;
+        }
+    }
     /**
      * ✅ SET ACTIVE COVER
      * PUT /api/v1/cover-photo/set-active-cover/:coverId/set-active
