@@ -2,17 +2,17 @@
 //  * app.ts
 //  * server/thronet-server/src/app.ts
 //  * Express Application Configuration
-//  * ./version 4.1.1 (debug — SeniorMentorship temporarily disabled)
+//  * ./version 4.1.2 (FIX — mentorRoutes was imported but never mounted)
 //  *
-//  * 🟢 DEBUG (temporary):
-//  *    - SeniorMentorship import/mount commented out to isolate a startup
-//  *      hang. Nothing after "ALL connection sub-routes loaded successfully"
-//  *      was ever printing, and app.ts's own top-level console.logs never
-//  *      fired either — meaning one of app.ts's static imports never
-//  *      resolves. SeniorMentorship is the prime suspect (not even present
-//  *      in the original project file tree — looks new/half-wired).
-//  *      Once confirmed, either fix whatever's hanging inside
-//  *      SeniorMentorship/routers, or leave it disabled until it's ready.
+//  * 🟢 FIXED:
+//  *    - mentorRoutes (./Mentorship/routers) was imported but the
+//  *      `app.use('/api/v1/mentorship', mentorRoutes)` line was missing
+//  *      from the ROUTES section below — it got accidentally dropped
+//  *      while SeniorMentorship was being disabled to debug a startup
+//  *      hang. This caused every /api/v1/mentorship/* route to 404.
+//  *      Now mounted correctly.
+//  *    - SeniorMentorship import/mount still commented out (unrelated
+//  *      startup-hang issue — debug separately when ready).
 //  */
 
 import express, { Express, Request, Response, NextFunction } from 'express';
@@ -242,6 +242,8 @@ console.log('🔍 VerifyRoutes mounted successfully in app');
 
 app.use('/api/v1/mentorship', mentorRoutes);          // 👈 YE LINE ADD KARO
 console.log('🔍 MentorRoutes mounted successfully in app');
+
+// app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
 app.use('/api/v1/company', companyRoutes);
 console.log('🔍 CompanyRoutes mounted successfully in app');
 app.use('/api/v1/study-group', studyGroupRoutes);
