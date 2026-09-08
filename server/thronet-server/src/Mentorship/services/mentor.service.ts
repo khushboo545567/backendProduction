@@ -4,7 +4,7 @@ import { Mentor } from '../models';
 import {
   CreateMentorInput,
   ExperienceLevel,
-  IMentor,
+  IMentor,               
   MentorFilters,
   MentorSortOptions,
   MentorStatus,
@@ -211,11 +211,23 @@ class MentorService {
         updates.bannerImage = bannerImageUrl;
       }
 
-      if (updates.pricing) {
-        const mergedPricing = { ...mentor.pricing, ...updates.pricing };
-        this.validatePricing(mergedPricing);
-        updates.pricing = mergedPricing;
+        // ✅ FIX: experience aur socialProof ko bhi merge karo, warna poora subdocument overwrite ho jata hai
+      if (updates.experience) {
+        updates.experience = { ...mentor.experience, ...updates.experience };
+        // ✅ FIX: total change hone par level bhi recalculate karo, warna purana level hi reh jayega
+        if (updates.experience.total !== undefined) {
+          updates.experience.level = this.calculateExperienceLevel(updates.experience.total);
+        }
       }
+      if (updates.socialProof) {
+        updates.socialProof = { ...mentor.socialProof, ...updates.socialProof };
+      }
+    
+          if (updates.pricing) {
+            const mergedPricing = { ...mentor.pricing, ...updates.pricing };
+            this.validatePricing(mergedPricing);
+            updates.pricing = mergedPricing;
+          }
 
       if (updates.availability) {
         this.validateAvailability({ ...mentor.availability, ...updates.availability });

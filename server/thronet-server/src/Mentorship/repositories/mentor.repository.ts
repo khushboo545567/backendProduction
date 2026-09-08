@@ -24,7 +24,7 @@ class MentorRepository {
     const mentor = await Mentor.findOneAndUpdate(
       { mentorId, isDeleted: false },
       { $set: updates },
-      { new: true }
+      { new: true, runValidators: true }   // ✅ FIX: schema validation ab update ke time bhi chalegi
     );
     if (!mentor) return null;
     return mentor.toObject();
