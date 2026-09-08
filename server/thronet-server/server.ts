@@ -1,13 +1,16 @@
 /**
  * /server/thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
- * Version 4.0.1
+ * Version 4.0.2 (DEBUG — added raw console.log tracers to find MongoDB connect hang;
+ * logger.info() is filtered out in production by the logger config, so logger.info
+ * calls give no visibility — these console.log lines bypass that filter)
  */
-// // Add right after the dns/dotenv block, before other imports execute
-// if (process.env['NODE_ENV'] === 'production') {
-//   console.log = () => {};
-//   console.debug = () => {};
-// }
+// Add right after the dns/dotenv block, before other imports execute
+if (process.env['NODE_ENV'] === 'production') {
+  // TEMP: disabled for debugging — re-enable after MongoDB issue fixed
+  // console.log = () => {};
+  // console.debug = () => {};
+}
 import dns from 'dns';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -33,6 +36,8 @@ if (process.env['NODE_ENV'] !== 'production') {
   });
 }
 
+console.log('🟢 TRACE: env block done, NODE_ENV =', process.env['NODE_ENV']);
+
 // ============================================================
 // IMPORTS
 // ============================================================
@@ -40,11 +45,17 @@ if (process.env['NODE_ENV'] !== 'production') {
 import { Server } from 'http';
 import mongoose from 'mongoose';
 
+console.log('🟢 TRACE: about to import ./src/app (this triggers the full route-loading chain)');
+
 // App
 import { app, NotificationService } from './src/app';
 
+console.log('🟢 TRACE: ./src/app import finished');
+
 // Database
 import MongoConnection from './src/database/sharding/connection';
+
+console.log('🟢 TRACE: MongoConnection import finished');
 
 // Utils
 import CacheUtil from './src/shared/cache.util';
@@ -52,6 +63,8 @@ import { LoggerUtil } from './src/shared/logger.util';
 
 // Socket
 import { initializeSocketIO } from './src/socket';
+
+console.log('🟢 TRACE: all imports finished, defining logger/types now');
 
 // ============================================================
 // LOGGER
@@ -72,6 +85,8 @@ interface AppLocals {
 // ============================================================
 
 async function initializeApp(): Promise<void> {
+  console.log('🟢 TRACE: initializeApp() function ENTERED');
+
   try {
     // ========================================================
     // STEP 1 — APPLICATION START
@@ -80,6 +95,12 @@ async function initializeApp(): Promise<void> {
     logger.info('========================================');
     logger.info('Starting application initialization');
     logger.info('========================================');
+
+    console.log('🟢 TRACE: env info log', {
+      nodeEnv: process.env['NODE_ENV'],
+      nodeVersion: process.version,
+      port: process.env['PORT'] || '4000',
+    });
 
     logger.info('Environment information', {
       nodeEnv: process.env['NODE_ENV'],
@@ -91,22 +112,27 @@ async function initializeApp(): Promise<void> {
     // STEP 2 — MONGODB
     // ========================================================
 
+    console.log('🟢 TRACE: >>> ABOUT TO CALL MongoConnection.connect() <<<');
     logger.info('STEP 1: Starting MongoDB connection...');
 
     await MongoConnection.connect();
 
+    console.log('🟢 TRACE: <<< MongoConnection.connect() RESOLVED SUCCESSFULLY >>>');
     logger.info('MongoDB connected');
 
     // ========================================================
     // STEP 3 — REDIS / CACHE
     // ========================================================
 
+    console.log('🟢 TRACE: about to init Redis/Cache');
     logger.info('STEP 2: Starting Redis initialization...');
 
     try {
       logger.info('CACHE INIT START');
 
       const cacheResult = await CacheUtil.init();
+
+      console.log('🟢 TRACE: CacheUtil.init() resolved', { cacheResult });
 
       logger.info('CACHE INIT FINISHED', {
         result: cacheResult,
@@ -123,6 +149,7 @@ async function initializeApp(): Promise<void> {
 
       logger.info('Cache initialized');
     } catch (err: any) {
+      console.log('🔴 TRACE: Cache init threw', err?.message);
       logger.error('CACHE INIT ERROR', {
         error: err?.message || 'Unknown Redis error',
         stack: err?.stack,
@@ -137,6 +164,7 @@ async function initializeApp(): Promise<void> {
     // STEP 4 — MUTUAL CONNECTIONS SERVICE
     // ========================================================
 
+    console.log('🟢 TRACE: about to init Mutual Connections Service');
     logger.info('STEP 3: Starting Mutual Connections Service...');
 
     try {
@@ -148,8 +176,10 @@ async function initializeApp(): Promise<void> {
 
       await mutualService.initialize();
 
+      console.log('🟢 TRACE: mutualService.initialize() resolved');
       logger.info('Mutual connections service initialized');
     } catch (err: any) {
+      console.log('🔴 TRACE: Mutual service init threw', err?.message);
       logger.warn(
         'Mutual service initialization failed, using mock mode',
         {
@@ -163,6 +193,7 @@ async function initializeApp(): Promise<void> {
     // STEP 5 — NOTIFICATION SERVICE
     // ========================================================
 
+    console.log('🟢 TRACE: about to init Notification Service');
     logger.info('STEP 4: Starting Notification Service...');
 
     try {
@@ -170,6 +201,10 @@ async function initializeApp(): Promise<void> {
 
       const notificationInitialized =
         await NotificationService.initialize();
+
+      console.log('🟢 TRACE: NotificationService.initialize() resolved', {
+        notificationInitialized,
+      });
 
       logger.info('Notification service initialization FINISHED', {
         initialized: notificationInitialized,
@@ -183,6 +218,7 @@ async function initializeApp(): Promise<void> {
         );
       }
     } catch (error: any) {
+      console.log('🔴 TRACE: Notification service init threw', error?.message);
       logger.warn(
         'Notification service initialization failed (non-critical)',
         {
@@ -203,11 +239,16 @@ async function initializeApp(): Promise<void> {
     // STEP 6 — HTTP SERVER
     // ========================================================
 
+    console.log('🟢 TRACE: >>> ABOUT TO CALL app.listen() <<<');
     logger.info('STEP 5: Starting HTTP server...');
 
     const port: number = Number(process.env['PORT']) || 4000;
 
+    console.log('🟢 TRACE: resolved port =', port);
+
     const server = app.listen(port, () => {
+      console.log('🟢 TRACE: <<< app.listen() CALLBACK FIRED — SERVER IS LISTENING on port', port, '>>>');
+
       logger.info('========================================');
       logger.info('Server started successfully');
       logger.info('========================================');
@@ -223,12 +264,15 @@ async function initializeApp(): Promise<void> {
       // ====================================================
 
       try {
+        console.log('🟢 TRACE: about to init Socket.IO');
         logger.info('Starting Socket.IO initialization...');
 
         initializeSocketIO(server);
 
+        console.log('🟢 TRACE: Socket.IO initialized');
         logger.info('Socket.IO initialized');
       } catch (error: any) {
+        console.log('🔴 TRACE: Socket.IO init threw', error?.message);
         logger.error('Socket.IO initialization failed', {
           error:
             error instanceof Error
@@ -243,18 +287,26 @@ async function initializeApp(): Promise<void> {
       }
     });
 
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      console.log('🔴 TRACE: server.listen() emitted an "error" event', err?.code, err?.message);
+    });
+
     // ========================================================
     // SAVE SERVER INSTANCE
     // ========================================================
 
     (app.locals as AppLocals).server = server;
 
+    console.log('🟢 TRACE: initializeApp() reached the end (past app.listen() call, not necessarily past the callback)');
     logger.info('Application initialization complete');
 
     logger.info('========================================');
     logger.info('APPLICATION READY');
     logger.info('========================================');
   } catch (error: any) {
+    console.log('🔴 TRACE: initializeApp() CAUGHT A TOP-LEVEL ERROR:', error?.message);
+    console.log('🔴 TRACE: stack:', error?.stack);
+
     logger.error('Application initialization failed', {
       error:
         error instanceof Error
@@ -276,6 +328,7 @@ async function initializeApp(): Promise<void> {
 // ============================================================
 
 async function gracefulShutdown(signal: string): Promise<void> {
+  console.log(`🟡 TRACE: gracefulShutdown(${signal}) called`);
   logger.info(`${signal} received, starting graceful shutdown...`);
 
   try {
@@ -321,6 +374,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
     process.exit(0);
   } catch (error: any) {
+    console.log('🔴 TRACE: gracefulShutdown threw', error?.message);
     logger.error('Error during graceful shutdown', {
       error:
         error instanceof Error
@@ -342,10 +396,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
 // ============================================================
 
 process.on('SIGTERM', () => {
+  console.log('🟡 TRACE: SIGTERM received');
   gracefulShutdown('SIGTERM');
 });
 
 process.on('SIGINT', () => {
+  console.log('🟡 TRACE: SIGINT received');
   gracefulShutdown('SIGINT');
 });
 
@@ -360,6 +416,8 @@ process.on('unhandledRejection', (reason: unknown) => {
 
   const errorStack =
     (reason as any)?.stack;
+
+  console.log('🔴 TRACE: unhandledRejection:', errorMessage);
 
   if (errorMessage.includes('schemas/ids')) {
     logger.warn(
@@ -379,6 +437,9 @@ process.on('unhandledRejection', (reason: unknown) => {
 // ============================================================
 
 process.on('uncaughtException', (error: Error) => {
+  console.log('🔴 TRACE: uncaughtException:', error.message);
+  console.log('🔴 TRACE: uncaughtException stack:', error.stack);
+
   logger.error('Uncaught exception in server file', {
     error: error.message,
     stack: error.stack,
@@ -402,6 +463,9 @@ process.on('uncaughtException', (error: Error) => {
 // START APPLICATION
 // ============================================================
 
+console.log('🟢 TRACE: BOOTSTRAP line reached, calling initializeApp() now');
 logger.info('BOOTSTRAP: Calling initializeApp()');
 
 initializeApp();
+
+console.log('🟢 TRACE: initializeApp() call dispatched (this line runs immediately since initializeApp is async — it does NOT mean initializeApp finished)');
