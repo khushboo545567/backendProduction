@@ -3,11 +3,11 @@
  * Main Entry Point — HTTP server bootstrap
  * Version 4.0.1
  */
-// Add right after the dns/dotenv block, before other imports execute
-if (process.env['NODE_ENV'] === 'production') {
-  console.log = () => {};
-  console.debug = () => {};
-}
+// // Add right after the dns/dotenv block, before other imports execute
+// if (process.env['NODE_ENV'] === 'production') {
+//   console.log = () => {};
+//   console.debug = () => {};
+// }
 import dns from 'dns';
 import dotenv from 'dotenv';
 import path from 'path';
