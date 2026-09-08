@@ -1,4 +1,4 @@
-git add .import { Router } from 'express';
+import { Router } from 'express';
 import { eventController } from '../controllers';
 import validationMiddleware from '@/shared/middlewares/validation.middleware';
 import { eventValidators } from '../validations/company.validation';
