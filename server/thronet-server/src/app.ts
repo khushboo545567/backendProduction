@@ -163,12 +163,19 @@ app.use(session({
     secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
-    store: MongoStore.create({
-        mongoUrl: process.env['MONGODB_URI'],
-        collectionName: 'sessions',
-        ttl: 5 * 60,
-        autoRemove: 'native',
-    }),
+    store: process.env['MONGODB_URI']
+        ? MongoStore.create({
+            mongoUrl: process.env['MONGODB_URI'],
+            collectionName: 'sessions',
+            ttl: 5 * 60,
+            autoRemove: 'native',
+        })
+        : MongoStore.create({
+            clientPromise: mongoose.connection.asPromise().then((m) => m.connection.getClient()),
+            collectionName: 'sessions',
+            ttl: 5 * 60,
+            autoRemove: 'native',
+        }),
     cookie: {
         secure: process.env['NODE_ENV'] === 'production',
         httpOnly: true,

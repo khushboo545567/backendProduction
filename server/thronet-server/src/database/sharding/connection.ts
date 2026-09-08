@@ -65,25 +65,33 @@ class MongoConnection {
             const options: MongoConnectionOptions = {
                 maxPoolSize: Number(process.env['MONGODB_MAX_POOL_SIZE']) || 100,
                 minPoolSize: Number(process.env['MONGODB_MIN_POOL_SIZE']) || 10,
-                serverSelectionTimeoutMS: Number(process.env['MONGODB_SERVER_SELECTION_TIMEOUT']) || 5000,
+                serverSelectionTimeoutMS: Number(process.env['MONGODB_SERVER_SELECTION_TIMEOUT']) || 15000,
                 socketTimeoutMS: Number(process.env['MONGODB_SOCKET_TIMEOUT']) || 45000,
-                connectTimeoutMS: Number(process.env['MONGODB_CONNECT_TIMEOUT']) || 10000,
+                connectTimeoutMS: Number(process.env['MONGODB_CONNECT_TIMEOUT']) || 15000,
                 retryWrites: true,
                 retryReads: true,
-                readPreference: 'secondaryPreferred',
                 w: 'majority',
             };
+
+            if (process.env['MONGODB_READ_PREFERENCE']) {
+                (options as any).readPreference = process.env['MONGODB_READ_PREFERENCE'];
+            }
 
             try {
                 await mongoose.connect(uri, options);
             } catch (primaryErr: any) {
-                logger.warn(`Primary MongoDB URI failed (${primaryErr.message}). Attempting fallback to local MongoDB...`);
-                const fallbackUri = 'mongodb://127.0.0.1:27017/thronet_production';
-                await mongoose.connect(fallbackUri, {
-                    maxPoolSize: options.maxPoolSize,
-                    minPoolSize: options.minPoolSize,
-                    serverSelectionTimeoutMS: 5000,
-                });
+                logger.error(`Primary MongoDB connection failed: ${primaryErr.message}`);
+                if (process.env['NODE_ENV'] !== 'production') {
+                    logger.warn('Attempting fallback to local MongoDB in dev environment...');
+                    const fallbackUri = 'mongodb://127.0.0.1:27017/thronet_production';
+                    await mongoose.connect(fallbackUri, {
+                        maxPoolSize: options.maxPoolSize,
+                        minPoolSize: options.minPoolSize,
+                        serverSelectionTimeoutMS: 5000,
+                    });
+                } else {
+                    throw primaryErr;
+                }
             }
             this.isConnected = true;
             if (!this.listenersRegistered) {
@@ -93,7 +101,7 @@ class MongoConnection {
 
             logger.info('✅ MongoDB connected successfully', {
                 poolSize: options.maxPoolSize,
-                readPreference: options.readPreference,
+                host: mongoose.connection.host,
             });
 
             // Repair any invalid company coordinates in MongoDB
