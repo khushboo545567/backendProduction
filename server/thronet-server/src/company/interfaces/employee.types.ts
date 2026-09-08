@@ -126,6 +126,9 @@ export interface EmployeeResponseDTO {
     twitter?: string;
     github?: string;
   };
+  phone?: string;
+  joinDate?: Date;
+  isAdvocate?: boolean;
   advocacyScore: number;
   postsCount: number;
   followersCount: number;
