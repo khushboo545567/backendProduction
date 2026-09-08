@@ -441,6 +441,46 @@ class EventService {
   }
 
   // =====================================================
+  // DELETE EVENT
+  // =====================================================
+  async deleteEvent(eventObjectId: string, companyObjectId?: string): Promise<boolean> {
+    try {
+      const event = await eventRepository.findByObjectId(eventObjectId);
+      if (!event) {
+        throw new Error('Event not found');
+      }
+
+      // If company context is provided, verify event belongs to this company
+      if (companyObjectId && event.company) {
+        const eventCompanyId = this.extractCompanyId(event.company);
+        if (eventCompanyId && eventCompanyId !== companyObjectId.toString()) {
+          const error: any = new Error('Unauthorized to delete this event');
+          error.statusCode = 403;
+          throw error;
+        }
+      }
+
+      const deleted = await eventRepository.deleteByObjectId(eventObjectId);
+      if (!deleted) {
+        throw new Error('Failed to delete event from database');
+      }
+
+      // Invalidate cache
+      const compId = this.extractCompanyId(event.company);
+      if (compId) {
+        await CacheUtil.clearByPattern(`${this.CACHE_PREFIX}company:${compId}:*`);
+      }
+      await CacheUtil.clearByPattern(`${this.CACHE_PREFIX}*`);
+
+      logger.info(`[DELETE_EVENT] Event permanently deleted: ${eventObjectId}`);
+      return true;
+    } catch (error: any) {
+      logger.error('Error deleting event:', error);
+      throw error;
+    }
+  }
+
+  // =====================================================
   // HELPERS
   // =====================================================
   private extractCompanyId(company: any): string | null {

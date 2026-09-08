@@ -1,4 +1,4 @@
-import { Router } from 'express';
+git add .import { Router } from 'express';
 import { eventController } from '../controllers';
 import validationMiddleware from '@/shared/middlewares/validation.middleware';
 import { eventValidators } from '../validations/company.validation';
@@ -41,13 +41,13 @@ router.get('/company/:companyId',
   eventController.getCompanyEvents.bind(eventController)
 );
 
-router.get('/get-all-events',
+router.get(['/', '', '/get-all-events', '/get-all'],
   validationMiddleware.validateQueryJoi(eventValidators.query),
   eventController.listEvents.bind(eventController)
 );
 
 router.post(
-  '/create-event',
+  ['/', '', '/create-event', '/create'],
   (req, res, next) => {
     console.log('=== BEFORE UPLOAD ===');
     console.log('Content-Type:', req.headers['content-type']);
