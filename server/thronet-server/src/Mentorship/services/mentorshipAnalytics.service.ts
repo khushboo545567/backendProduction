@@ -1,6 +1,7 @@
-import { Mentor, SessionMentor, MentorshipReview } from "../models";
+import { Mentor, SessionMentor, MentorshipReview, PackageCredit } from "../models";
 import { BookingStatus } from "@/shared/constants/bookingStatus";
 import { logger } from "@/shared/logger.util";
+import Analytics from "@/Profile/models/Analytics.model"; // adjust path if different in your tree
 
 class MentorshipAnalyticsService {
   /**
@@ -17,76 +18,40 @@ class MentorshipAnalyticsService {
         if (endDate) dateFilter.createdAt.$lte = endDate;
       }
 
-      // Get mentor details - FIXED: Use findOne with mentorId field
-      // const mentor = await Mentor.findOne({ userId: mentorId });
       const mentor = await Mentor.findOne({ mentorId: mentorId });
       if (!mentor) {
         throw new Error('Mentor not found');
       }
 
       const [sessionStats, sessionTypeBreakdown, reviewStats] = await Promise.all([
-        // Session statistics
         SessionMentor.aggregate([
-          {
-            $match: {
-              mentorId,
-              ...dateFilter,
-            },
-          },
+          { $match: { mentorId, ...dateFilter } },
           {
             $group: {
               _id: null,
               totalSessions: { $sum: 1 },
-              completedSessions: {
-                $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] },
-              },
-              cancelledSessions: {
-                $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] },
-              },
+              completedSessions: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
+              cancelledSessions: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
               totalEarnings: { $sum: '$pricing.basePrice' },
               averageSessionPrice: { $avg: '$pricing.basePrice' },
             },
           },
         ]),
-
-        // Session type breakdown
         SessionMentor.aggregate([
-          {
-            $match: {
-              mentorId,
-              status: BookingStatus.COMPLETED,
-              ...dateFilter,
-            },
-          },
-          {
-            $group: {
-              _id: '$sessionType',
-              count: { $sum: 1 },
-              revenue: { $sum: '$pricing.basePrice' },
-            },
-          },
+          { $match: { mentorId, status: BookingStatus.COMPLETED, ...dateFilter } },
+          { $group: { _id: '$sessionType', count: { $sum: 1 }, revenue: { $sum: '$pricing.basePrice' } } },
         ]),
-
-        // Review statistics
         MentorshipReview.aggregate([
-          {
-            $match: {
-              mentorId,
-              isDeleted: false,
-              isPublic: true,
-            },
-          },
+          { $match: { mentorId, isDeleted: false, isPublic: true } },
           {
             $group: {
               _id: null,
               averageRating: { $avg: '$rating' },
               totalReviews: { $sum: 1 },
-              distribution: {
-                $push: '$rating',
-              },
+              distribution: { $push: '$rating' },
             },
           },
-        ])
+        ]),
       ]);
 
       const stats = sessionStats[0] || {
@@ -97,13 +62,8 @@ class MentorshipAnalyticsService {
         averageSessionPrice: 0,
       };
 
-      const reviews = reviewStats[0] || {
-        averageRating: 0,
-        totalReviews: 0,
-        distribution: [],
-      };
+      const reviews = reviewStats[0] || { averageRating: 0, totalReviews: 0, distribution: [] };
 
-      // Calculate rating distribution
       const ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
       reviews.distribution.forEach((rating: number) => {
         ratingDistribution[rating as keyof typeof ratingDistribution]++;
@@ -135,13 +95,98 @@ class MentorshipAnalyticsService {
           totalReviews: reviews.totalReviews,
           distribution: ratingDistribution,
         },
-        period: {
-          startDate,
-          endDate,
-        },
+        period: { startDate, endDate },
       };
     } catch (error: any) {
       logger.error('❌ Failed to get mentor stats:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 📊 Dashboard stats — everything AnalyticsPage.tsx needs, ONE call
+   */
+  async getMentorDashboardStats(mentorId: string): Promise<any> {
+    try {
+      logger.info(`📊 Fetching dashboard stats for mentor: ${mentorId}`);
+
+      const mentor = await Mentor.findOne({ mentorId });
+      if (!mentor) {
+        throw new Error('Mentor not found');
+      }
+
+      const now = new Date();
+      const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const fourMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+
+      const [baseStats, analyticsDoc, durationAgg, monthlyEarnings] = await Promise.all([
+        this.getMentorStats(mentorId),
+
+        // profile views live in Profile module's Analytics collection, keyed by userId (not mentorId)
+        Analytics.findByUserId(mentor.userId),
+
+        SessionMentor.aggregate([
+          { $match: { mentorId, status: BookingStatus.COMPLETED } },
+          { $group: { _id: null, avgDuration: { $avg: '$duration' } } },
+        ]),
+
+        SessionMentor.aggregate([
+          {
+            $match: {
+              mentorId,
+              status: BookingStatus.COMPLETED,
+              createdAt: { $gte: fourMonthsAgo },
+            },
+          },
+          {
+            $group: {
+              _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+              amount: { $sum: '$pricing.basePrice' },
+            },
+          },
+          { $sort: { _id: -1 } },
+          { $limit: 4 },
+        ]),
+      ]);
+
+      // profile views — compute this-month vs last-month from the embedded views array
+      const views = analyticsDoc?.profileViews?.views || [];
+      const viewsThisMonth = views.filter((v: any) => v.viewedAt >= thisMonthStart).length;
+      const viewsLastMonth = views.filter(
+        (v: any) => v.viewedAt >= lastMonthStart && v.viewedAt < thisMonthStart
+      ).length;
+      const viewsChangePct = viewsLastMonth > 0
+        ? Math.round(((viewsThisMonth - viewsLastMonth) / viewsLastMonth) * 100)
+        : viewsThisMonth > 0 ? 100 : 0;
+
+      return {
+        profileViews: {
+          value: analyticsDoc?.profileViews?.total || 0,
+          valueThisMonth: viewsThisMonth,
+          changePercent: viewsChangePct,
+          trend: viewsChangePct >= 0 ? 'up' : 'down',
+        },
+        bookingRate: {
+          value: baseStats.sessions.completionRate,
+          trend: 'up',
+        },
+        avgSessionDuration: {
+          value: Math.round(durationAgg[0]?.avgDuration || 0),
+        },
+        popularServices: baseStats.sessions.byType.map((s: any) => ({
+          sessionType: s._id,
+          bookings: s.count,
+          revenue: s.revenue,
+        })),
+        monthlyEarnings: monthlyEarnings.map((m: any) => ({
+          month: m._id,
+          amount: m.amount,
+        })),
+        reviews: baseStats.reviews,
+      };
+    } catch (error: any) {
+      logger.error('❌ Failed to get dashboard stats:', error);
       throw error;
     }
   }
@@ -161,69 +206,41 @@ class MentorshipAnalyticsService {
       }
 
       const [mentorStats, sessionStats, reviewStats] = await Promise.all([
-        // Mentor statistics
         Mentor.aggregate([
           { $match: { isDeleted: false, ...dateFilter } },
           {
             $group: {
               _id: null,
               total: { $sum: 1 },
-              active: {
-                $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] },
-              },
-              pending: {
-                $sum: { $cond: [{ $eq: ['$status', 'pending_approval'] }, 1, 0] },
-              },
+              active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+              pending: { $sum: { $cond: [{ $eq: ['$status', 'pending_approval'] }, 1, 0] } },
             },
           },
         ]),
-
-        // Session statistics
         SessionMentor.aggregate([
           { $match: dateFilter },
           {
             $group: {
               _id: null,
               total: { $sum: 1 },
-              completed: {
-                $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] },
-              },
-              cancelled: {
-                $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] },
-              },
+              completed: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
+              cancelled: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
               totalRevenue: { $sum: '$pricing.totalAmount' },
               platformFees: { $sum: '$pricing.platformFee' },
             },
           },
         ]),
-
-        // Review statistics
         MentorshipReview.aggregate([
           { $match: { isDeleted: false, isPublic: true, ...dateFilter } },
-          {
-            $group: {
-              _id: null,
-              total: { $sum: 1 },
-              averageRating: { $avg: '$rating' },
-            },
-          },
+          { $group: { _id: null, total: { $sum: 1 }, averageRating: { $avg: '$rating' } } },
         ]),
       ]);
 
       return {
         mentors: mentorStats[0] || { total: 0, active: 0, pending: 0 },
-        sessions: sessionStats[0] || {
-          total: 0,
-          completed: 0,
-          cancelled: 0,
-          totalRevenue: 0,
-          platformFees: 0,
-        },
+        sessions: sessionStats[0] || { total: 0, completed: 0, cancelled: 0, totalRevenue: 0, platformFees: 0 },
         reviews: reviewStats[0] || { total: 0, averageRating: 0 },
-        period: {
-          startDate,
-          endDate,
-        },
+        period: { startDate, endDate },
       };
     } catch (error: any) {
       logger.error('❌ Failed to get platform stats:', error);
@@ -242,10 +259,7 @@ class MentorshipAnalyticsService {
     try {
       logger.info('💰 Generating revenue report');
 
-      const dateFilter: any = {
-        'payment.status': 'COMPLETED',
-      };
-
+      const dateFilter: any = { 'payment.status': 'COMPLETED' };
       if (startDate || endDate) {
         dateFilter['payment.paidAt'] = {};
         if (startDate) dateFilter['payment.paidAt'].$gte = startDate;
@@ -265,43 +279,10 @@ class MentorshipAnalyticsService {
           break;
       }
 
-      const report = await SessionMentor.aggregate([
-        { $match: dateFilter },
-        {
-          $group: {
-            _id: groupByFormat,
-            totalRevenue: { $sum: '$pricing.totalAmount' },
-            platformFees: { $sum: '$pricing.platformFee' },
-            mentorEarnings: { $sum: '$pricing.basePrice' },
-            sessionCount: { $sum: 1 },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]);
-
-      // const summary = report.reduce(
-      //   (acc: any, item: any) => ({
-      //     totalRevenue: acc.totalRevenue + item.totalRevenue,
-      //     platformFees: acc.platformFees + item.platformFees,
-      //     mentorEarnings: acc.mentorEarnings + item.mentorEarnings,
-      //     sessionCount: acc.sessionCount + item.sessionCount,
-      //   }),
-      //   { totalRevenue: 0, platformFees: 0, mentorEarnings: 0, sessionCount: 0 }
-      // );
-
-      // return {
-      //   summary,
-      //   breakdown: report,
-      //   groupBy,
-      //   period: { startDate, endDate },
-      // };
-
-      // ✅ REPLACE WITH
       const result = await SessionMentor.aggregate([
         { $match: dateFilter },
         {
           $facet: {
-            // Breakdown — groupBy ke hisaab se
             breakdown: [
               {
                 $group: {
@@ -314,8 +295,6 @@ class MentorshipAnalyticsService {
               },
               { $sort: { _id: 1 } },
             ],
-
-            // Summary — DB mein hi total nikalo
             summary: [
               {
                 $group: {
@@ -331,7 +310,6 @@ class MentorshipAnalyticsService {
         },
       ]);
 
-      // Return statement update karo
       return {
         summary: result[0].summary[0] || {
           totalRevenue: 0,
@@ -343,7 +321,6 @@ class MentorshipAnalyticsService {
         groupBy,
         period: { startDate, endDate },
       };
-
     } catch (error: any) {
       logger.error('❌ Failed to generate revenue report:', error);
       throw error;
@@ -391,23 +368,15 @@ class MentorshipAnalyticsService {
           $group: {
             _id: groupByField,
             total: { $sum: 1 },
-            completed: {
-              $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] },
-            },
-            cancelled: {
-              $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] },
-            },
+            completed: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
+            cancelled: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
             revenue: { $sum: '$pricing.totalAmount' },
           },
         },
         { $sort: { _id: 1 } },
       ]);
 
-      return {
-        breakdown: report,
-        groupBy,
-        period: { startDate, endDate },
-      };
+      return { breakdown: report, groupBy, period: { startDate, endDate } };
     } catch (error: any) {
       logger.error('❌ Failed to generate session report:', error);
       throw error;
