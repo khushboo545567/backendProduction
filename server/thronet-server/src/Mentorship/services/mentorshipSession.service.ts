@@ -677,6 +677,35 @@ class MentorshipSessionService {
   }
 
   /**
+   * Delete a session (mentor only).
+   * Only allowed when the session has no active (non-cancelled) bookings —
+   * mentor must cancel existing bookings first (refund flow handled separately).
+   */
+  async deleteSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
+    try {
+      const session = await this.getSessionById(sessionId, userId, authToken);
+
+      const mentor = await Mentor.findOne({ userId, isDeleted: false });
+      if (!mentor || session.mentorId !== mentor.mentorId) {
+        throw new ForbiddenError('Only the mentor of this session can delete it');
+      }
+
+      const hasActiveBooking = (session.bookings || []).some(
+        (b: any) => b.status !== BookingStatus.CANCELLED
+      );
+      if (hasActiveBooking) {
+        throw new BadRequestError('Cannot delete a session with active bookings. Cancel the bookings first.');
+      }
+
+      await SessionMentor.deleteOne({ sessionId });
+      logger.info(`Session deleted: ${sessionId}`);
+    } catch (error: any) {
+      logger.error(`Failed to delete session: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Confirm a booking on a session (mentor only)
    */
   async confirmSession(

@@ -285,35 +285,57 @@ class GroupController {
     }
   }
 
-  /**
+    /**
    * @route   PUT /api/v1/mentorship/group-sessions/:id
    * @access  Private (Mentor)
    */
-  async updateGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { id } = req.params;
-      const userId = req.user?.id;
-      if (!userId) {
-        ResponseHandler.unauthorized(res);
-        return;
+    async updateGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+      try {
+        const { id } = req.params;
+        const userId = req.user?.id;
+        if (!userId) {
+          ResponseHandler.unauthorized(res);
+          return;
+        }
+  
+        const authToken = getAuthToken(req) || undefined;
+        const file = req.file as Express.Multer.File | undefined;
+        const session = await groupService.updateGroupSession(
+          id,
+          userId,
+          req.body,
+          file,
+          authToken
+        );
+  
+        ResponseHandler.success(res, 'Group session updated successfully', session);
+      } catch (error: any) {
+        logger.error('Failed to update group session:', error);
+        next(error);
       }
-
-      const authToken = getAuthToken(req) || undefined;
-      const file = req.file as Express.Multer.File | undefined;
-      const session = await groupService.updateGroupSession(
-        id,
-        userId,
-        req.body,
-        file,
-        authToken
-      );
-
-      ResponseHandler.success(res, 'Group session updated successfully', session);
-    } catch (error: any) {
-      logger.error('Failed to update group session:', error);
-      next(error);
     }
-  }
+  
+    /**
+     * @route   DELETE /api/v1/mentorship/group-sessions/:id
+     * @access  Private (Mentor)
+     */
+    async deleteGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+      try {
+        const { id } = req.params;
+        const userId = req.user?.id;
+        if (!userId) {
+          ResponseHandler.unauthorized(res);
+          return;
+        }
+  
+        const authToken = getAuthToken(req) || undefined;
+        await groupService.deleteGroupSession(id, userId, authToken);
+        ResponseHandler.success(res, 'Group session deleted successfully', null);
+      } catch (error: any) {
+        logger.error('Failed to delete group session:', error);
+        next(error);
+      }
+    }
 }
 
 export default new GroupController();

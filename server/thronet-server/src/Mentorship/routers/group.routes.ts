@@ -66,6 +66,14 @@ const joinGroupSessionValidator = Joi.object({
 const updateGroupSessionValidator = Joi.object({
   title: Joi.string().min(10).max(200).optional(),
   description: Joi.string().min(50).max(2000).optional(),
+  topic: Joi.string().min(5).max(100).optional(),
+  category: Joi.string().max(50).optional(),
+  scheduledAt: Joi.date().iso().greater('now').optional(),
+  duration: Joi.number().min(30).max(180).optional(),
+  timezone: Joi.string().optional(),
+  maxParticipants: Joi.number().min(3).max(50).optional(),
+  minParticipants: Joi.number().min(1).optional(),
+  pricePerPerson: Joi.number().min(0).optional(),
   agenda: Joi.string().max(2000).optional().allow(''),
   outcomes: Joi.array().items(Joi.string()).optional(),
   resources: Joi.array().items(Joi.string()).optional(),
@@ -175,6 +183,13 @@ router.put(
   validateJoi(updateGroupSessionValidator),
   groupController.updateGroupSession
 );
+
+/**
+ * @route   DELETE /api/v1/group-sessions/:id
+ * @desc    Hard-delete a group session with no participants
+ * @access  Private (Mentor)
+ */
+router.delete('/:id', AuthMiddleware.authenticate as any, groupController.deleteGroupSession);
 
 /**
  * @route   POST /api/v1/group-sessions/:id/join

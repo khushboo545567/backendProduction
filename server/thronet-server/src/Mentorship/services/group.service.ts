@@ -526,6 +526,35 @@ class GroupService {
     }
   }
 
+   /**
+   * Delete a group session (mentor only).
+   * Only allowed when there are no registered participants —
+   * mentor must cancel/remove participants first otherwise.
+   */
+   async deleteGroupSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
+    try {
+      const session = await this.getGroupSessionById(sessionId, authToken);
+
+      const mentor = await mentorRepository.findByUserId(userId);
+      if (!mentor || session.mentorId !== mentor.mentorId) {
+        throw new ForbiddenError('Only the host mentor can delete this session');
+      }
+
+      if (session.currentParticipants > 0) {
+        throw new BadRequestError('Cannot delete a session with registered participants. Cancel it first.');
+      }
+
+      const isObjectId = mongoose.isValidObjectId(sessionId);
+      const query = isObjectId ? { $or: [{ _id: sessionId }, { sessionId }] } : { sessionId };
+      await GroupSession.deleteOne(query);
+
+      logger.info(`Group session deleted: ${sessionId}`);
+    } catch (error: any) {
+      logger.error(`Failed to delete group session: ${error.message}`);
+      throw error;
+    }
+  }
+
   /**
    * Add feedback to group session
    */

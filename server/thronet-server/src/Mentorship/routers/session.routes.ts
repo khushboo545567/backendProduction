@@ -164,6 +164,13 @@ router.put(
   sessionController.updateSession
 );
 
+/**
+ * @route   DELETE /api/v1/sessions/:id
+ * @desc    Hard-delete a session that has no active bookings
+ * @access  Private (Mentor)
+ */
+router.delete('/:id', sessionController.deleteSession);
+
 
 /**
  * 🆕 PHASE 10: Cancel session

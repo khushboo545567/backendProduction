@@ -276,6 +276,28 @@ class SessionController {
   }
 
   /**
+   * @route   DELETE /api/v1/mentorship/sessions/:id
+   * @access  Private (Mentor)
+   */
+  async deleteSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const authToken = getAuthToken(req) || undefined;
+      await mentorshipSessionService.deleteSession(id, userId, authToken);
+      ResponseHandler.success(res, 'Session deleted successfully', null);
+    } catch (error: any) {
+      logger.error('Failed to delete session:', error);
+      next(error);
+    }
+  }
+
+  /**
    * @route   POST /api/v1/mentorship/sessions/:id/confirm
    * @access  Private
    */
