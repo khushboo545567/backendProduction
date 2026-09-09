@@ -16,6 +16,7 @@ import adminRoutes from './admin.routes'; // ✅ PHASE 11
 import notificationRoutes from './notification.routes'; // ✅ PHASE 11 - NEW
 import seniorMentorApplicationRoutes from './seniorMentorApplication.routes';
 import trustScoreRoutes from './trustScore.routes';
+import withdrawalRouter from "./withdrawal.routes";
 
 const router = Router();
 
@@ -62,5 +63,6 @@ router.use('/admin', adminRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/senior-mentor-applications', seniorMentorApplicationRoutes);
 router.use('/', trustScoreRoutes);
+router.use("/withdrawal", withdrawalRouter);
 
 export default router;
