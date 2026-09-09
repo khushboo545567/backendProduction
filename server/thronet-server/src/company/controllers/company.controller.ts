@@ -798,6 +798,23 @@ class CompanyController {
       ResponseUtil.error(res, err.message || 'Failed to fetch company followers', 500);
     }
   }
+
+  /**
+   * Get Action Needed dashboard items (100% real database data)
+   * GET /api/companies/:id/action-needed
+   */
+  async getActionNeeded(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const objectId = getObjectId(req);
+      const authUserId = req.user?.userId || (req.user as any)?.id;
+      const data = await companyService.getActionNeeded(objectId, authUserId);
+      ResponseUtil.success(res, data, 'Action needed data fetched successfully');
+    } catch (error: unknown) {
+      const err = error as Error;
+      logger.error(`Error fetching action needed items for company ${req.params.id}: ${err.message}`);
+      ResponseUtil.error(res, err.message || 'Failed to fetch action needed items', 500);
+    }
+  }
 }
 
 export default new CompanyController();

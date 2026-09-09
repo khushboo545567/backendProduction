@@ -5,11 +5,15 @@ import {
   CompanyListResponse,
   ICompanyDocument,
 } from '../interfaces';
-import { FilterQuery, SortOrder } from 'mongoose';
+import mongoose, { FilterQuery, SortOrder } from 'mongoose';
 import crypto from 'crypto';
-import { Company } from '../models';
+import { Company, CompanyPost, Event } from '../models';
+import JobApplication from '../../Job-Service/models/jobApplication.model';
+import Job from '../../Job-Service/models/Job.model';
+import Conversation from '../../message/models/conversation.model';
 import CacheUtil from '@/shared/cache.util';
 import companyRepository from '../repositories/company.repository';
+import logger from '@/shared/logger.util';
 
 interface CompanySortOptions {
   [key: string]: SortOrder;
@@ -375,6 +379,415 @@ class CompanyService {
     } catch {
       // ignore
     }
+  }
+
+  // ─────────────────────────────────────────────
+  // DASHBOARD: ACTION NEEDED (100% REAL DATA)
+  // ─────────────────────────────────────────────
+
+  async getActionNeeded(
+    companyIdOrObjectId: string,
+    authUserId?: string
+  ): Promise<{
+    items: Array<{
+      id: string;
+      label: string;
+      action: string;
+      href: string;
+      urgency: 'high' | 'medium' | 'low';
+    }>;
+    details: {
+      posting: {
+        needed: boolean;
+        daysSinceLastPost: number | null;
+        lastPostDate: string | null;
+        label: string;
+      };
+      applications: {
+        needed: boolean;
+        pendingCount: number;
+        label: string;
+      };
+      messages: {
+        needed: boolean;
+        unreadCount: number;
+        label: string;
+      };
+      events: {
+        needed: boolean;
+        nextEvent: {
+          id: string;
+          title: string;
+          startDate: string;
+        } | null;
+        daysRemaining: number | null;
+        label: string;
+      };
+      profile: {
+        needed: boolean;
+        completionPercentage: number;
+        missingFields: string[];
+        label: string;
+      };
+    };
+  }> {
+    let company: any = null;
+    if (mongoose.Types.ObjectId.isValid(companyIdOrObjectId)) {
+      company = await companyRepository.findByObjectId(companyIdOrObjectId);
+    }
+    if (!company) {
+      company = await companyRepository.findByUUID(companyIdOrObjectId);
+    }
+    if (!company) {
+      company = await companyRepository.findBySlug(companyIdOrObjectId);
+    }
+    if (!company) {
+      throw new Error('Company not found');
+    }
+
+    const companyObjId = company._id;
+    const companyUUID = company.companyId || String(company._id);
+    const idList = Array.from(new Set([String(companyObjId), companyUUID].filter(Boolean)));
+    const companyMatchTerms: any[] = [companyObjId, companyUUID];
+    if (mongoose.Types.ObjectId.isValid(companyUUID)) {
+      companyMatchTerms.push(new mongoose.Types.ObjectId(companyUUID));
+    }
+
+    const now = new Date();
+
+    // ── 1. POSTING ACTIVITY ────────────────────────────────────────
+    let postingDetails = {
+      needed: true,
+      daysSinceLastPost: null as number | null,
+      lastPostDate: null as string | null,
+      label: "You haven't published any posts yet",
+    };
+
+    try {
+      const latestPost = await CompanyPost.findOne({
+        company: { $in: companyMatchTerms },
+        isPublished: { $ne: false },
+        'audit.isDeleted': { $ne: true },
+      })
+        .sort({ createdAt: -1 })
+        .select('_id postId title createdAt publishedAt')
+        .lean();
+
+      if (latestPost) {
+        const postDate = new Date(latestPost.publishedAt || latestPost.createdAt);
+        const diffMs = Math.max(0, now.getTime() - postDate.getTime());
+        const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+        postingDetails = {
+          needed: days >= 1,
+          daysSinceLastPost: days,
+          lastPostDate: postDate.toISOString(),
+          label:
+            days === 0
+              ? 'Last post published today'
+              : days === 1
+                ? "You haven't posted in 1 day"
+                : `You haven't posted in ${days} days`,
+        };
+      }
+    } catch (err: any) {
+      logger.warn('Error fetching latest company post for action needed:', err.message);
+    }
+
+    // ── 2. JOB APPLICATIONS ────────────────────────────────────────
+    let applicationsDetails = {
+      needed: false,
+      pendingCount: 0,
+      label: 'No pending job applications',
+    };
+
+    try {
+      const companyJobIds = (
+        await Job.find({
+          $or: [
+            { companyId: { $in: idList } },
+            ...(authUserId ? [{ createdBy: authUserId }] : []),
+          ],
+          isDeleted: { $ne: true },
+        })
+          .select('jobId')
+          .lean()
+      ).map((j: any) => j.jobId);
+
+      const pendingCount = await JobApplication.countDocuments({
+        $or: [
+          { companyId: { $in: idList } },
+          ...(companyJobIds.length > 0 ? [{ jobId: { $in: companyJobIds } }] : []),
+        ],
+        status: { $in: ['submitted', 'applied', 'pending'] },
+      });
+
+      applicationsDetails = {
+        needed: pendingCount > 0,
+        pendingCount,
+        label:
+          pendingCount > 0
+            ? `${pendingCount} new job application${pendingCount === 1 ? '' : 's'} waiting`
+            : '0 new job applications waiting',
+      };
+    } catch (err: any) {
+      logger.warn('Error fetching job applications for action needed:', err.message);
+    }
+
+    // ── 3. UNREAD MESSAGES ─────────────────────────────────────────
+    let messagesDetails = {
+      needed: false,
+      unreadCount: 0,
+      label: '0 unread messages',
+    };
+
+    if (authUserId) {
+      try {
+        const conversations = await Conversation.find({
+          members: authUserId,
+          isActive: { $ne: false },
+        })
+          .select('unreadCounts')
+          .lean();
+
+        const unreadCount = conversations.reduce((acc: number, conv: any) => {
+          let count = 0;
+          if (conv.unreadCounts) {
+            if (conv.unreadCounts instanceof Map) {
+              count = conv.unreadCounts.get(authUserId) || 0;
+            } else if (typeof conv.unreadCounts === 'object') {
+              count = (conv.unreadCounts as any)[authUserId] || 0;
+            }
+          }
+          return acc + (Number(count) || 0);
+        }, 0);
+
+        messagesDetails = {
+          needed: unreadCount > 0,
+          unreadCount,
+          label:
+            unreadCount > 0
+              ? `${unreadCount} unread message${unreadCount === 1 ? '' : 's'}`
+              : '0 unread messages',
+        };
+      } catch (err: any) {
+        logger.warn('Error fetching unread messages for action needed:', err.message);
+      }
+    }
+
+    // ── 4. UPCOMING EVENTS ─────────────────────────────────────────
+    let eventsDetails = {
+      needed: false,
+      nextEvent: null as { id: string; title: string; startDate: string } | null,
+      daysRemaining: null as number | null,
+      label: 'No upcoming events',
+    };
+
+    try {
+      const nextEvent = await Event.findOne({
+        $or: [
+          { company: { $in: companyMatchTerms } },
+          { companyId: { $in: idList } },
+        ],
+        startDate: { $gte: now },
+        isPublished: { $ne: false },
+        status: { $nin: ['Cancelled', 'cancelled', 'Completed', 'completed'] },
+      })
+        .sort({ startDate: 1 })
+        .select('title startDate eventId _id')
+        .lean();
+
+      if (nextEvent) {
+        const diffTime = new Date(nextEvent.startDate).getTime() - now.getTime();
+        const daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+
+        let label = '';
+        if (daysRemaining === 0) {
+          label = `Event "${nextEvent.title}" starts today`;
+        } else if (daysRemaining === 1) {
+          label = `Event "${nextEvent.title}" starts tomorrow`;
+        } else {
+          label = `Event "${nextEvent.title}" starts in ${daysRemaining} days`;
+        }
+
+        eventsDetails = {
+          needed: true,
+          nextEvent: {
+            id: nextEvent.eventId || String(nextEvent._id),
+            title: nextEvent.title,
+            startDate: new Date(nextEvent.startDate).toISOString(),
+          },
+          daysRemaining,
+          label,
+        };
+      }
+    } catch (err: any) {
+      logger.warn('Error fetching upcoming events for action needed:', err.message);
+    }
+
+    // ── 5. PROFILE COMPLETION ──────────────────────────────────────
+    const profileChecks = [
+      {
+        name: 'Company Name',
+        passed: Boolean(company.companyName && company.companyName.trim()),
+      },
+      {
+        name: 'Tagline & Description',
+        passed: Boolean(
+          (company.descriptions?.short && company.descriptions.short.trim()) ||
+          (company.descriptions?.tagline && company.descriptions.tagline.trim()) ||
+          (company.descriptions?.detailed && company.descriptions.detailed.trim()) ||
+          (company.description && company.description.trim()) ||
+          (company.tagline && company.tagline.trim())
+        ),
+      },
+      {
+        name: 'Industry',
+        passed: Boolean(company.industry && String(company.industry).trim()),
+      },
+      {
+        name: 'Company Size',
+        passed: Boolean(
+          (company.companySize || company.size) &&
+          String(company.companySize || company.size).trim()
+        ),
+      },
+      {
+        name: 'Headquarters Location',
+        passed: Boolean(
+          (company.headquarters?.city && company.headquarters.city.trim()) ||
+          (company.headquarters?.country && company.headquarters.country.trim()) ||
+          (company.headquarters?.address && company.headquarters.address.trim())
+        ),
+      },
+      {
+        name: 'Website',
+        passed: Boolean(company.website && company.website.trim()),
+      },
+      {
+        name: 'Company Logo',
+        passed: Boolean(
+          company.media?.logo?.url ||
+          company.logo ||
+          (typeof company.logo === 'string' && company.logo.trim())
+        ),
+      },
+      {
+        name: 'Social Media',
+        passed: Boolean(
+          company.socialMedia?.linkedin ||
+          company.socialMedia?.twitter ||
+          company.socialMedia?.website ||
+          company.socialMedia?.facebook ||
+          company.socialMedia?.instagram
+        ),
+      },
+    ];
+
+    const passedCount = profileChecks.filter((c) => c.passed).length;
+    const completionPercentage = Math.round((passedCount / profileChecks.length) * 100);
+    const missingFields = profileChecks.filter((c) => !c.passed).map((c) => c.name);
+
+    const profileDetails = {
+      needed: completionPercentage < 100,
+      completionPercentage,
+      missingFields,
+      label: `Profile completion: ${completionPercentage}%`,
+    };
+
+    // ── ASSEMBLE PENDING ITEMS LIST (WITH HONEST EMPTY/REAL DATA) ──
+    const items: Array<{
+      id: string;
+      label: string;
+      action: string;
+      href: string;
+      urgency: 'high' | 'medium' | 'low';
+    }> = [];
+
+    // 1. Posting item: only show if never posted or not posted in 1+ days
+    if (postingDetails.needed) {
+      items.push({
+        id: 'p-posting',
+        label: postingDetails.label,
+        action: 'Create Post',
+        href: '/posts',
+        urgency:
+          postingDetails.daysSinceLastPost === null ||
+            (postingDetails.daysSinceLastPost !== null && postingDetails.daysSinceLastPost >= 3)
+            ? 'high'
+            : 'medium',
+      });
+    }
+
+    // 2. Job applications item
+    if (applicationsDetails.pendingCount > 0) {
+      items.push({
+        id: 'p-applications',
+        label: applicationsDetails.label,
+        action: 'Review',
+        href: '/jobs',
+        urgency: 'high',
+      });
+    } else {
+      items.push({
+        id: 'p-applications',
+        label: '0 new job applications waiting',
+        action: 'Review',
+        href: '/jobs',
+        urgency: 'low',
+      });
+    }
+
+    // 3. Messages item
+    items.push({
+      id: 'p-messages',
+      label: messagesDetails.label,
+      action: 'Open Inbox',
+      href: '/inbox',
+      urgency: messagesDetails.unreadCount > 0 ? 'medium' : 'low',
+    });
+
+    // 4. Events item
+    if (eventsDetails.nextEvent) {
+      items.push({
+        id: 'p-events',
+        label: eventsDetails.label,
+        action: 'Manage',
+        href: '/events',
+        urgency:
+          eventsDetails.daysRemaining !== null && eventsDetails.daysRemaining <= 2
+            ? 'high'
+            : 'medium',
+      });
+    } else {
+      items.push({
+        id: 'p-events',
+        label: 'No upcoming events',
+        action: 'Manage',
+        href: '/events',
+        urgency: 'low',
+      });
+    }
+
+    // 5. Profile completion item
+    items.push({
+      id: 'p-profile',
+      label: profileDetails.label,
+      action: profileDetails.completionPercentage === 100 ? 'View' : 'Complete',
+      href: '/edit',
+      urgency: profileDetails.completionPercentage < 60 ? 'high' : 'low',
+    });
+
+    return {
+      items,
+      details: {
+        posting: postingDetails,
+        applications: applicationsDetails,
+        messages: messagesDetails,
+        events: eventsDetails,
+        profile: profileDetails,
+      },
+    };
   }
 }
 

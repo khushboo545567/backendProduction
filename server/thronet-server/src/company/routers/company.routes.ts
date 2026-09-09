@@ -80,6 +80,13 @@ router.get(
 );
 
 router.get(
+  '/:id/action-needed',
+  validationMiddleware.validateParamsJoi(companyValidators.id),
+  resolveCompanyUUID,
+  handle(companyController.getActionNeeded.bind(companyController) as ControllerMethod)
+);
+
+router.get(
   '/:id/activity',
   validationMiddleware.validateParamsJoi(companyValidators.id),
   resolveCompanyUUID,
