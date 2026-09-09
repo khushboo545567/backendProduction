@@ -1,6 +1,6 @@
-// src/models/MentorshipAnalytics.ts
+// src/Mentorship/models/mentorshipAnalytics.ts
 
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IMentorshipAnalytics extends Document {
   type: string;
@@ -33,6 +33,39 @@ export interface IMentorshipAnalytics extends Document {
   metadata?: any;
   createdAt: Date;
   updatedAt: Date;
+}
+
+// Static methods interface — must match everything defined via `.statics.` below
+export interface IMentorshipAnalyticsModel extends Model<IMentorshipAnalytics> {
+  recordEvent(
+    type: string,
+    entityType: string,
+    entityId: string,
+    metricName: keyof IMentorshipAnalytics['metrics'],
+    value?: number
+  ): Promise<IMentorshipAnalytics>;
+
+  getAnalyticsByDateRange(
+    entityType: string,
+    entityId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<IMentorshipAnalytics[]>;
+
+  getAggregatedMetrics(
+    entityType: string,
+    entityId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<any | null>;
+
+  getTopPerformers(
+    type: string,
+    metricName: string,
+    limit?: number,
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<any[]>;
 }
 
 const MentorshipAnalyticsSchema = new Schema<IMentorshipAnalytics>(
@@ -95,7 +128,7 @@ const MentorshipAnalyticsSchema = new Schema<IMentorshipAnalytics>(
   {
     timestamps: true,
     collection: 'MentorshipAnalytics',
-    versionKey: false
+    versionKey: false,
   }
 );
 
@@ -116,7 +149,7 @@ MentorshipAnalyticsSchema.statics.recordEvent = async function (
   today.setHours(0, 0, 0, 0);
 
   try {
-    const Mentorshipanalytics = await this.findOneAndUpdate(
+    const mentorshipAnalytics = await this.findOneAndUpdate(
       { type, entityType, entityId, date: today },
       {
         $inc: { [`metrics.${metricName}`]: value },
@@ -125,14 +158,14 @@ MentorshipAnalyticsSchema.statics.recordEvent = async function (
       { upsert: true, new: true }
     );
 
-    return Mentorshipanalytics;
-  } catch (error : any) {
+    return mentorshipAnalytics;
+  } catch (error: any) {
     console.error('Failed to record analytics event:', error);
     throw error;
   }
 };
 
-// Static method to get Mentorshipanalytics by date range
+// Static method to get analytics by date range
 MentorshipAnalyticsSchema.statics.getAnalyticsByDateRange = async function (
   entityType: string,
   entityId: string,
@@ -192,7 +225,7 @@ MentorshipAnalyticsSchema.statics.getTopPerformers = async function (
   endDate?: Date
 ) {
   const matchStage: any = { type };
-  
+
   if (startDate && endDate) {
     matchStage.date = { $gte: startDate, $lte: endDate };
   }
@@ -213,6 +246,9 @@ MentorshipAnalyticsSchema.statics.getTopPerformers = async function (
   return result;
 };
 
-const MentorshipAnalytics = mongoose.model<IMentorshipAnalytics>('MentorshipAnalytics', MentorshipAnalyticsSchema);
+const MentorshipAnalytics = mongoose.model<IMentorshipAnalytics, IMentorshipAnalyticsModel>(
+  'MentorshipAnalytics',
+  MentorshipAnalyticsSchema
+);
 
 export default MentorshipAnalytics;
