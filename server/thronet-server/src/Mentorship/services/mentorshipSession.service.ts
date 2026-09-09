@@ -640,42 +640,52 @@ class MentorshipSessionService {
     }
   }
 
-  /**
+    /**
    * Update session (only allowed fields: notes, description, title)
    *
    * ✅ FIX: Uses getSessionById which correctly resolves mentor authorization.
+   * ✅ FIX: Uses findOneAndUpdate with $set instead of Object.assign + save() —
+   * this avoids re-validating the ENTIRE document (which was crashing on
+   * legacy/schema-mismatched fields) and only touches the changed fields.
    */
-  async updateSession(
-    sessionId: string,
-    userId: string,
-    updates: Partial<any>,
-    authToken?: string,
-    file?: any
-  ): Promise<any> {
-    try {
-      const session = await this.getSessionById(sessionId, userId, authToken);
-
-      if (file) {
-        updates.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, userId);
+    async updateSession(
+      sessionId: string,
+      userId: string,
+      updates: Partial<any>,
+      authToken?: string,
+      file?: any
+    ): Promise<any> {
+      try {
+        // Authorization check only — we don't need the full doc anymore
+        await this.getSessionById(sessionId, userId, authToken);
+  
+        if (file) {
+          updates.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, userId);
+        }
+  
+        const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage'];
+        const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
+  
+        if (!isValidUpdate) {
+          throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage are allowed.');
+        }
+  
+        const updatedSession = await SessionMentor.findOneAndUpdate(
+          { sessionId },
+          { $set: updates },
+          { new: true, runValidators: false }
+        );
+  
+        if (!updatedSession) {
+          throw new NotFoundError('Session not found after update');
+        }
+  
+        return updatedSession;
+      } catch (error: any) {
+        logger.error(`Failed to update session: ${error.message}`);
+        throw error;
       }
-
-      const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage'];
-      const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
-
-      if (!isValidUpdate) {
-        throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage are allowed.');
-      }
-
-      Object.assign(session, updates);
-      await session.save();
-
-      return session;
-    } catch (error: any) {
-      logger.error(`Failed to update session: ${error.message}`);
-      throw error;
     }
-  }
-
   /**
    * Delete a session (mentor only).
    * Only allowed when the session has no active (non-cancelled) bookings —
