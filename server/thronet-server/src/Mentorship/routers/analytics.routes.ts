@@ -49,6 +49,14 @@ router.get(
 );
 
 /**
+ * @route   GET /api/v1/analytics/mentor/:mentorId/dashboard
+ */
+router.get(
+  '/mentor/:mentorId/dashboard',
+  AuthMiddleware.authenticate as any,
+  (req, res) => mentorshipAnalyticsController.getMentorDashboardStats(req, res)
+);
+/**
  * @route   GET /api/v1/analytics/mentor/:mentorId/sessions
  */
 router.get(

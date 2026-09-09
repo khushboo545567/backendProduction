@@ -315,6 +315,32 @@ class AnalyticsController {
       }
     }
   }
+
+    /**
+   * Get mentor dashboard stats (combined — for AnalyticsPage.tsx)
+   * GET /api/v1/analytics/mentor/:mentorId/dashboard
+   */
+  async getMentorDashboardStats(req: Request, res: Response): Promise<void> {
+    try {
+      const { mentorId } = req.params;
+
+      if (!(await this.canAccessMentorAnalytics(req, mentorId))) {
+        ResponseHandler.forbidden(res, 'Access denied');
+        return;
+      }
+
+      logger.info(`📊 Fetching dashboard stats for mentor: ${mentorId}`);
+
+      const stats = await mentorshipanalyticsService.getMentorDashboardStats(mentorId);
+
+      ResponseHandler.success(res, 'Dashboard stats retrieved successfully', stats);
+    } catch (error: any) {
+      logger.error('❌ Failed to fetch dashboard stats:', error);
+      if (!res.headersSent) {
+        ResponseHandler.error(res, error.message || 'Failed to fetch dashboard stats', 500);
+      }
+    }
+  }
 }
 
 export default new AnalyticsController();
