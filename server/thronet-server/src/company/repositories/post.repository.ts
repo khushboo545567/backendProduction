@@ -45,21 +45,43 @@ class PostRepository {
         ]);
     }
 
-    // ✅ UPDATED: ObjectId se dhundo
+    // ✅ UPDATED: ObjectId se dhundo (supports sort: top, engagement, trending, recent)
     async findByCompanyObjectId(
         companyObjectId: string,
         skip: number,
-        limit: number
+        limit: number,
+        sort = 'recent'
     ): Promise<[IPostDocument[], number]> {
         const query = {
             company: new mongoose.Types.ObjectId(companyObjectId),
             status: { $ne: 'Archived' },
         };
+        const sortMap: Record<string, any> = {
+            top: {
+                'engagementMetrics.likesCount': -1,
+                'engagementMetrics.viewsCount': -1,
+                'engagementMetrics.commentsCount': -1,
+                createdAt: -1,
+            },
+            engagement: {
+                'engagementMetrics.likesCount': -1,
+                'engagementMetrics.sharesCount': -1,
+                'engagementMetrics.commentsCount': -1,
+                createdAt: -1,
+            },
+            trending: {
+                'engagementMetrics.likesCount': -1,
+                'engagementMetrics.viewsCount': -1,
+                createdAt: -1,
+            },
+            recent: { createdAt: -1 },
+        };
+        const sortQuery = sortMap[sort] || sortMap.recent;
         return Promise.all([
             CompanyPost.find(query)
                 .populate('company', 'companyName companySlug media')
                 .populate('author', 'firstName lastName employeeId')
-                .sort({ createdAt: -1 })
+                .sort(sortQuery)
                 .skip(skip)
                 .limit(limit)
                 .lean()

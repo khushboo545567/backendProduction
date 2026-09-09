@@ -237,8 +237,9 @@ class PostController {
       }
       const page = parseInt(req.query.page as string) || 1;
       const pageSize = parseInt(req.query.pageSize as string) || 20;
+      const sort = (req.query.sort as string) || 'recent';
 
-      const result = await postService.getPostsByCompany(companyObjectId, page, pageSize);
+      const result = await postService.getPostsByCompany(companyObjectId, page, pageSize, sort);
       const rawPosts = result.posts || result.items || (Array.isArray(result) ? result : []);
       const enriched = await this.enrichPostsWithLiked(rawPosts, userId);
 

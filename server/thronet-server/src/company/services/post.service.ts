@@ -385,15 +385,16 @@ class PostService {
   async getPostsByCompany(
     companyObjectId: string,
     page = 1,
-    pageSize = 20
+    pageSize = 20,
+    sort = 'recent'
   ): Promise<PostListResponse> {
-    const cacheKey = `${this.CACHE_PREFIX}company:${companyObjectId}:${page}:${pageSize}`;
+    const cacheKey = `${this.CACHE_PREFIX}company:${companyObjectId}:${page}:${pageSize}:${sort}`;
     const cached = await CacheUtil.get(cacheKey);
     if (cached) return cached;
 
     const skip = (page - 1) * pageSize;
     const [posts, total] = await postRepository.findByCompanyObjectId(
-      companyObjectId, skip, pageSize
+      companyObjectId, skip, pageSize, sort
     );
 
     const totalPages = Math.ceil(total / pageSize);
