@@ -265,6 +265,28 @@ class CompanyAnalyticsController {
       ResponseUtil.error(res, error.message || 'Failed to export analytics');
     }
   };
+  // GET /dashboard-card-stats?companyId=UUID&days=30
+  getDashboardCardStats = async (req: AuthRequest, res: Response) => {
+    try {
+      const { companyId, days } = req.query;
+
+      if (!companyId || typeof companyId !== 'string') {
+        ResponseUtil.badRequest(res, 'Company ID is required');
+        return;
+      }
+
+      const daysNum = days ? parseInt(days as string, 10) : 30;
+      const data = await CompanyAnalyticsService.getDashboardCardStats(
+        companyId,
+        daysNum
+      );
+
+      ResponseUtil.success(res, data, 'Dashboard card stats fetched successfully');
+    } catch (error: any) {
+      logger.error('Error in getDashboardCardStats:', error);
+      ResponseUtil.error(res, error.message || 'Failed to fetch dashboard card stats');
+    }
+  };
 }
 
 export default new CompanyAnalyticsController();

@@ -112,4 +112,10 @@ router.get('/dashboard-v2',
   companyAnalyticsController.getDashboardV2 as any
 );
 
+router.get('/dashboard-card-stats',
+  AuthMiddleware.authenticate as any,
+  validationMiddleware.validateQueryJoi(analyticsValidators.dashboardV2Query),
+  companyAnalyticsController.getDashboardCardStats as any
+);
+
 export default router;

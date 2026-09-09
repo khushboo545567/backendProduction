@@ -574,6 +574,100 @@ class CompanyAnalyticsService {
   }
 
   // =====================================================
+  // GET DASHBOARD CARD STATS — combined 4-card metrics
+  // =====================================================
+  async getDashboardCardStats(
+    companyUUID: string,
+    days = 30
+  ): Promise<{
+    profileViews: { value: number; change: number | null };
+    postImpressions: { value: number; change: number | null };
+    followers: { value: number; change: number | null };
+    searchAppearances: { value: number; change: number | null };
+  }> {
+    try {
+      const company = await companyRepository.findByUUID(companyUUID);
+      if (!company) throw new Error('Company not found');
+
+      const companyObjectId = company._id.toString();
+
+      const cacheKey = `${this.CACHE_PREFIX}card-stats:${companyObjectId}:${days}`;
+      const cached = await CacheUtil.get(cacheKey);
+      if (cached) return cached;
+
+      // Fetch current period and previous period tracking stats in parallel
+      const [currentTracking, previousTracking, followerStats] = await Promise.all([
+        analyticsRepository.getTrackingStats(companyObjectId, days),
+        analyticsRepository.getTrackingStats(companyObjectId, days * 2),
+        this.getFollowerStatsForCards(companyObjectId, days),
+      ]);
+
+      // Previous period = (2x period total) - (current period total)
+      const prevSearchAppearances = previousTracking.searchAppearances - currentTracking.searchAppearances;
+      const prevPageViews = previousTracking.pageViews - currentTracking.pageViews;
+      const prevPostImpressions = previousTracking.postImpressions - currentTracking.postImpressions;
+
+      const result = {
+        profileViews: {
+          value: currentTracking.pageViews,
+          change: this.safePercentageChange(currentTracking.pageViews, prevPageViews),
+        },
+        postImpressions: {
+          value: currentTracking.postImpressions,
+          change: this.safePercentageChange(currentTracking.postImpressions, prevPostImpressions),
+        },
+        followers: {
+          value: followerStats.totalFollowers,
+          change: followerStats.growthRate !== 0 ? followerStats.growthRate : null,
+        },
+        searchAppearances: {
+          value: currentTracking.searchAppearances,
+          change: this.safePercentageChange(currentTracking.searchAppearances, prevSearchAppearances),
+        },
+      };
+
+      await CacheUtil.set(cacheKey, result, 300); // 5 min cache
+      return result;
+    } catch (error: any) {
+      logger.error('Error getting dashboard card stats:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Helper: get follower count + growth for dashboard cards
+   */
+  private async getFollowerStatsForCards(
+    companyObjectId: string,
+    days: number
+  ): Promise<{ totalFollowers: number; growthRate: number }> {
+    try {
+      // Import follower repository dynamically to avoid circular deps
+      const followerRepo = (await import('../repositories/follower.repository')).default;
+      const [totalFollowers, , , gainedThisMonth, lostThisMonth] =
+        await followerRepo.getFollowerStats(companyObjectId);
+
+      const growthRate = totalFollowers > 0
+        ? Math.round(((gainedThisMonth - lostThisMonth) / totalFollowers) * 10000) / 100
+        : 0;
+
+      return { totalFollowers, growthRate };
+    } catch (error: any) {
+      logger.error('Error getting follower stats for cards:', error);
+      return { totalFollowers: 0, growthRate: 0 };
+    }
+  }
+
+  /**
+   * Safe percentage change: returns null when previous is 0 (no historical data)
+   */
+  private safePercentageChange(current: number, previous: number): number | null {
+    if (previous === 0 && current === 0) return null;
+    if (previous === 0) return current > 0 ? 100 : null;
+    return Math.round(((current - previous) / previous) * 10000) / 100;
+  }
+
+  // =====================================================
   // HELPERS
   // =====================================================
   private aggregateStats(stats: ICompanyAnalyticsDocument[]): Record<string, number> {
