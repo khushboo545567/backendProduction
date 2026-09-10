@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
@@ -141,6 +141,7 @@ export interface IUser extends Document {
         followerGrowthRate: number;
     };
     badges?: IUserBadge[];
+    dismissedSuggestionIds?: string[];
     createdAt: Date;
     updatedAt: Date;
     fullName: string;
@@ -320,8 +321,10 @@ const UserSchema = new Schema<IUser, IUserModel>(
                 message: 'Location must start with a capital letter',
             },
         },
-
-
+        dismissedSuggestionIds: {
+            type: [String],
+            default: [],
+        },
 
         currentPosition: {
             type: String,

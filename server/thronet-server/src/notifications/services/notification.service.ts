@@ -155,6 +155,70 @@ class NotificationService {
     }
 
     /**
+     * Called by the PYMK cron job to notify a user about new connection suggestions.
+     */
+    static async notifyPymk(recipientId: string, suggestions: any[]): Promise<void> {
+        try {
+            if (!suggestions || suggestions.length === 0) return;
+
+            const firstSuggestion = suggestions[0];
+            const senderId = firstSuggestion.id;
+            const senderName = firstSuggestion.name;
+            const senderPhoto = firstSuggestion.image && firstSuggestion.image !== 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSdYRNQDghH1JvFXro2Yz3iWNmmFAubFZ-RGQ&s' 
+                ? firstSuggestion.image 
+                : null;
+
+            let message = '';
+            if (suggestions.length === 1) {
+                message = `${suggestions[0].name} is on Throne8. Connect with them!`;
+            } else if (suggestions.length === 2) {
+                message = `${suggestions[0].name} and ${suggestions[1].name} are on Throne8. See your connection suggestions.`;
+            } else {
+                message = `${suggestions[0].name}, ${suggestions[1].name} and ${suggestions.length - 2} others you may know are on Throne8.`;
+            }
+
+            const entityIds = suggestions.map((s: any) => s.id);
+            const notificationId = uuidv4();
+
+            const doc = {
+                notificationId,
+                recipientId,
+                senderId,
+                senderName,
+                senderPhoto,
+                type: 'pymk_suggestion',
+                entityId: senderId, // Main ID for frontend routing if needed
+                entityIds,
+                entityType: 'user',
+                message,
+                isRead: false,
+            };
+
+            await Notification.create(doc);
+
+            try {
+                const io = getIO();
+                io.to(`user:${recipientId}`).emit('notification:new', {
+                    ...doc,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for PYMK notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('PYMK notification sent', { recipientId, suggestionCount: suggestions.length });
+        } catch (err) {
+            logger.error('notifyPymk failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                recipientId,
+            });
+        }
+    }
+
+
+    /**
      * @deprecated Use notifyPostRecipients instead.
      * Kept for backward compatibility — delegates to the unified function.
      */
@@ -694,69 +758,63 @@ class NotificationService {
     }
 
     /**
-     * Called by the profile-view digest cron. Notifies a user that their profile
-     * was viewed, summarizing the batch rather than sending one notification per view.
-     * If there's exactly one named viewer, the notification names them; otherwise
-     * it's a count-based summary. Anonymous/private views are excluded from viewerIds
-     * by the caller (profileView.service.ts) before this is invoked.
+     * Called by the profile-view cron per-view-record.
+     * Creates ONE Notification per viewer, named, with their real photo.
+     * No grouping, no anonymous fallback, no "Someone / N people" text.
      */
     static async notifyProfileViewed(
         recipientId: string,
-        namedViewerIds: string[],
-        totalViewCount: number
+        viewerId: string,
+        viewId: string
     ): Promise<void> {
         try {
-            let senderId = 'system';
-            let senderName = 'Someone';
-            let senderPhoto: string | null = null;
-            let message: string;
+            // Resolve the viewer's real name + photo
+            const viewer = await User.findOne({ userId: viewerId })
+                .select('firstName lastName profilePhotoId userId')
+                .lean();
 
-            if (namedViewerIds.length === 1) {
-                const viewer = await User.findOne({ userId: namedViewerIds[0] })
-                    .select('firstName lastName profilePhotoId')
-                    .lean();
-                if (viewer) {
-                    senderId = namedViewerIds[0];
-                    senderName = `${viewer.firstName} ${viewer.lastName || ''}`.trim();
-                    if ((viewer as any).profilePhotoId) {
-                        const photoDoc = await ProfilePhoto.findOne({
-                            photoId: (viewer as any).profilePhotoId,
-                        }).select('cloudinarySecureUrl').lean();
-                        senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-                    }
-                }
-                message = `${senderName} viewed your profile`;
-            } else {
-                message =
-                    totalViewCount === 1
-                        ? 'Someone viewed your profile'
-                        : `${totalViewCount} people viewed your profile`;
+            if (!viewer) {
+                logger.warn('notifyProfileViewed: viewer not found, skipping', { viewerId });
+                return;
             }
 
+            const senderName = `${(viewer as any).firstName} ${(viewer as any).lastName || ''}`.trim();
+
+            let senderPhoto: string | null = null;
+            if ((viewer as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (viewer as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            const message = `${senderName} viewed your profile`;
             const notificationId = uuidv4();
 
             await Notification.create({
                 notificationId,
                 recipientId,
-                senderId,
+                senderId: viewerId,
                 senderName,
                 senderPhoto,
                 type: 'profile_viewed' as const,
-                entityId: recipientId, // no single entity — links back to the viewed profile itself
+                // entityId = viewerId so clicking navigates to the viewer's profile
+                entityId: viewerId,
                 entityType: 'user' as const,
                 message,
                 isRead: false,
             });
 
+            // Emit real-time socket event if the recipient is online
             try {
                 const io = getIO();
                 io.to(`user:${recipientId}`).emit('notification:new', {
                     notificationId,
                     type: 'profile_viewed',
-                    senderId,
+                    senderId: viewerId,
                     senderName,
                     senderPhoto,
-                    entityId: recipientId,
+                    entityId: viewerId,
                     entityType: 'user',
                     message,
                     isRead: false,
@@ -770,16 +828,120 @@ class NotificationService {
 
             logger.info('Profile viewed notification sent', {
                 recipientId,
-                namedViewerCount: namedViewerIds.length,
-                totalViewCount,
+                viewerId,
+                viewId,
             });
         } catch (err) {
             logger.error('notifyProfileViewed failed', {
                 error: err instanceof Error ? err.message : 'unknown',
                 recipientId,
+                viewerId,
             });
         }
     }
+
+    /**
+ * Called by the profile-view digest cron. Groups multiple unnotified
+ * viewers into ONE notification, LinkedIn-style:
+ * "A, B and N others viewed your profile"
+ */
+static async notifyProfileViewedBatch(
+    recipientId: string,
+    viewerIds: string[]
+): Promise<void> {
+    try {
+        if (!viewerIds || viewerIds.length === 0) return;
+
+        // Get unique viewer IDs (someone may have viewed multiple times)
+        const uniqueViewerIds = Array.from(new Set(viewerIds));
+
+        const viewers = await User.find({ userId: { $in: uniqueViewerIds } })
+            .select('userId firstName lastName profilePhotoId')
+            .lean();
+
+        if (!viewers.length) return;
+
+        // Build display names in the same order as uniqueViewerIds
+        const viewerMap = new Map(viewers.map((v: any) => [v.userId, v]));
+        const names = uniqueViewerIds
+            .map((id) => {
+                const v: any = viewerMap.get(id);
+                return v ? `${v.firstName} ${v.lastName || ''}`.trim() : null;
+            })
+            .filter((n): n is string => !!n);
+
+        if (!names.length) return;
+
+        // First viewer's photo is used as the notification's icon
+        const firstViewer: any = viewerMap.get(uniqueViewerIds[0]);
+        let senderPhoto: string | null = null;
+        if (firstViewer?.profilePhotoId) {
+            const photoDoc = await ProfilePhoto.findOne({
+                photoId: firstViewer.profilePhotoId,
+            }).select('cloudinarySecureUrl').lean();
+            senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+        }
+
+        let message = '';
+        if (names.length === 1) {
+            message = `${names[0]} viewed your profile`;
+        } else if (names.length === 2) {
+            message = `${names[0]} and ${names[1]} viewed your profile`;
+        } else {
+            message = `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 > 1 ? 's' : ''} viewed your profile`;
+        }
+
+        const notificationId = uuidv4();
+
+        await Notification.create({
+            notificationId,
+            recipientId,
+            senderId: uniqueViewerIds[0],
+            senderName: names[0],
+            senderPhoto,
+            type: 'profile_viewed' as const,
+            entityId: uniqueViewerIds[0],
+            entityIds: uniqueViewerIds,
+            entityType: 'user' as const,
+            message,
+            isRead: false,
+        });
+
+        try {
+            const io = getIO();
+            io.to(`user:${recipientId}`).emit('notification:new', {
+                notificationId,
+                type: 'profile_viewed',
+                senderId: uniqueViewerIds[0],
+                senderName: names[0],
+                senderPhoto,
+                entityId: uniqueViewerIds[0],
+                entityIds: uniqueViewerIds,
+                entityType: 'user',
+                message,
+                isRead: false,
+                createdAt: new Date().toISOString(),
+            });
+        } catch (socketErr) {
+            logger.warn('Socket emit failed for profile_viewed batch notification', {
+                error: socketErr instanceof Error ? socketErr.message : 'unknown',
+            });
+        }
+
+        logger.info('Profile viewed BATCH notification sent', {
+            recipientId,
+            viewerCount: uniqueViewerIds.length,
+        });
+    } catch (err) {
+        logger.error('notifyProfileViewedBatch failed', {
+            error: err instanceof Error ? err.message : 'unknown',
+            recipientId,
+        });
+    }
+}
+
+
+
 
     /** Fetch paginated notifications for a user */
     static async getNotifications(

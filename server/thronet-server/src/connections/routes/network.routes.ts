@@ -1,10 +1,12 @@
 // src/routes/networkRoutes.ts
 import { Router } from 'express';
 
-import { networkControllers } from '../controllers/index';
+import { networkController } from '../controllers/index';
 import networkValidator from '../validators/networkValidator';
 import { defaultRateLimiter } from '../middleware/rateLimiter.middleware';
 import { validateRequest } from '@/shared/middlewares/connections/validations.middleware';
+
+
 
 const router: Router = Router();
 
@@ -151,5 +153,7 @@ router.get(
     validateRequest(networkValidator.validateExportNetworkData),
     networkController.exportNetworkData
 );
+
+console.log('🔍 network.routes MODULE END');
 
 export default router;

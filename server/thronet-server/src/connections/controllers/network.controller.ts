@@ -238,27 +238,36 @@ export const calculateInfluenceScore = async (req: Request, res: Response): Prom
 export const getNetworkRecommendations = async (req: Request, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
-    const { limit } = req.query;
+    const { limit, cursor } = req.query;
     const startTime = Date.now();
 
     if (!userId) {
       return sendResponse(res, 400, null, 'Missing userId parameter');
     }
+    
+    // SECURITY CHECK: Ensure user can only fetch their own recommendations
+    // Assuming req.user is set by the auth middleware
+    const authenticatedUserId = (req as any).user?.id || (req as any).user?.userId;
+    if (authenticatedUserId && authenticatedUserId !== userId) {
+      return sendResponse(res, 403, null, 'Forbidden: Cannot fetch recommendations for other users');
+    }
 
     const limitNum = parseInt(limit as string) || 10;
+    const cursorStr = cursor as string | undefined;
     
-    // Note: This would need to be implemented in networkService
+    // Call the newly implemented getSuggestionCards
+    const recommendations = await networkService.getSuggestionCards(userId, limitNum, cursorStr);
+    
     const result = { 
       userId, 
-      recommendations: [], 
+      recommendations, 
       limit: limitNum,
-      message: 'Recommendations service not yet implemented',
       timestamp: new Date()
     };
     const duration = Date.now() - startTime;
     
     logOperation('getNetworkRecommendations', userId, { limit: limitNum, duration });
-    sendResponse(res, 200, result, 'Network recommendations retrieved');
+    sendResponse(res, 200, result, 'Network recommendations retrieved successfully');
   } catch (error: unknown) {
     logError('getNetworkRecommendations', error, req.params.userId, { limit: req.query.limit });
     sendResponse(res, 500, null, 'Internal server error while getting network recommendations');

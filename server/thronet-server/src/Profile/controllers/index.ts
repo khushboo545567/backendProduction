@@ -22,6 +22,7 @@ import PatentController from "./patent.controller";
 import HonorController from "./honor.controller";
 export { default as ReportController } from '@/Profile/controllers/report.controller';
 
+console.log('🔍 LOADING: Profile/controllers/index.ts');
 
 export {
     //profile service

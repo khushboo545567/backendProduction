@@ -18,13 +18,7 @@ import path from 'path';
 // Fix for Node on Windows DNS resolving MongoDB Atlas SRV records.
 // ⚠️ ONLY apply this in local/dev — on Railway (or any Linux container
 // production environment) this can break SRV DNS resolution entirely.
-if (process.env['NODE_ENV'] !== 'production') {
-  try {
-    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-  } catch {
-    // ignore if not permitted
-  }
-}
+// Removed dns.setServers because it breaks local Windows DNS resolution on restricted networks.
 
 // ============================================================
 // ENVIRONMENT

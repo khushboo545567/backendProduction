@@ -31,6 +31,8 @@ import {
     searchController
 } from '@/Mentorship/controllers/index';
 
+console.log('🔍 LOADING: shared/controllers/index.controllers.ts');
+
 export { default as ReportController } from '@/Profile/controllers/report.controller';
 export {
     AuthController,

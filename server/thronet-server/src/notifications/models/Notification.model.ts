@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface INotification extends Document {
@@ -7,8 +7,9 @@ export interface INotification extends Document {
     senderId: string;          // who triggered it
     senderName: string;
     senderPhoto?: string;
-    type: 'post_created' | 'post_liked' | 'post_commented' | 'connection_request' | 'connection_accepted' | 'mentioned' | 'new_follower' | 'profile_viewed' | 'birthday' | 'work_anniversary';
+    type: 'post_created' | 'post_liked' | 'post_commented' | 'connection_request' | 'connection_accepted' | 'mentioned' | 'new_follower' | 'profile_viewed' | 'birthday' | 'work_anniversary' | 'pymk_suggestion';
     entityId: string;         
+    entityIds?: string[];
     entityType: 'post' | 'connection' | 'comment' | 'user';
     message: string;
     isRead: boolean;
@@ -26,10 +27,11 @@ const NotificationSchema = new Schema<INotification, INotificationModel>(
         senderPhoto: { type: String, default: null },
         type: {
             type: String,
-            enum: ['post_created', 'post_liked', 'post_commented', 'connection_request', 'connection_accepted', 'mentioned', 'new_follower', 'profile_viewed', 'birthday', 'work_anniversary'],
+            enum: ['post_created', 'post_liked', 'post_commented', 'connection_request', 'connection_accepted', 'mentioned', 'new_follower', 'profile_viewed', 'birthday', 'work_anniversary', 'pymk_suggestion'],
             required: true,
         },
         entityId: { type: String, required: true },
+        entityIds: { type: [String], default: [] },
         entityType: { type: String, enum: ['post', 'connection', 'comment', 'user'], required: true },
         message: { type: String, required: true },
         isRead: { type: Boolean, default: false },

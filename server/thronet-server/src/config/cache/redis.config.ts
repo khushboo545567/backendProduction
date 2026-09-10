@@ -1,24 +1,27 @@
 // src/config/cache/redis.config.ts
-import Redis, { RedisOptions } from 'ioredis';
+import Redis, { Cluster, ClusterNode, ClusterOptions, RedisOptions } from 'ioredis';
 import { logger } from "@/shared/logger.util";
 
-// ==================== REDIS SINGLE-NODE CONFIGURATION ====================
-// NOTE: Switched from cluster mode to single-node because Railway (and most
-// hosted Redis providers) provision a single instance, not a 3-node cluster.
-// If you later move to a real Redis Cluster (e.g. AWS ElastiCache Cluster
-// mode, Redis Enterprise), reintroduce ioredis' Cluster client instead.
-
-interface RedisSingleConfig {
+interface RedisStandaloneConfig {
+    clusterMode: false;
     options: RedisOptions;
 }
 
+interface RedisClusterConfig {
+    clusterMode: true;
+    nodes: ClusterNode[];
+    options: ClusterOptions;
+}
+
+export type RedisConfig = RedisStandaloneConfig | RedisClusterConfig;
+
 class RedisConfigManager {
     private static instance: RedisConfigManager;
-    private redisConfig: RedisSingleConfig;
+    private redisConfig: RedisConfig;
 
     // ✅ NAYA — singleton ioredis client instance (lazy-created)
-    private client: Redis | null = null;
-    private connectingPromise: Promise<Redis> | null = null;
+    private client: Redis | Cluster | null = null;
+    private connectingPromise: Promise<Redis | Cluster> | null = null;
 
     private constructor() {
         this.redisConfig = this.initializeConfig();
@@ -35,17 +38,21 @@ class RedisConfigManager {
     }
 
     /**
-     * Initialize Redis single-node configuration
+     * Initialize Redis cluster configuration
      */
-    private initializeConfig(): RedisSingleConfig {
+    private initializeConfig(): RedisConfig {
         const isProduction = process.env.NODE_ENV === 'production';
+        const clusterMode = process.env.REDIS_CLUSTER_MODE === 'true';
+        const nodes = (process.env.REDIS_CLUSTER_NODES || 'redis-node-1:7001,redis-node-2:7002,redis-node-3:7003')
+            .split(',')
+            .map((node) => {
+                const [host, port] = node.trim().split(':');
+                return { host, port: parseInt(port || '6379') };
+            });
 
-        const options: RedisOptions = {
-            host: process.env.REDIS_HOST || 'localhost',
-            port: parseInt(process.env.REDIS_PORT || '6379'),
+        const redisOptions: RedisOptions = {
             password: process.env.REDIS_PASSWORD || undefined,
             db: parseInt(process.env.REDIS_DB || '0'),
-
             // ==================== CONNECTION SETTINGS ====================
             enableReadyCheck: true,
             enableOfflineQueue: true,
@@ -95,24 +102,45 @@ class RedisConfigManager {
             showFriendlyErrorStack: !isProduction,
         };
 
-        logger.info('⚙️ [REDIS CONFIG] Single-node configuration initialized', {
-            host: options.host,
-            port: options.port,
+        const clusterOptions: ClusterOptions = {
+            redisOptions,
+            clusterRetryStrategy: (times: number) => {
+                const maxRetries = parseInt(process.env.REDIS_MAX_RETRIES || '10');
+                if (times > maxRetries) {
+                    logger.error('❌ [REDIS] Max cluster retry attempts reached', { attempts: times });
+                    return null;
+                }
+                return Math.min(times * 200, 3000);
+            },
+        };
+
+        const standaloneOptions: RedisOptions = {
+            ...redisOptions,
+            host: process.env.REDIS_HOST || 'localhost',
+            port: parseInt(process.env.REDIS_PORT || '6379'),
+        };
+
+        logger.info(`⚙️ [REDIS CONFIG] ${clusterMode ? 'Cluster' : 'standalone'} configuration initialized`, {
+            nodes: clusterMode ? nodes : undefined,
+            host: clusterMode ? undefined : standaloneOptions.host,
+            port: clusterMode ? undefined : standaloneOptions.port,
             environment: process.env.NODE_ENV,
             autoPipelining: true,
             timestamp: new Date().toISOString()
         });
 
-        return { options };
+        return clusterMode
+            ? { clusterMode: true, nodes, options: clusterOptions }
+            : { clusterMode: false, options: standaloneOptions };
     }
 
     /**
-     * ✅ NAYA — Get (ya lazily create) the singleton ioredis client.
+    * Get (or lazily create) the singleton ioredis cluster client.
      * Concurrent calls ke dauraan multiple clients ban jaane se bachne ke
      * liye `connectingPromise` use kiya hai — jab tak connect ho raha hai,
      * baaki callers usi promise ko await karenge instead of spawning a new one.
      */
-    public async getRedisClient(): Promise<Redis> {
+    public async getRedisClient(): Promise<Redis | Cluster> {
         // Already connected/ready client hai to seedha return karo
         if (this.client && (this.client.status === 'ready' || this.client.status === 'connect')) {
             return this.client;
@@ -123,14 +151,15 @@ class RedisConfigManager {
             return this.connectingPromise;
         }
 
-        this.connectingPromise = new Promise<Redis>((resolve, reject) => {
+        this.connectingPromise = new Promise<Redis | Cluster>((resolve, reject) => {
             try {
-                const client = new Redis(this.redisConfig.options);
+                const client = this.redisConfig.clusterMode
+                    ? new Redis.Cluster(this.redisConfig.nodes, this.redisConfig.options)
+                    : new Redis(this.redisConfig.options);
 
                 client.on('connect', () => {
                     logger.info('✅ [REDIS] Client connecting...', {
-                        host: this.redisConfig.options.host,
-                        port: this.redisConfig.options.port,
+                        nodes: this.redisConfig.clusterMode ? this.redisConfig.nodes : undefined,
                     });
                 });
 
@@ -183,7 +212,7 @@ class RedisConfigManager {
     /**
      * Get connection configuration
      */
-    public getConfig(): RedisSingleConfig {
+    public getConfig(): RedisConfig {
         return this.redisConfig;
     }
 

@@ -60,7 +60,8 @@ import logger, { LogCategory, LogCategoryType } from '@/shared/logger.util';
 import { ErrorResponse } from '@/shared/response.util';
 import environmentConfig from '@/config/environment/environment';
 import redisService from '@/services/redis.service';
-import { Connection, User, Follow } from '@/shared/models/index.models';
+import { Connection, User } from '@/shared/models/index.models';
+import { Follow } from '@/connections/models/index';
 import { IConnection, IConnectionStats } from '@/connections/models/Connection';
 
 /**
@@ -645,70 +646,150 @@ class connectionService {
      */
     static async processConnectionRecommendations(
         userId: string,
-        limit: number = environmentConfig.PAGINATION_DEFAULT_LIMIT || 20
+        limit: number = environmentConfig.PAGINATION_DEFAULT_LIMIT || 20,
+        offset: number = 0
     ): Promise<string[]> {
         const cacheKey = `recommendations:${userId}:${environmentConfig.CACHE_VERSION || 1}`;
+        const poolKey = `recommendations:pool:${userId}:${environmentConfig.CACHE_VERSION || 1}`;
 
-        try {
-            const cachedRecommendations = await redisService.get(cacheKey);
-            if (cachedRecommendations) {
-                logger.debug('Serving recommendations from cache', {
+        // If offset > 0, check the cached pool first for instant pagination
+        if (offset > 0) {
+            try {
+                const cachedPool = await redisService.get(poolKey);
+                if (cachedPool) {
+                    const pool: string[] = JSON.parse(cachedPool);
+                    if (offset < pool.length) {
+                        return pool.slice(offset, offset + limit);
+                    }
+                }
+            } catch (error: any) {
+                logger.warn('Cache retrieval failed for pool', {
                     category: LogCategory.CONNECTION,
-                    data: { userId, cacheKey },
+                    data: { error: error instanceof Error ? error.message : 'Unknown error' },
                     responseTimeMs: 0
                 } as LogMetadata);
-                return JSON.parse(cachedRecommendations);
             }
-        } catch (error : any) {
-            logger.warn('Cache retrieval failed', {
-                category: LogCategory.CONNECTION,
-                data: { error: error instanceof Error ? error.message : 'Unknown error' },
-                responseTimeMs: 0
-            } as LogMetadata);
+        } else {
+            try {
+                const cachedRecommendations = await redisService.get(cacheKey);
+                if (cachedRecommendations) {
+                    logger.debug('Serving recommendations from cache', {
+                        category: LogCategory.CONNECTION,
+                        data: { userId, cacheKey },
+                        responseTimeMs: 0
+                    } as LogMetadata);
+                    return JSON.parse(cachedRecommendations);
+                }
+            } catch (error : any) {
+                logger.warn('Cache retrieval failed', {
+                    category: LogCategory.CONNECTION,
+                    data: { error: error instanceof Error ? error.message : 'Unknown error' },
+                    responseTimeMs: 0
+                } as LogMetadata);
+            }
         }
 
-        const connections = await Connection.findUserConnectionsPaginated(userId, {
-            limit: environmentConfig.PAGINATION_MAX_LIMIT || 100,
-            projection: 'fromUserId toUserId',
-            useEstimatedCount: true,
-            region: 'global',
-        });
+        const [connections, currentUser] = await Promise.all([
+            Connection.findUserConnectionsPaginated(userId, {
+                limit: environmentConfig.PAGINATION_MAX_LIMIT || 100,
+                projection: 'fromUserId toUserId',
+                useEstimatedCount: true,
+                region: 'global',
+            }),
+            User.findOne({ userId }).select('dismissedSuggestionIds').lean()
+        ]);
 
         const connectedUserIds = connections.data.flatMap((conn) =>
             [conn.fromUserId, conn.toUserId].filter((id) => id !== userId)
         );
 
+        const dismissedIds: string[] = (currentUser as any)?.dismissedSuggestionIds || [];
+        const excludedUserIds = Array.from(new Set([userId, ...connectedUserIds, ...dismissedIds]));
+
         const recommendations = await User.find({
             userId: {
-                $nin: [userId, ...connectedUserIds]
+                $nin: excludedUserIds
             },
-            status: 'active'
+            status: 'active',
+            'flags.isDeleted': false
         })
+            .skip(offset)
             .limit(limit)
             .select('userId')
             .lean();
 
         const recommendationIds = recommendations.map((user) => user.userId);
 
-        // ✅ FIX: Use redisService.set instead of setex
-        try {
-            await redisService.set(cacheKey, JSON.stringify(recommendationIds), {
-                ttl: environmentConfig.USER_PROFILE_CACHE_TTL || 3600
-            });
-            logger.debug('Connection recommendations generated and cached', {
-                category: LogCategory.CONNECTION,
-                data: { userId, recommendationCount: recommendationIds.length, cacheKey },
-                responseTimeMs: 0
-            } as LogMetadata);
-        } catch (error : any) {
-            logger.warn('Cache set failed (non-blocking)', {
-                category: LogCategory.CONNECTION,
-                data: { error: error instanceof Error ? error.message : 'Unknown error' },
-                responseTimeMs: 0
-            } as LogMetadata);
+        // Also fetch a broader pool (up to 100) to cache for rapid pagination if at offset 0
+        if (offset === 0) {
+            try {
+                await redisService.set(cacheKey, JSON.stringify(recommendationIds), {
+                    ttl: environmentConfig.USER_PROFILE_CACHE_TTL || 3600
+                });
+
+                // Fetch pool in background/parallel to speed up pagination
+                User.find({
+                    userId: { $nin: excludedUserIds },
+                    status: 'active',
+                    'flags.isDeleted': false
+                })
+                    .limit(100)
+                    .select('userId')
+                    .lean()
+                    .then(async (poolDocs) => {
+                        const poolIds = poolDocs.map(u => u.userId);
+                        await redisService.set(poolKey, JSON.stringify(poolIds), {
+                            ttl: environmentConfig.USER_PROFILE_CACHE_TTL || 3600
+                        });
+                    })
+                    .catch(() => {});
+
+                logger.debug('Connection recommendations generated and cached', {
+                    category: LogCategory.CONNECTION,
+                    data: { userId, recommendationCount: recommendationIds.length, cacheKey },
+                    responseTimeMs: 0
+                } as LogMetadata);
+            } catch (error : any) {
+                logger.warn('Cache set failed (non-blocking)', {
+                    category: LogCategory.CONNECTION,
+                    data: { error: error instanceof Error ? error.message : 'Unknown error' },
+                    responseTimeMs: 0
+                } as LogMetadata);
+            }
         }
 
         return recommendationIds;
+    }
+
+    /**
+     * Dismiss a connection suggestion so it never resurfaces for this user (persisted dismissal)
+     */
+    static async dismissSuggestion(userId: string, targetUserId: string): Promise<void> {
+        await User.updateOne(
+            { userId },
+            { $addToSet: { dismissedSuggestionIds: targetUserId } }
+        );
+
+        // Invalidate cached recommendations and pool
+        try {
+            const cacheKey = `recommendations:${userId}:${environmentConfig.CACHE_VERSION || 1}`;
+            const poolKey = `recommendations:pool:${userId}:${environmentConfig.CACHE_VERSION || 1}`;
+            await Promise.all([
+                redisService.delete(cacheKey),
+                redisService.delete(poolKey)
+            ]);
+            logger.debug('Dismissed suggestion and invalidated cache', {
+                category: LogCategory.CONNECTION,
+                data: { userId, targetUserId },
+                responseTimeMs: 0
+            } as LogMetadata);
+        } catch (error: any) {
+            logger.warn('Cache invalidation on dismiss failed (non-blocking)', {
+                category: LogCategory.CONNECTION,
+                data: { userId, targetUserId, error: error?.message },
+                responseTimeMs: 0
+            } as LogMetadata);
+        }
     }
 
     /**

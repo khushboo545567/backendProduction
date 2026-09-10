@@ -88,13 +88,70 @@ export class RecommendationAlgorithms {
 
   /**
    * Feature 5: Optimize for diversity (select diverse subset)
-   * @param recs - Ranked recs
+   *
+   * Problem it solves: rankRecommendations/personalizeRecommendations sort by
+   * score, so a naive `.slice(0, limit)` can return a list where 8 out of 10
+   * suggestions are from the same company or industry, just because that
+   * group happened to score highest. That looks repetitive to the user even
+   * though each individual suggestion is "correct".
+   *
+   * Approach: round-robin bucketing (a simple, well-known diversification
+   * technique — same family as Maximal Marginal Relevance, but cheaper).
+   *   1. Group the already-ranked recs into buckets by a diversity key
+   *      (e.g. industry, company, location — whatever the rec object has).
+   *      Order *inside* each bucket is preserved, so the highest-ranked
+   *      person in each group still comes out first from that group.
+   *   2. Walk across the buckets in round-robin order, popping one item at
+   *      a time, until `limit` items are collected.
+   *
+   * This guarantees no single group can dominate the output unless there
+   * simply aren't enough other groups to fill the list — in which case it
+   * gracefully falls back to the original ranked order (same behavior as
+   * the old `.slice(0, limit)` when everything shares one bucket).
+   *
+   * Complexity: O(n) to bucket + O(limit) to select — safe for large batches.
+   *
+   * @param recs - Ranked recs (already sorted by rankRecommendations/personalizeRecommendations)
    * @param limit - Number to return
-   * @returns Optimized subset
+   * @param diversityKey - Field on each rec to diversify by (default: 'industry')
+   * @returns Optimized, diversified subset of size <= limit
    */
-  optimizeRecommendations(recs: any[], limit: number): any[] {
-    // Placeholder: Greedy diversity (max diff in attributes)
-    return recs.slice(0, limit); // Mock
+  optimizeRecommendations(recs: any[], limit: number, diversityKey: string = 'industry'): any[] {
+    if (!recs.length || limit <= 0) return [];
+
+    // Step 1: bucket by diversity key, preserving existing rank order inside each bucket
+    const buckets = new Map<string, any[]>();
+    for (const rec of recs) {
+      const key = rec?.[diversityKey] ?? 'unknown';
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key)!.push(rec);
+    }
+
+    const bucketKeys = Array.from(buckets.keys());
+    const optimized: any[] = [];
+    let bucketIndex = 0;
+
+    // Step 2: round-robin across buckets until we hit the limit or run out of items
+    while (optimized.length < limit && bucketKeys.some(k => (buckets.get(k)?.length ?? 0) > 0)) {
+      const key = bucketKeys[bucketIndex % bucketKeys.length];
+      const bucket = buckets.get(key)!;
+      if (bucket.length > 0) {
+        optimized.push(bucket.shift());
+      }
+      bucketIndex++;
+    }
+
+    logger.debug('Recommendations optimized for diversity', {
+      data: {
+        totalInput: recs.length,
+        totalOutput: optimized.length,
+        diversityKey,
+        bucketsCount: bucketKeys.length,
+      },
+      category: LogCategory.PERFORMANCE
+    } as unknown as PublicLogMetadata);
+
+    return optimized;
   }
 }
 

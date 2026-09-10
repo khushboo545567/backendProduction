@@ -12,6 +12,8 @@ import ResponseUtil from '@/shared/response.util';
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 
+console.log('🔍 LOADING: Profile/controllers/report.controller.ts');
+
 interface UserPayload {
     userId: string;
     role: string;

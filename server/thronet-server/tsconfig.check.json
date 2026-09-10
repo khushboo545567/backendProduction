@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/connections/services/connection.service.ts",
+    "src/connections/services/network.service.ts",
+    "src/auth/models/User.model.ts"
+  ]
+}

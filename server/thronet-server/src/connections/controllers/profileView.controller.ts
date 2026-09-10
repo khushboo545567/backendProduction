@@ -12,7 +12,7 @@ import { SuccessResponse, ErrorResponse, HttpStatus } from '@/shared/response.ut
 import logger from '@/shared/logger.util';
 import { profileViewService } from '../services/profileView.service';
 
-interface AuthenticatedRequest extends Request {
+interface AuthenticatedRequest extends Omit<Request, 'user'> {
   user?: { id: string };
 }
 
@@ -31,15 +31,14 @@ export const healthCheck = (_req: Request, res: Response): void => {
 export const ProfileViewController = {
   /** Feature 1: POST /record */
   async recordProfileView(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+   
     try {
-      console.log('--- ENTERING recordProfileView ---');
       const viewerId = getUserId(req);
       const { viewedUserId, metadata, anonymous } = req.body;
-      console.log('Payload received:', { viewerId, viewedUserId, metadata, anonymous });
       const result = await profileViewService.recordProfileView(viewerId, { viewedUserId, metadata, anonymous });
       res.status(HttpStatus.CREATED).json(SuccessResponse(result, 'Profile view recorded'));
     } catch (error) {
-      console.error('🔥🔥🔥 ERROR IN recordProfileView 🔥🔥🔥');
+      console.error("🔥🔥🔥 ERROR IN recordProfileView (Controller) 🔥🔥🔥");
       console.error(error);
       next(error);
     }

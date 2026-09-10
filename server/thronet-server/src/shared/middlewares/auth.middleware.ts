@@ -14,6 +14,8 @@ import { User, Device, Session } from '@/shared/models/index.models';
 import logger from '@/shared/logger.util';
 import ResponseUtil from '@/shared/response.util';
 
+console.log('🔍 LOADING: shared/middlewares/auth.middleware.ts');
+
 const BLACKLIST_PREFIX = 'blacklist:access:';
 
 interface DecodedToken {

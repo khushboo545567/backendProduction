@@ -526,3 +526,38 @@
 // export { ConnectionState, ConnectionMetrics, HealthStatus };
 
 // export default neo4jConnection;
+
+import neo4j, { Driver, Session } from 'neo4j-driver';
+
+let driver: Driver | null = null;
+
+/**
+ * Create the Neo4j driver lazily so importing network routes never requires
+ * a Neo4j server during application startup.
+ */
+export const getNeo4jDriver = async (): Promise<Driver> => {
+	if (driver) {
+		return driver;
+	}
+
+	const uri = process.env['NEO4J_URI'];
+	if (!uri) {
+		throw new Error('Neo4j is not configured: NEO4J_URI is missing');
+	}
+
+	const username = process.env['NEO4J_USERNAME'];
+	const password = process.env['NEO4J_PASSWORD'];
+	if (!username || !password) {
+		throw new Error('Neo4j is not configured: credentials are missing');
+	}
+
+	driver = neo4j.driver(uri, neo4j.auth.basic(username, password));
+	await driver.verifyConnectivity();
+	return driver;
+};
+/** Thin convenience wrapper so existing call sites (ConnectionRelation.ts,
+ * PersonNode.ts) that expect a Session directly don't need to change. */
+export const createNeo4jSession = async (database?: string): Promise<Session> => {
+	const d = await getNeo4jDriver();
+	return database ? d.session({ database }) : d.session();
+};

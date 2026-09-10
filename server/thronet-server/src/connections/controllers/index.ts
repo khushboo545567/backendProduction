@@ -2,6 +2,8 @@
 
 // // Core Controllers
 
+
+
 export { connectionController } from './connection.controller';
 export { requestController } from './request.controller';
 export { followController } from './follow.controller';
@@ -13,4 +15,4 @@ export { ProfileViewController, healthCheck, batchProfileViewOperations } from '
 // export { degreeController } from './degree.controller';
 // export { blockController } from './block.controller';
 
-// export { networkControllers } from './network.controller';
+export { default as networkController } from './network.controller';

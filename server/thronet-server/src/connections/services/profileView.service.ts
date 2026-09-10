@@ -14,6 +14,7 @@ import constants from '@/shared/constants.util';
 import WhoViewedProfile from '../models/WhoViewedProfile';
 import User from '@/auth/models/User.model';
 import NotificationService from '@/notifications/services/notification.service';
+import Notification from '@/notifications/models/Notification.model';
 
 const ERROR_CODES = constants.ERROR_CODES;
 
@@ -40,6 +41,9 @@ class ProfileViewService {
    * and respects self-view (no-op — model also rejects this at the DB layer).
    */
   async recordProfileView(viewerId: string, data: RecordViewData): Promise<any> {
+    console.log("--- ENTERING recordProfileView (Service) ---");
+    console.log("viewerId:", viewerId);
+    console.log("data:", data);
     try {
       if (viewerId === data.viewedUserId) {
         // Viewing your own profile isn't a "view" — silently no-op rather than error,
@@ -55,6 +59,19 @@ class ProfileViewService {
         throw new ErrorResponse('User not found', HttpStatus.NOT_FOUND, ERROR_CODES.USER_NOT_FOUND);
       }
 
+      // Feature C: Debounce — same viewer, repeated views within 10 minutes
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      const recentView = await WhoViewedProfile.findOne({
+        viewerId,
+        viewedId: data.viewedUserId,
+        timestamp: { $gte: tenMinutesAgo }
+      }).lean();
+
+      if (recentView) {
+        // Skip creating a new record/notification to avoid spam
+        return { recorded: false, reason: 'debounced' };
+      }
+
       const visibility =
         (viewedUser as any)?.preferences?.profileViewVisibility ?? 'named';
 
@@ -63,16 +80,15 @@ class ProfileViewService {
       if (visibility === 'private') {
         return { recorded: false, reason: 'viewer_privacy_disabled' };
       }
+const view = await WhoViewedProfile.create({
+  viewerId,
+  viewedId: data.viewedUserId,
+  visibility: data.anonymous ? 'private' : 'public',
+  metadata: data.metadata || {},
+  isNotified: false, // Left unnotified — the digest cron batches and notifies later
+});
 
-      const view = await WhoViewedProfile.create({
-        viewerId,
-        viewedId: data.viewedUserId,
-        visibility: data.anonymous ? 'private' : 'public',
-        metadata: data.metadata || {},
-        isNotified: false,
-      });
-
-      logger.info('Profile view recorded', {
+      logger.info('Profile view recorded and notified', {
         category: LogCategory.CONNECTION,
         viewerId,
         viewedUserId: data.viewedUserId,
@@ -80,7 +96,7 @@ class ProfileViewService {
 
       return { recorded: true, viewId: view.viewId };
     } catch (error: any) {
-      console.error('🔥🔥🔥 ERROR IN profileViewService.recordProfileView 🔥🔥🔥');
+      console.error("🔥🔥🔥 ERROR IN recordProfileView (Service) 🔥🔥🔥");
       console.error(error);
       if (error instanceof ErrorResponse) throw error;
       logger.error('Error recording profile view', {
@@ -128,7 +144,7 @@ class ProfileViewService {
       return {
         viewId: v.viewId,
         viewer: viewer
-          ? { userId: viewer.userId, name: `${viewer.firstName} ${viewer.lastName || ''}`.trim() }
+         ? { userId: viewer.userId, name: `${viewer.firstName} ${viewer.lastName || ''}`.trim(), profilePhotoId: viewer.profilePhotoId || null }
           : null,
         timestamp: v.timestamp,
       };
@@ -137,10 +153,17 @@ class ProfileViewService {
     return { ...result, data };
   }
 
-  /** Feature 3: Get total profile view count for a user */
+  /** Feature 3: Get today's distinct viewer count (debounce-consistent) */
   async getProfileViewCount(userId: string): Promise<{ count: number }> {
-    const stats = await (WhoViewedProfile as any).getViewStats(userId);
-    return { count: stats.totalViews };
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const distinctViewers = await WhoViewedProfile.distinct('viewerId', {
+      viewedId: userId,
+      timestamp: { $gte: startOfToday }
+    });
+
+    return { count: distinctViewers.length };
   }
 
   /**
@@ -227,30 +250,60 @@ class ProfileViewService {
   }
 
   /**
-   * Called by the digest cron job. Notifies a user about unnotified profile views
-   * and marks them as notified. Delegates the actual Notification record + socket
-   * emit to NotificationService, keeping that logic in one place.
+   * Called by the cron job. Notifies a user about unnotified profile views individually,
+   * avoiding grouping or anonymous logic.
    */
-  async processDigestForUser(userId: string): Promise<{ notified: boolean }> {
-    const unnotified = await WhoViewedProfile.find({
+ async processDigestForUser(userId: string): Promise<{ notified: boolean }> {
+  // Only consider non-anonymous views — anonymous ('private') views should
+  // never surface a viewer's identity, even in a batch.
+  const unnotified = await WhoViewedProfile.find({
+    viewedId: userId,
+    isNotified: false,
+    visibility: { $ne: 'private' },
+  })
+    .select('viewId viewerId')
+    .lean();
+
+  if (!unnotified.length) return { notified: false };
+
+  // Don't send a new digest too soon after the last one — at least 1 hour gap
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const recentDigest = await Notification.findOne({
+    recipientId: userId,
+    type: 'profile_viewed',
+    createdAt: { $gte: oneHourAgo },
+  }).lean();
+
+  if (recentDigest) {
+    // Too soon — leave these views unnotified, they'll be picked up
+    // (along with any new ones) on a future cron run once the gap has passed.
+    return { notified: false };
+  }
+
+  const viewerIds = unnotified.map((v: any) => v.viewerId);
+  const viewIds = unnotified.map((v: any) => v.viewId);
+
+  await NotificationService.notifyProfileViewedBatch(userId, viewerIds);
+
+  // Mark all these views as notified in one atomic update
+  await WhoViewedProfile.updateMany(
+    { viewId: { $in: viewIds } },
+    { $set: { isNotified: true, updatedAt: new Date() } }
+  );
+
+  return { notified: true };
+}
+  /** Feature 9: Get distinct daily profile view count */
+  async getDailyViewCount(userId: string): Promise<{ count: number }> {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const distinctViewers = await WhoViewedProfile.distinct('viewerId', {
       viewedId: userId,
-      isNotified: false,
-    })
-      .select('viewId viewerId visibility')
-      .lean();
+      timestamp: { $gte: startOfToday }
+    });
 
-    if (!unnotified.length) return { notified: false };
-
-    const namedViewerIds = unnotified
-      .filter((v: any) => v.visibility !== 'private')
-      .map((v: any) => v.viewerId);
-
-    await NotificationService.notifyProfileViewed(userId, namedViewerIds, unnotified.length);
-
-    const viewIds = unnotified.map((v: any) => v.viewId);
-    await (WhoViewedProfile as any).bulkMarkAsNotified(viewIds, userId);
-
-    return { notified: true };
+    return { count: distinctViewers.length };
   }
 }
 

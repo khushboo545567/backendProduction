@@ -30,32 +30,7 @@ import { UserId } from '../types/network.types';
 import { PersonNode } from '../models/neo4j/PersonNode';
 import { ConnectionRelation } from '../models/neo4j/ConnectionRelation';
 import logger, { LogCategory } from '@/shared/logger.util';
-/**
- * Degree Algorithms
- * Core algorithmic functions for degree of connection calculations (12 features as per plan).
- * Includes graph traversal, path finding, centrality measures, and community detection.
- * Used in degreeService for computations like degree counts, shortest paths, centrality.
- * 
- * Features (12 total):
- * 1. calculateFirstDegree - Count 1st degree connections
- * 2. calculateSecondDegree - Count 2nd degree connections
- * 3. calculateThirdDegree - Count 3rd degree connections
- * 4. findShortestPath - BFS for shortest path between users
- * 5. calculateBetweennessCentrality - Betweenness centrality metric
- * 6. calculateClosenessCentrality - Closeness centrality metric
- * 7. calculateEigenvectorCentrality - Eigenvector centrality (influence)
- * 8. calculatePageRank - PageRank algorithm for node importance
- * 9. findBridgeNodes - Detect bridge connections in graph
- * 10. detectCommunities - Basic community detection (Louvain-like)
- * 11. calculateClusteringCoefficient - Local clustering coefficient
- * 12. findInfluentialNodes - Find top influential nodes by centrality
- * 
- * Dependencies:
- * - logger: For algorithm logs (debug/performance)
- * 
- * Scalability: Efficient graph algorithms (BFS O(V+E), approximations for large graphs)
- * Integration: Called from degreeService; assumes graph data from Neo4j
- */
+
 
 export class DegreeAlgorithms {
   // Cypher queries for pathfinding algorithms (NEW - Required by degreeService)

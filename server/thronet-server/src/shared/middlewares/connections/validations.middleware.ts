@@ -45,6 +45,8 @@ import environmentConfig from '@/config/environment/environment';
 import { LogCategory } from '@/shared/logger.util';
 import constants from '@/shared/constants.util';
 
+console.log('🔍 LOADING: shared/middlewares/connections/validations.middleware.ts');
+
 const ERROR_CODES = constants.ERROR_CODES;
 
 type ValidationSchema = z.ZodSchema | ValidationChain[] | Joi.ObjectSchema<any>;
@@ -214,8 +216,8 @@ const handleZodSchema = (
 
     if (target === 'body') {
         req.body = sanitizeData(result.data) as any;
-    } else if (target === 'query') {
-        req.query = sanitizeData(result.data) as any;
+       } else if (target === 'query') {
+        Object.assign(req.query, sanitizeData(result.data));
     } else if (target === 'params') {
         req.params = sanitizeData(result.data) as any;
     }

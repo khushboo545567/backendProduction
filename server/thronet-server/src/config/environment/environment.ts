@@ -6,6 +6,8 @@ import type { Request, Response } from 'express';
 import { ErrorResponse } from '@/shared/response.util';
 import constants from '@/shared/constants.util';
 
+
+
 const ERROR_CODES = constants.ERROR_CODES;
 
 config();
@@ -620,6 +622,8 @@ if (environmentConfig.NODE_ENV === 'production' && process.env.SKIP_ENV_VALIDATI
         }
     });
 
+
+console.log('🔍 DONE: environment.ts');
     // Kafka production validation
     // if (environmentConfig.KAFKA.enabled) {
     //     if (!environmentConfig.KAFKA.brokers || environmentConfig.KAFKA.brokers === 'localhost:9092') {

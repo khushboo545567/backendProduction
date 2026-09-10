@@ -1,5 +1,5 @@
 ﻿// services/redis.service.ts
-import Redis from 'ioredis';
+import Redis, { Cluster } from 'ioredis';
 import { redisConfig } from '@/config/cache/redis.config';
 import { logger } from '@/shared/logger.util';
 import { promisify } from 'util';
@@ -40,14 +40,10 @@ interface ExtendedRedisHealth {
     };
 }
 
-// ==================== REDIS SERVICE (SINGLE-NODE, PRODUCTION-GRADE) ====================
-// NOTE: Converted from Redis Cluster to a single-node client because Railway
-// (and most hosted Redis add-ons) provision one instance, not a 3-node
-// cluster. Public API (connect/get/set/delete/batch*/healthCheck/etc.) is
-// unchanged so callers elsewhere in the app don't need to change.
+// ==================== REDIS SERVICE (CLUSTER, PRODUCTION-GRADE) ====================
 class RedisService {
     [x: string]: any;
-    private client: Redis | null = null;
+    private client: Redis | Cluster | null = null;
     private isConnecting = false;
     public connected = false;
     private reconnectAttempts = 0;
@@ -70,35 +66,37 @@ class RedisService {
      */
     async testConnection(): Promise<boolean> {
         try {
-            const { options } = redisConfig.getConfig();
+            const config = redisConfig.getConfig();
 
-            if (!options.host) {
+            if (!config.clusterMode && !config.options.host) {
                 logger.warn('⚠️ [REDIS TEST] Invalid node configuration');
                 return false;
             }
 
             logger.info('🧪 [REDIS TEST] Testing connection...', {
-                host: options.host,
-                port: options.port,
+                nodes: config.clusterMode ? config.nodes : undefined,
                 timeout: 5000,
             });
 
-            const testClient = new Redis({
-                host: options.host,
-                port: options.port,
-                password: options.password,
-                connectTimeout: 5000,
-                commandTimeout: 5000,
-                maxRetriesPerRequest: 2,
-                retryStrategy: (times: number) => {
-                    if (times > 2) return null;
-                    return Math.min(times * 100, 1000);
-                },
-                lazyConnect: true,
-                keepAlive: 30000,
-                family: 4,
-                enableAutoPipelining: false,
-            });
+            const testClient = config.clusterMode
+                ? new Cluster(config.nodes, {
+                    redisOptions: {
+                        ...config.options.redisOptions,
+                        connectTimeout: 5000,
+                        commandTimeout: 5000,
+                        maxRetriesPerRequest: 2,
+                        lazyConnect: true,
+                        enableAutoPipelining: false,
+                    },
+                })
+                : new Redis({
+                    ...config.options,
+                    connectTimeout: 5000,
+                    commandTimeout: 5000,
+                    maxRetriesPerRequest: 2,
+                    lazyConnect: true,
+                    enableAutoPipelining: false,
+                });
 
             await testClient.connect();
 
@@ -159,17 +157,20 @@ class RedisService {
         this.isConnecting = true;
 
         try {
-            const { options } = redisConfig.getConfig();
+            const config = redisConfig.getConfig();
 
-            logger.info('🔴 [REDIS] Initializing single-node connection', {
-                host: options.host,
-                port: options.port,
+            logger.info('🔴 [REDIS] Initializing cluster connection', {
+                nodes: config.clusterMode ? config.nodes : undefined,
+                host: config.clusterMode ? undefined : config.options.host,
+                port: config.clusterMode ? undefined : config.options.port,
                 environment: process.env.NODE_ENV,
                 pid: process.pid,
                 timestamp: new Date().toISOString()
             });
 
-            this.client = new Redis(options);
+            this.client = config.clusterMode
+                ? new Cluster(config.nodes, config.options)
+                : new Redis(config.options);
 
             // ==================== EVENT HANDLERS ====================
 
@@ -179,8 +180,8 @@ class RedisService {
 
                 logger.info('✅ [REDIS] Client ready and operational', {
                     status: 'CONNECTED',
-                    host: options.host,
-                    port: options.port,
+                    host: config.clusterMode ? undefined : config.options.host,
+                    port: config.clusterMode ? undefined : config.options.port,
                     autoPipelining: 'enabled',
                     timestamp: new Date().toISOString()
                 });
@@ -279,7 +280,7 @@ class RedisService {
         });
     }
 
-    async getRedisClient(): Promise<Redis> {
+    async getRedisClient(): Promise<Redis | Cluster> {
         if (!this.connected && this.connectionPromise) {
             await this.connectionPromise;
         }
@@ -837,7 +838,7 @@ class RedisService {
     /**
      * Get client instance (use with caution)
      */
-    getClient(): Redis {
+    getClient(): Redis | Cluster {
         if (!this.client) {
             throw new Error('Redis client not initialized');
         }
@@ -848,7 +849,7 @@ class RedisService {
      * @deprecated use getClient() — kept for backward compatibility with
      * any code still calling getCluster().
      */
-    getCluster(): Redis {
+    getCluster(): Redis | Cluster {
         return this.getClient();
     }
 
@@ -886,7 +887,7 @@ export const connectRedis = async (): Promise<void> => {
     await redisServiceInstance.connect();
 };
 
-export const getRedisClient = async (): Promise<Redis> => {
+export const getRedisClient = async (): Promise<Redis | Cluster> => {
     return await redisServiceInstance.getRedisClient();
 };
 

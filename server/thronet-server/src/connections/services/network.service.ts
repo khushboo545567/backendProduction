@@ -770,15 +770,48 @@
 
 
 // src/services/networkService.ts
+import NetworkMetrics from '../models/NetworkMetrics';
 
-import NetworkMetrics from '../models/mongodb/NetworkMetrics';
-import logger from '../utils/logger';
-import { getNeo4jDriver } from '../config/neo4j';
-import { redisClient as getRedisClient } from '../config/redis';
+import logger from '@/shared/logger.util';
+import redisManager from '@/config/cache/redis.config';
+import { getNeo4jDriver } from '@/config/neo4j/neo4j';
 import { NetworkPeriod, NetworkCompositionType } from '../types/network.types';
-// KAFKA IMPORTS
-import { networkProducer } from '../kafka/producers/networkProducer';
-import { analyticsProducer } from '../kafka/producers/analyticsProducer';
+import userProducer from '@/shared/kafka/producers/user.producer';
+import { randomUUID } from 'crypto';
+
+// ADDED FOR SUGGESTION CARDS N+1 FIX
+import { User, Connection, ProfilePhoto, Headline } from '@/shared/models/index.models';
+import connectionService from './connection.service';
+
+type NetworkEvent = Record<string, any>;
+
+async function publishUserEvent(eventType: string, event: NetworkEvent): Promise<void> {
+  await userProducer.sendUserEvent({
+    eventId: randomUUID(),
+    userId: event.userId || event.blockerId || event.blockedId || 'system',
+    eventType: 'USER_UPDATED',
+    timestamp: new Date().toISOString(),
+    metadata: { eventType, ...event },
+  });
+}
+
+const networkProducer = {
+  publishNetworkMetrics: (userId: string, data: NetworkEvent) =>
+    publishUserEvent('network_metrics', { userId, ...data }),
+  publishNetworkAnalytics: (userId: string, data: NetworkEvent) =>
+    publishUserEvent('network_analytics', { userId, ...data }),
+  publishUserBlocked: (data: NetworkEvent) => publishUserEvent('user_blocked', data),
+  publishUserUnblocked: (data: NetworkEvent) => publishUserEvent('user_unblocked', data),
+  publishBlockAppealSubmitted: (data: NetworkEvent) =>
+    publishUserEvent('block_appeal_submitted', data),
+};
+
+const analyticsProducer = {
+  track: (event: string, userId: string, data: NetworkEvent) =>
+    publishUserEvent(event, { userId, ...data }),
+  publishUserAction: (data: NetworkEvent) => publishUserEvent(data.action || 'user_action', data),
+  publishPerformance: (data: NetworkEvent) => publishUserEvent('performance', data),
+};
 
 /**
  * NETWORK SERVICE - ENTERPRISE SCALE DOCUMENTATION
@@ -900,8 +933,11 @@ const performanceMetrics = {
 
 // Enhanced caching with multiple layers and TTL management
 class EnhancedCacheManager {
-  private redisClient = getRedisClient;
   private memoryCache = new Map<string, { data: any, expiry: number }>();
+
+  private async getRedisClient() {
+    return redisManager.getRedisClient();
+  }
 
   async get(key: string): Promise<any> {
     const startTime = Date.now();
@@ -915,7 +951,8 @@ class EnhancedCacheManager {
       }
 
       // Level 2: Redis cache
-      const redisCached = await this.redisClient.get(key);
+      const redisClient = await this.getRedisClient();
+      const redisCached = await redisClient.get(key);
       if (redisCached) {
         const data = JSON.parse(redisCached);
         // Store in memory for faster next access
@@ -947,7 +984,8 @@ class EnhancedCacheManager {
         expiry: Date.now() + Math.min(ttl, CACHE_TTL.SHORT) * 1000 
       });
       
-      await this.redisClient.set(key, JSON.stringify(data), 'EX', ttl);
+      const redisClient = await this.getRedisClient();
+      await redisClient.set(key, JSON.stringify(data), 'EX', ttl);
       performanceMetrics.trackOperation('cache_set', startTime, true);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -966,9 +1004,10 @@ class EnhancedCacheManager {
       }
       
       // Clear Redis cache
-      const keys = await this.redisClient.keys(`*${pattern}*`);
+      const redisClient = await this.getRedisClient();
+      const keys = await redisClient.keys(`*${pattern}*`);
       if (keys.length > 0) {
-        await this.redisClient.del(...keys);
+        await redisClient.del(...keys);
       }
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -1853,7 +1892,8 @@ export async function healthCheck(): Promise<any> {
 
   try {
     // Check Redis
-    await getRedisClient.ping();
+    const redisClient = await redisManager.getRedisClient();
+    await redisClient.ping();
     checks.redis = true;
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -1892,6 +1932,134 @@ export async function healthCheck(): Promise<any> {
     checks,
     timestamp: new Date()
   };
+}
+
+// 9. getSuggestionCards - Optimized backend fetching to prevent N+1 frontend queries
+export async function getSuggestionCards(userId: string, limit: number, cursor?: string): Promise<any[]> {
+  const startTime = Date.now();
+  
+  try {
+    const offset = cursor ? Math.max(0, parseInt(cursor, 10) || 0) : 0;
+    // 1. Fetch recommended user IDs with offset pagination and dismissal filtering
+    const recommendedUserIds = await connectionService.processConnectionRecommendations(userId, limit, offset);
+    
+    if (!recommendedUserIds || recommendedUserIds.length === 0) {
+      return [];
+    }
+
+    // 2. Phase 1 (Parallel - depends only on recommendedUserIds)
+    // Fetch Target Users, Mutual Counts, and Top 3 Mutual Connection Records
+      const targetUsersPromise = User.find({ userId: { $in: recommendedUserIds },'flags.isDeleted': false }).lean();
+    const mutualDataPromises = recommendedUserIds.map(targetId => 
+      Promise.all([
+        Connection.countMutualConnections(userId, targetId),
+        Connection.findMutualConnections(userId, targetId, 3)
+      ]).then(([count, mutuals]) => ({ targetId, count, mutuals }))
+    );
+
+    const [targetUsers, mutualDataResults] = await Promise.all([
+      targetUsersPromise,
+      Promise.all(mutualDataPromises)
+    ]);
+
+    // Map mutual data for quick lookup
+    const mutualDataMap = new Map(mutualDataResults.map(data => [data.targetId, data]));
+
+    // 3. Phase 2 (Parallel - depends on Phase 1)
+    // Extract dependencies from target users and mutual records
+    const profilePhotoIds = targetUsers.map((u: any) => u.profilePhotoId).filter(Boolean);
+    const headlineIds = targetUsers.map((u: any) => u.headlineId).filter(Boolean);
+    
+    const mutualPersonIdsSet = new Set<string>();
+    mutualDataResults.forEach(data => {
+      data.mutuals.forEach((m: any) => {
+        const mutualId = m.fromUserId === userId ? m.toUserId : m.fromUserId;
+        if (mutualId && mutualId !== userId && mutualId !== data.targetId) {
+          mutualPersonIdsSet.add(mutualId);
+        }
+      });
+    });
+    const mutualPersonIds = Array.from(mutualPersonIdsSet);
+
+    const [targetPhotos, targetHeadlines, mutualUsers] = await Promise.all([
+      ProfilePhoto.find({ photoId: { $in: profilePhotoIds }, isActive: true, isDeleted: false }).lean(),
+      Headline.find({ headlineId: { $in: headlineIds }, 'flags.isDeleted': false }).lean(),
+      User.find({ userId: { $in: mutualPersonIds }, isDeleted: false }).lean()
+    ]);
+
+    // Maps for target users
+    const targetPhotosMap = new Map(targetPhotos.map((p: any) => [p.photoId, p.cloudinarySecureUrl]));
+    const targetHeadlinesMap = new Map(targetHeadlines.map((h: any) => [h.headlineId, h.title]));
+    
+    // Map for mutual users
+    const mutualUsersMap = new Map(mutualUsers.map((u: any) => [u.userId, u]));
+
+    // 4. Phase 3 (Sequential - depends on Phase 2 mutual users)
+    const mutualPhotoIds = mutualUsers.map((u: any) => u.profilePhotoId).filter(Boolean);
+    const mutualPhotos = await ProfilePhoto.find({ photoId: { $in: mutualPhotoIds }, isActive: true, isDeleted: false }).lean();
+    const mutualPhotosMap = new Map(mutualPhotos.map((p: any) => [p.photoId, p.cloudinarySecureUrl]));
+
+    // 5. Data Transformation
+    const suggestionCards = targetUsers.map((user: any) => {
+      const mutualData = mutualDataMap.get(user.userId);
+      const mutualCount = mutualData?.count || 0;
+      const rawMutuals = mutualData?.mutuals || [];
+
+      let mutualsText = '';
+      let mutualAvatars: string[] = [];
+
+      if (mutualCount > 0) {
+        const firstItem = rawMutuals[0];
+        const firstMutualId = firstItem 
+          ? (firstItem.fromUserId === userId ? firstItem.toUserId : firstItem.fromUserId) 
+          : null;
+        
+        let firstMutualName = 'A mutual connection';
+        if (firstMutualId) {
+          const mutualUser: any = mutualUsersMap.get(firstMutualId);
+          if (mutualUser) {
+            firstMutualName = `${mutualUser.firstName} ${mutualUser.lastName || ''}`.trim();
+          }
+        }
+
+        mutualsText = mutualCount === 1
+          ? `${firstMutualName} is a mutual connection`
+          : `${firstMutualName} and ${mutualCount - 1} other mutual connection${mutualCount - 1 > 1 ? 's' : ''}`;
+
+        mutualAvatars = rawMutuals
+          .slice(0, 3)
+          .map((m: any) => {
+            const mId = m.fromUserId === userId ? m.toUserId : m.fromUserId;
+            if (!mId) return null;
+            const mUser: any = mutualUsersMap.get(mId);
+            return mUser?.profilePhotoId ? mutualPhotosMap.get(mUser.profilePhotoId) : null;
+          })
+          .filter(Boolean);
+      }
+
+      const imageUrl = user.profilePhotoId ? targetPhotosMap.get(user.profilePhotoId) : null;
+      const headlineText = user.headlineId ? targetHeadlinesMap.get(user.headlineId) : null;
+
+      return {
+        id: user.userId, // Frontend expects 'id' instead of 'userId' inside transformedUsers
+        name: `${user.firstName} ${user.lastName}`.trim(),
+        title: headlineText || '',
+        mutuals: mutualsText,
+        mutualAvatars,
+        image: imageUrl || 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSdYRNQDghH1JvFXro2Yz3iWNmmFAubFZ-RGQ&s',
+        location: user.location || '',
+      };
+    });
+
+    performanceMetrics.trackOperation('getSuggestionCards', startTime, true);
+    return suggestionCards;
+
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('getSuggestionCards failed', { error: errorMessage, userId });
+    performanceMetrics.trackOperation('getSuggestionCards', startTime, false);
+    throw new Error('Failed to retrieve suggestion cards');
+  }
 }
 
 // Export additional utility functions
