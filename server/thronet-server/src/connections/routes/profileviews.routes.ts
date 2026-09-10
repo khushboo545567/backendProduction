@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ProfileViewController, healthCheck, batchProfileViewOperations } from '../controllers/index';
 import { rateLimiterMiddleware } from '../middleware/rateLimiter.middleware';
 import { loggerMiddleware } from '../middleware/logger.middleware';
@@ -6,6 +6,7 @@ import { securityMiddleware } from '../middleware/security.middleware';
 import { metricsMiddleware } from '../middleware/metrics.middleware';
 import { profileViewValidators } from '../validators/profileViewValidator';
 import { z } from 'zod';
+import ProfileViewDigestCron from '@/jobs/profileViewDigestCron';
 import { 
     createProfileViewQuerySchema, 
     createQuerySchema, 
@@ -19,6 +20,12 @@ const router: Router = Router();
 router.use(loggerMiddleware);
 router.use(securityMiddleware);
 router.use(metricsMiddleware);
+
+// Auth was never wired up on this router (every controller method calls
+// getUserId(req), which reads req.user.id — but nothing upstream sets
+// req.user, so every call 401'd regardless of token). Matches the pattern
+// used in follow.routes.ts.
+router.use(AuthMiddleware.authenticate as any);
 
 // Enhanced RATE_LIMITS configuration with all required properties
 const RATE_LIMITS = {
@@ -59,12 +66,21 @@ const RATE_LIMITS = {
     BATCH_OPS: 5,
 } as const;
 
+// ==================== MONGODB OBJECTID VALIDATION ====================
+// Helper function for MongoDB ObjectId validation
+const mongoObjectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid MongoDB ObjectId format');
+
 // ==================== ZOD SCHEMAS ====================
 // Define Zod schemas for type-safe validation (recommended for new endpoints)
 
-// Schema for recording profile views - FIXED for MongoDB ObjectIds
+// Schema for recording profile views.
+// NOTE: previously required viewedUserId to match a 24-char Mongo ObjectId,
+// but profileView.service.ts looks the target up via
+// User.findOne({ userId: data.viewedUserId }) — and User.userId is a uuidv4()
+// string, not a Mongo ObjectId. That mismatch meant this endpoint could never
+// succeed for a real user. Fixed to validate as a UUID instead.
 const recordProfileViewSchema = z.object({
-    viewedUserId: z.string(),
+    viewedUserId: z.string().uuid('viewedUserId must be a valid user UUID'),
     metadata: z.object({
         source: z.enum(['profile', 'search', 'suggestion', 'connection']).optional(),
         deviceType: z.enum(['mobile', 'desktop', 'tablet']).optional(),
@@ -110,7 +126,7 @@ const exportQuerySchema = z.object({
 const deleteHistoryQuerySchema = z.object({
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
-    viewerIds: z.array(z.string()).optional(),
+    viewerIds: z.array(mongoObjectId).optional(),
     confirmDelete: z.string()
         .transform((val) => val === 'true')
         .refine(val => val === true, {
@@ -146,10 +162,10 @@ router.get(
  */
 router.post(
     '/record',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(recordProfileViewSchema, 'body'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.RECORD_VIEW, storePrefix: 'record_view_' }),
-    (req: Request, res: Response) => ProfileViewController.recordProfileView(req as any, res)
+    (req: Request, res: Response ,next: NextFunction) => ProfileViewController.recordProfileView(req as any, res, next)
 );
 
 /**
@@ -161,13 +177,13 @@ router.post(
  */
 router.get(
     '/viewers',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     // Option 1: Use Zod schema for better type safety
     validateRequest(createProfileViewQuerySchema(), 'query'),
     // Option 2: Fallback to existing ValidationChain for backward compatibility
     validateRequest(profileViewValidators.getWhoViewedProfile, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.GET_VIEWERS, storePrefix: 'get_viewers_' }),
-    (req: Request, res: Response) => ProfileViewController.getWhoViewedProfile(req as any, res)
+    (req: Request, res: Response,next: NextFunction) => ProfileViewController.getWhoViewedProfile(req as any, res, next)
 );
 
 /**
@@ -177,12 +193,12 @@ router.get(
  */
 router.get(
     '/count',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(createQuerySchema(), 'query'),
     // Alternative: Use existing validator for backward compatibility
     validateRequest(profileViewValidators.getProfileViewCount, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.GET_COUNT, storePrefix: 'get_count_' }),
-    (req: Request, res: Response) => ProfileViewController.getProfileViewCount(req as any, res)
+    (req: Request, res: Response, next: NextFunction) => ProfileViewController.getProfileViewCount(req as any, res, next)
 );
 
 /**
@@ -192,12 +208,12 @@ router.get(
  */
 router.get(
     '/analytics',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(analyticsQuerySchema, 'query'),
     // Alternative: Use existing validator
     validateRequest(profileViewValidators.getProfileViewAnalytics, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.GET_ANALYTICS, storePrefix: 'get_analytics_' }),
-    (req: Request, res: Response) => ProfileViewController.getProfileViewAnalytics(req as any, res)
+    (req: Request, res: Response,next: NextFunction) => ProfileViewController.getProfileViewAnalytics(req as any, res, next)
 );
 
 /**
@@ -207,12 +223,12 @@ router.get(
  */
 router.put(
     '/privacy',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(profileViewPrivacySchema, 'body'),
     // Alternative: Use existing validator
     // validateRequest(profileViewValidators.setProfileViewPrivacy, 'body'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.SET_PRIVACY, storePrefix: 'set_privacy_' }),
-    (req: Request, res: Response) => ProfileViewController.setProfileViewPrivacy(req as any, res)
+    (req: Request, res: Response,next: NextFunction) => ProfileViewController.setProfileViewPrivacy(req as any, res,next)
 );
 
 /**
@@ -222,12 +238,12 @@ router.put(
  */
 router.delete(
     '/history',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(deleteHistoryQuerySchema, 'query'),
     // Alternative: Use existing validator
     // validateRequest(profileViewValidators.deleteProfileViewHistory, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.DELETE_HISTORY, storePrefix: 'delete_history_' }),
-    (req: Request, res: Response) => ProfileViewController.deleteProfileViewHistory(req as any, res)
+    (req: Request, res: Response, next: NextFunction) => ProfileViewController.deleteProfileViewHistory(req as any, res,next)
 );
 
 /**
@@ -237,12 +253,12 @@ router.delete(
  */
 router.get(
     '/insights',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(analyticsQuerySchema, 'query'),
     // Alternative: Use existing validator
     validateRequest(profileViewValidators.getProfileViewInsights, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.GET_INSIGHTS, storePrefix: 'get_insights_' }),
-    (req: Request, res: Response) => ProfileViewController.getProfileViewInsights(req as any, res)
+    (req: Request, res: Response,next: NextFunction) => ProfileViewController.getProfileViewInsights(req as any, res, next)
 );
 
 /**
@@ -252,12 +268,12 @@ router.get(
  */
 router.get(
     '/export',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(exportQuerySchema, 'query'),
     // Alternative: Use existing validator
     validateRequest(profileViewValidators.exportProfileViewData, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.EXPORT_DATA, storePrefix: 'export_data_' }),
-    (req: Request, res: Response) => ProfileViewController.exportProfileViewData(req as any, res)
+    (req: Request, res: Response, next: NextFunction) => ProfileViewController.exportProfileViewData(req as any, res, next)
 );
 
 /**
@@ -267,12 +283,12 @@ router.get(
  */
 router.post(
     '/batch',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(batchOperationsSchema, 'body'),
     // Alternative: Use existing validator
     // validateRequest(profileViewValidators.batchOperations, 'body'),
     rateLimiterMiddleware({ windowMs: 5 * 60 * 1000, max: RATE_LIMITS.BATCH_OPS, storePrefix: 'batch_ops_' }),
-    (req: Request, res: Response) => batchProfileViewOperations(req as any, res)
+    (req: Request, res: Response, next: NextFunction) => batchProfileViewOperations(req as any, res, next)
 );
 
 /**
@@ -281,11 +297,33 @@ router.post(
  */
 router.get(
     '/viewers-legacy',
-    AuthMiddleware.authenticate as any,
+    // authMiddleware.authenticateJWT,
     validateRequest(profileViewValidators.getWhoViewedProfile, 'query'),
     rateLimiterMiddleware({ windowMs: 60 * 1000, max: RATE_LIMITS.GET_VIEWERS, storePrefix: 'get_viewers_legacy_' }),
-    (req: Request, res: Response) => ProfileViewController.getWhoViewedProfile(req as any, res)
+    (req: Request, res: Response , next: NextFunction) => ProfileViewController.getWhoViewedProfile(req as any, res, next)
 );
+/**
+ * DEV-ONLY: Manually trigger the profile view digest cron for testing.
+ * Bypasses the normal 10-minute schedule so you can test immediately
+ * instead of waiting for the next scheduled run.
+ */
+router.post(
+    '/trigger-digest',
+    async (req: Request, res: Response) => {
+        if (process.env.NODE_ENV === 'production') {
+            res.status(403).json({ success: false, message: 'Not available in production' });
+            return;
+        }
+        try {
+            await ProfileViewDigestCron.triggerManually();
+            res.status(200).json({ success: true, message: 'Digest cron triggered manually' });
+        } catch (error: any) {
+            res.status(500).json({ success: false, message: error.message || 'Failed to trigger digest' });
+        }
+    }
+);
+
+// ==================== EXPORTS ====================
 
 // ==================== EXPORTS ====================
 
