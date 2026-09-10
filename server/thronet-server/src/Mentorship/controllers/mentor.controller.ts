@@ -13,7 +13,7 @@ import { AuthRequest } from '@/shared/middlewares/auth.middleware';
 import { TrustScoreService } from '@/Mentorship/services/trustScore.service';
 import mentorRepository from '@/Mentorship/repositories/mentor.repository';
 import { TrustScoreCalculator } from '../utils/trustScoreCalculator';
-
+import MentorshipAnalytics from '@/Mentorship/models/mentorshipAnalytics';
 class MentorController {
   /**
    * @route   POST /api/v1/mentorship/mentors
@@ -111,6 +111,11 @@ class MentorController {
       const { id } = req.params;
       const authToken = req.headers.authorization?.split(' ')[1];
       const mentor = await mentorService.getMentorById(id, authToken);
+
+      // ✅ record a mentor-profile view (fire-and-forget — never blocks/breaks the response)
+      MentorshipAnalytics.recordEvent('mentor_analytics', 'mentor', id, 'views').catch((err: any) =>
+        logger.error('Failed to record mentor profile view:', err)
+      );
 
       ResponseHandler.success(res, 'Mentor profile fetched successfully', mentor);
     } catch (error: any) {

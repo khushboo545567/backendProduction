@@ -19,7 +19,7 @@ import express, { Request, Response } from 'express';
 import { Server } from 'http';
 
 import { LoggerUtil as logger } from './shared/logger.util';
-import { startAllWorkers, stopAllWorkers, getWorkerStats } from './Company/workersCompany.ts';
+import { startAllWorkers, stopAllWorkers, getWorkerStats } from './company/workersCompany';
 import CacheUtil from './shared/cache.util';
 import { connectDB, disconnectDB } from './database/connection';
 

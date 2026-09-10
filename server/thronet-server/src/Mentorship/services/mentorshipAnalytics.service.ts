@@ -1,8 +1,7 @@
 import { Mentor, SessionMentor, MentorshipReview, PackageCredit } from "../models";
 import { BookingStatus } from "@/shared/constants/bookingStatus";
 import { logger } from "@/shared/logger.util";
-import Analytics from "@/Profile/models/Analytics.model"; // adjust path if different in your tree
-
+import MentorshipAnalytics from '@/Mentorship/models/mentorshipAnalytics';
 class MentorshipAnalyticsService {
   /**
    * Get comprehensive mentor statistics
@@ -120,11 +119,13 @@ class MentorshipAnalyticsService {
       const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const fourMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
 
-      const [baseStats, analyticsDoc, durationAgg, monthlyEarnings] = await Promise.all([
+      const [baseStats, viewsThisMonthAgg, viewsLastMonthAgg, viewsAllTimeAgg, durationAgg, monthlyEarnings] = await Promise.all([
         this.getMentorStats(mentorId),
 
-        // profile views live in Profile module's Analytics collection, keyed by userId (not mentorId)
-        Analytics.findByUserId(mentor.userId),
+        // ✅ mentor-domain views, tracked via MentorshipAnalytics (recordEvent called from mentor.controller.ts on profile GET)
+        MentorshipAnalytics.getAggregatedMetrics('mentor', mentorId, thisMonthStart, now),
+        MentorshipAnalytics.getAggregatedMetrics('mentor', mentorId, lastMonthStart, thisMonthStart),
+        MentorshipAnalytics.getAggregatedMetrics('mentor', mentorId, new Date(0), now),
 
         SessionMentor.aggregate([
           { $match: { mentorId, status: BookingStatus.COMPLETED } },
@@ -150,20 +151,16 @@ class MentorshipAnalyticsService {
         ]),
       ]);
 
-      // profile views — compute this-month vs last-month from the embedded views array
-      const views = analyticsDoc?.profileViews?.views || [];
-      const viewsThisMonth = views.filter((v: any) => v.viewedAt >= thisMonthStart).length;
-      const viewsLastMonth = views.filter(
-        (v: any) => v.viewedAt >= lastMonthStart && v.viewedAt < thisMonthStart
-      ).length;
-      const viewsChangePct = viewsLastMonth > 0
-        ? Math.round(((viewsThisMonth - viewsLastMonth) / viewsLastMonth) * 100)
-        : viewsThisMonth > 0 ? 100 : 0;
+      const viewsNow = viewsThisMonthAgg?.totalViews || 0;
+      const viewsPrev = viewsLastMonthAgg?.totalViews || 0;
+      const viewsChangePct = viewsPrev > 0
+        ? Math.round(((viewsNow - viewsPrev) / viewsPrev) * 100)
+        : viewsNow > 0 ? 100 : 0;
 
       return {
         profileViews: {
-          value: analyticsDoc?.profileViews?.total || 0,
-          valueThisMonth: viewsThisMonth,
+          value: viewsAllTimeAgg?.totalViews || 0,
+          valueThisMonth: viewsNow,
           changePercent: viewsChangePct,
           trend: viewsChangePct >= 0 ? 'up' : 'down',
         },
