@@ -85,28 +85,10 @@ router.post('/book', validateJoi(sessionValidator.bookSession), sessionControlle
  * @desc    Mentee ka session progress — completed, left, total
  * @access  Private
  */
-router.get('/:id/progress', sessionController.getSessionProgress);
-
-/**
- * @route   GET /api/v1/sessions/:id
- * @desc    Get session details by ID
- * @access  Private
- */
-router.get('/:id', sessionController.getSessionById);
-
-/**
- * @route   GET /api/v1/sessions/upcoming
- * @desc    Get upcoming sessions
- * @access  Private
- */
-router.get('/upcoming', sessionController.getUpcomingSessions);
-
-/**
- * @route   GET /api/v1/sessions/stats
- * @desc    Get session statistics
- * @access  Private
- */
 router.get('/stats', sessionController.getSessionStats);
+router.get('/past', sessionController.getPastSessions);
+
+router.get('/:id/progress', sessionController.getSessionProgress);
 
 
 /**
