@@ -236,11 +236,13 @@ type UploadFileType = 'image' | 'video';
  * @param fileType - 'image' (default) or 'video' — selects the right multer
  *                   instance (filter + size limit) for the field being uploaded.
  */
-export const uploadSingle = (fieldName: string = 'photo', fileType: UploadFileType = 'image') => {
+export const uploadSingle = (fieldName: string = 'photo', fileType: UploadFileType = 'image', required: boolean = true) => {
     return (req: Request, res: any, next: any) => {
         const startTime = Date.now();
         const config = fileType === 'video' ? uploadVideoConfig : uploadSingleConfig;
         const maxSize = fileType === 'video' ? uploadConfig.maxVideoFileSize : uploadConfig.maxFileSize;
+
+
 
         logger.info('📤 [UPLOAD START] Single file upload initiated', {
             fieldName,
@@ -292,12 +294,20 @@ export const uploadSingle = (fieldName: string = 'photo', fileType: UploadFileTy
             }
 
             if (!req.file) {
-                logger.warn('⚠️ [NO FILE] No file uploaded', {
+                if (required) {
+                    logger.warn('⚠️ [NO FILE] No file uploaded', {
+                        fieldName,
+                        fileType,
+                        duration: `${duration}ms`
+                    });
+                    return next(new AppError('No file uploaded', 400));
+                }
+                logger.info('ℹ️ [NO FILE] No file uploaded (optional) — continuing', {
                     fieldName,
                     fileType,
                     duration: `${duration}ms`
                 });
-                return next(new AppError('No file uploaded', 400));
+                return next();
             }
 
             logger.info('✅ [UPLOAD SUCCESS] File uploaded successfully', {

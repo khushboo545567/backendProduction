@@ -39,7 +39,7 @@ router.use(AuthMiddleware.authenticate as any);
  */
 router.post(
   '/create',
-  uploadSingle('thumbnailImage'),
+  uploadSingle('thumbnailImage', 'image', false),
   parseFormDataFields,
   validateJoi(sessionValidator.createSession),
   sessionController.createSession
@@ -140,7 +140,7 @@ router.get('/:id/refund-estimate', sessionController.getRefundEstimate);
  */
 router.put(
   '/:id',
-  uploadSingle('thumbnailImage'),
+  uploadSingle('thumbnailImage', 'image', false),
   parseFormDataFields,
   validateJoi(sessionValidator.updateSession),
   sessionController.updateSession
