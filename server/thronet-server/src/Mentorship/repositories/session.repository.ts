@@ -55,10 +55,14 @@ class SessionRepository {
   }
 
   /**
-   * Get all sessions with filters and mentor name lookup.
+   * Get all sessions with filters and mentor/mentee name+photo lookup.
    *
    * ✅ FIX: Now returns { data, total } for proper pagination support.
    * Frontend needs total to calculate page count.
+   *
+   * ✅ FIX: Added `sortOrder` param (default -1 = newest first, unchanged
+   * behavior for existing callers). Pass 1 for ascending order — used by
+   * getUpcomingSessions so the soonest session shows first instead of last.
    *
    * Note: The $addFields fallback chain (bookings.bookedBy => bookedBy => menteeId)
    * exists due to a data migration. Once data is unified under menteeId,
@@ -67,12 +71,13 @@ class SessionRepository {
   async findAll(
     query: any,
     skip: number,
-    limit: number
+    limit: number,
+    sortOrder: 1 | -1 = -1
   ): Promise<{ data: any[]; total: number }> {
     const [data, total] = await Promise.all([
       SessionMentor.aggregate([
         { $match: query },
-        { $sort: { scheduledAt: -1 } },
+        { $sort: { scheduledAt: sortOrder } },
         { $skip: skip },
         { $limit: limit },
         {
@@ -204,6 +209,9 @@ class SessionRepository {
 
   /**
    * Get upcoming sessions for a user
+   *
+   * ✅ FIX: Now uses findAll() (with enrichment) and ascending sort so the
+   * soonest session comes first, instead of a bare .find() with no lookup.
    */
   async findUpcoming(userId: string, role: 'mentor' | 'mentee', limit: number): Promise<any[]> {
     const query: any = {
@@ -212,7 +220,7 @@ class SessionRepository {
       [role === 'mentor' ? 'mentorId' : 'menteeId']: userId,
     };
 
-    return await this.findAll(query, 0, limit).then(res => res.data);
+    return await this.findAll(query, 0, limit, 1).then(res => res.data);
   }
 
   /**

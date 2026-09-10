@@ -189,9 +189,12 @@ class MentorshipSessionService {
     try {
       logger.info(`Fetching assigned sessions for mentor: ${mentorId}`);
 
-      const sessions = await SessionMentor.find({ mentorId })
+      // ✅ FIX: .lean() returns Mongoose's FlattenMaps type (_id: ObjectId),
+      // which doesn't structurally match ISessionMentor (_id: string). Cast
+      // once here so all downstream forEach/map/filter calls type-check.
+      const sessions = (await SessionMentor.find({ mentorId })
         .sort({ scheduledAt: 1 })
-        .lean();
+        .lean()) as unknown as ISessionMentor[];
 
       /**
        * Mentee Enrichment
@@ -259,7 +262,7 @@ class MentorshipSessionService {
 
       const enrichedSessions = sessions.map((session: ISessionMentor) => {
         const enriched: EnrichedSession = { ...session };
-        
+
         if (session.menteeId && userMap.has(session.menteeId)) {
           enriched.mentee = userMap.get(session.menteeId);
         }
@@ -274,7 +277,7 @@ class MentorshipSessionService {
             return bEnriched;
           });
         }
-        
+
         return enriched;
       });
 
@@ -298,7 +301,7 @@ class MentorshipSessionService {
 
       let query: any = { sessionId: input.sessionId };
       if (Types.ObjectId.isValid(input.sessionId)) {
-        query = { 
+        query = {
           $or: [
             { sessionId: input.sessionId },
             { _id: new Types.ObjectId(input.sessionId) }
@@ -312,7 +315,7 @@ class MentorshipSessionService {
       // if (session.status !== BookingStatus.AVAILABLE) {
       //   throw new BadRequestError('Session is not available for booking');
       // }
-      
+
       // TEMP FIX (Pallav)
       // Reason: Session templates hold multiple bookings. Confirming one booking changes the template status, blocking new bookings.
       // Previous: Strictly required AVAILABLE status.
@@ -381,9 +384,9 @@ class MentorshipSessionService {
        *
        * Keep these fields synchronized with the first booking until
        * the backend is fully migrated to bookings[].
-       * 
-       * Controller logic check the menteeID throguh root 
-       * Which was supposed to go though bookings array 
+       *
+       * Controller logic check the menteeID throguh root
+       * Which was supposed to go though bookings array
        */
       if (session.bookings.length === 1) {
         session.menteeId = input.menteeId;
@@ -421,9 +424,10 @@ class MentorshipSessionService {
    */
   async getSessionProgress(sessionId: string, userId: string): Promise<any> {
     try {
-      const sessions = await SessionMentor.find({
+      // ✅ FIX: same ObjectId-vs-string _id cast as getMentorAssignedSessions above.
+      const sessions = (await SessionMentor.find({
         $or: [{ menteeId: userId }, { mentorId: userId }],
-      }).lean();
+      }).lean()) as unknown as ISessionMentor[];
 
       const total     = sessions.length;
       const completed = sessions.filter((s: ISessionMentor) => s.status === BookingStatus.COMPLETED).length;
@@ -469,7 +473,7 @@ class MentorshipSessionService {
         // OLD IMPLEMENTATION (Reference)
         // const isMentee = session.menteeId === userId;
         // END OLD IMPLEMENTATION
-        
+
         // TEMP FIX (Pallav)
         // Reason: Because bookings are appended to an array, the root menteeId is null.
         // Previous: Checked root menteeId only.
@@ -514,7 +518,7 @@ class MentorshipSessionService {
         // OLD IMPLEMENTATION (Reference)
         // query.menteeId = userId;
         // END OLD IMPLEMENTATION
-        
+
         // TEMP FIX (Pallav)
         // Reason: Because bookings are appended to an array, the root menteeId is null.
         // Previous: Queried root menteeId.
@@ -561,7 +565,21 @@ class MentorshipSessionService {
   }
 
   /**
-   * Get upcoming sessions for a user
+   * Get upcoming sessions for a user (mentor dashboard + mentee "My Sessions").
+   *
+   * ✅ FIX: Previously used a bare `SessionMentor.find()` with no $lookup,
+   * so the frontend never received the mentee's real name/photo and fell
+   * back to "Student" + a generic avatar. Now routes through
+   * sessionRepository.findAll(), which enriches each session with
+   * menteeName / menteeProfilePhoto / mentorName / mentorProfilePhoto via
+   * $lookup — same enrichment already used by getAllSessions().
+   *
+   * ✅ FIX: Also fixed the mentor query — was comparing session.mentorId
+   * (mentor's mentorId) against userId (the user's UUID), which never
+   * matched. Now resolves the mentor profile first, same as getAllSessions.
+   *
+   * ✅ FIX: Sessions now sort ascending (soonest first) via the new
+   * sortOrder param on findAll(), instead of relying on default desc order.
    */
   async getUpcomingSessions(
     userId: string,
@@ -576,24 +594,15 @@ class MentorshipSessionService {
       };
 
       if (role === 'mentor') {
-        query.mentorId = userId;
+        const mentor = await Mentor.findOne({ userId, isDeleted: false });
+        if (!mentor) throw new NotFoundError('MENTOR_NOT_FOUND');
+        query.mentorId = mentor.mentorId;
       } else {
-        // OLD IMPLEMENTATION (Reference)
-        // query.menteeId = userId;
-        // END OLD IMPLEMENTATION
-        
-        // TEMP FIX (Pallav)
-        // Reason: Because bookings are appended to an array, the root menteeId is null.
-        // Previous: Queried root menteeId.
-        // Current: Queries bookings.menteeId to allow mentees to see their upcoming sessions.
-        // TODO: Refactor during architecture cleanup.
         query['bookings.menteeId'] = userId;
       }
 
-      return await SessionMentor.find(query)
-        .sort({ scheduledAt: 1 })
-        .limit(limit)
-        .lean();
+      const { data } = await sessionRepository.findAll(query, 0, limit, 1);
+      return data;
     } catch (error: any) {
       logger.error(`Failed to fetch upcoming sessions: ${error.message}`);
       throw error;
@@ -602,6 +611,8 @@ class MentorshipSessionService {
 
   /**
    * Get past sessions for a user
+   *
+   * ✅ FIX: Same enrichment + mentor-lookup fix as getUpcomingSessions above.
    */
   async getPastSessions(
     userId: string,
@@ -616,24 +627,15 @@ class MentorshipSessionService {
       };
 
       if (role === 'mentor') {
-        query.mentorId = userId;
+        const mentor = await Mentor.findOne({ userId, isDeleted: false });
+        if (!mentor) throw new NotFoundError('MENTOR_NOT_FOUND');
+        query.mentorId = mentor.mentorId;
       } else {
-        // OLD IMPLEMENTATION (Reference)
-        // query.menteeId = userId;
-        // END OLD IMPLEMENTATION
-        
-        // TEMP FIX (Pallav)
-        // Reason: Because bookings are appended to an array, the root menteeId is null.
-        // Previous: Queried root menteeId.
-        // Current: Queries bookings.menteeId to allow mentees to see their past sessions.
-        // TODO: Refactor during architecture cleanup.
         query['bookings.menteeId'] = userId;
       }
 
-      return await SessionMentor.find(query)
-        .sort({ scheduledAt: -1 })
-        .limit(limit)
-        .lean();
+      const { data } = await sessionRepository.findAll(query, 0, limit);
+      return data;
     } catch (error: any) {
       logger.error(`Failed to fetch past sessions: ${error.message}`);
       throw error;
@@ -658,28 +660,28 @@ class MentorshipSessionService {
       try {
         // Authorization check only — we don't need the full doc anymore
         await this.getSessionById(sessionId, userId, authToken);
-  
+
         if (file) {
           updates.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, userId);
         }
-  
+
         const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage'];
         const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
-  
+
         if (!isValidUpdate) {
           throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage are allowed.');
         }
-  
+
         const updatedSession = await SessionMentor.findOneAndUpdate(
           { sessionId },
           { $set: updates },
           { new: true, runValidators: false }
         );
-  
+
         if (!updatedSession) {
           throw new NotFoundError('Session not found after update');
         }
-  
+
         return updatedSession;
       } catch (error: any) {
         logger.error(`Failed to update session: ${error.message}`);
@@ -748,16 +750,16 @@ class MentorshipSessionService {
       // Perform an atomic update to avoid any Document.save() validation issues
       await SessionMentor.updateOne(
         { sessionId, 'bookings._id': bookingId },
-        { 
-          $set: { 
+        {
+          $set: {
             'bookings.$.status': BookingStatus.CONFIRMED,
             status: BookingStatus.CONFIRMED
-          } 
+          }
         }
       );
 
       logger.info(`Session confirmed: ${sessionId}, bookedBy/bookingId: ${bookingId}`);
-      
+
       // Fetch the updated document returning lean for response
       return await SessionMentor.findOne({ sessionId });
     } catch (error: any) {
@@ -783,12 +785,12 @@ class MentorshipSessionService {
         throw new ForbiddenError('Only the mentor of this session can start it');
       }
 
-      const hasConfirmedBooking = session.bookings?.some((b: any) => 
+      const hasConfirmedBooking = session.bookings?.some((b: any) =>
         b.status === BookingStatus.CONFIRMED || b.status === BookingStatus.RESCHEDULED
       );
 
       if (
-        session.status !== BookingStatus.CONFIRMED && 
+        session.status !== BookingStatus.CONFIRMED &&
         session.status !== BookingStatus.RESCHEDULED &&
         !hasConfirmedBooking
       ) {
@@ -884,7 +886,7 @@ class MentorshipSessionService {
       const refundEligible = hoursDiff >= 24;
 
       const updateData: any = {
-        $set: { 
+        $set: {
           'bookings.$.status': BookingStatus.CANCELLED,
           'cancellation': {
             cancelledBy: userId,
@@ -920,216 +922,7 @@ class MentorshipSessionService {
   }
 
   /**
-   * Reschedule sessio# STRICT Runtime Investigation – Determine the Correct Location for Review Submission UI
-
-IMPORTANT
-
-DO NOT MODIFY ANY CODE.
-
-DO NOT CREATE ANY FILES.
-
-DO NOT IMPLEMENT ANY UI.
-
-This is a READ-ONLY investigation.
-
-The previous audit confirmed:
-
-- ReviewService.submitReview() exists.
-- The backend review API works.
-- There is currently no Review Submission UI.
-- Users cannot submit reviews from the React Native app.
-
-Your task is to determine the EXACT place where the review submission feature should live within the existing mentorship architecture.
-
-====================================================
-PHASE 1 — Locate the Mentee Completed Sessions
-====================================================
-
-Search the React Native project for every screen that displays sessions/bookings belonging to the mentee.
-
-Examples include:
-
-- My Sessions
-- Session History
-- Bookings
-- Completed Sessions
-- Dashboard
-- Session Details
-
-For every screen found, provide:
-
-- File path
-- Purpose
-- Whether it displays completed sessions
-- Whether it belongs to Mentor or Mentee
-
-====================================================
-PHASE 2 — Identify the Correct Entry Point
-====================================================
-
-Determine the best location to place the "Leave Review" action.
-
-Do NOT assume.
-
-Verify where the user naturally reaches a completed session.
-
-State:
-
-- Which component renders the completed session card.
-- Which component owns the action buttons.
-- Which file should be modified.
-
-====================================================
-PHASE 3 — Existing Session Data
-====================================================
-
-Inspect the completed session object passed to the UI.
-
-Determine whether it already contains:
-
-- sessionId
-- mentorId
-- mentorName
-- mentorAvatar
-- sessionStatus
-- bookingStatus
-
-Identify every field available without requiring another API call.
-
-====================================================
-PHASE 4 — Review Status Detection
-====================================================
-
-Determine how the frontend can know whether the session has already been reviewed.
-
-Search for:
-
-- reviewed
-- hasReview
-- reviewId
-- isReviewed
-
-If none exist:
-
-Determine the smallest backend/frontend addition required.
-
-Do NOT implement it.
-
-====================================================
-PHASE 5 — Existing UI Components
-====================================================
-
-Search for reusable components.
-
-Examples:
-
-- Star Rating
-- Rating Input
-- Modal
-- Bottom Sheet
-- TextArea
-- Review Card
-
-Determine whether existing components can be reused instead of creating duplicates.
-
-====================================================
-PHASE 6 — UX Investigation
-====================================================
-
-Determine the best UX.
-
-Should the review be:
-
-A.
-A full screen
-
-B.
-A modal
-
-C.
-A bottom sheet
-
-D.
-Embedded inside Session Details
-
-Justify your recommendation using the existing architecture.
-
-====================================================
-PHASE 7 — Navigation
-====================================================
-
-Verify whether a Session Details screen already exists.
-
-If yes:
-
-Would it be better to launch the review from Session Details?
-
-If no:
-
-Recommend the smallest UI addition.
-
-====================================================
-PHASE 8 — API Readiness
-====================================================
-
-Verify ReviewService.submitReview().
-
-List its required payload.
-
-Verify that every payload field already exists inside the completed session object.
-
-If any field is missing:
-
-Identify exactly where it should come from.
-
-====================================================
-PHASE 9 — Refresh Behaviour
-====================================================
-
-After a successful review, determine exactly what should refresh.
-
-Examples:
-
-- Completed sessions
-- Mentor profile
-- Review list
-- Dashboard statistics
-- Average rating
-
-Explain which components need refreshing and which do not.
-
-====================================================
-PHASE 10 — Final Architecture Recommendation
-====================================================
-
-Provide:
-
-1. Exact file that should contain the "Leave Review" button.
-
-2. Exact file that should own the Review Modal.
-
-3. Existing reusable components that should be reused.
-
-4. New components (only if absolutely necessary).
-
-5. Files that require modification.
-
-6. APIs that will be called.
-
-7. Complete user flow from:
-Completed Session
-→ Leave Review
-→ Submit
-→ Success
-→ UI Refresh
-
-IMPORTANT
-
-Do NOT write code.
-
-Do NOT implement anything.
-
-Only produce the final architectural plan with the smallest possible implementation that follows the existing mentorship module architecture.n
+   * Reschedule session
    */
   async rescheduleSession(
     sessionId: string,
@@ -1162,7 +955,7 @@ Only produce the final architectural plan with the smallest possible implementat
       }
 
       const updateData: any = {
-        $set: { 
+        $set: {
           'bookings.$.status': BookingStatus.RESCHEDULED,
           'bookings.$.scheduledAt': newScheduledAt,
           'reschedule.lastRescheduledAt': new Date(),
