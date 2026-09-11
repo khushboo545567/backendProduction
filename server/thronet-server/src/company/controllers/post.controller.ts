@@ -50,18 +50,38 @@ function timeAgo(dateInput: Date | string | undefined): string {
 }
 
 class PostController {
-  private async enrichPostsWithLiked(posts: any[], userId?: string): Promise<any[]> {
-    if (!userId || !Array.isArray(posts) || posts.length === 0) return posts;
+  private async enrichPostsWithLiked(posts: any[], userOrId?: any): Promise<any[]> {
+    if (!userOrId || !Array.isArray(posts) || posts.length === 0) return posts;
 
-    const postIds = posts.map(p => p.postId || String(p._id));
-    const userLikes = await CompanyPostLike.find({ userId, postId: { $in: postIds } }).lean();
-    const likedPostIdSet = new Set(userLikes.map(l => l.postId));
+    const userIds = (typeof userOrId === 'object'
+      ? [userOrId.id, userOrId.userId, userOrId._id]
+      : [userOrId]
+    ).filter(Boolean).map(String);
+
+    if (userIds.length === 0) return posts;
+
+    const allPostIds: string[] = [];
+    for (const p of posts) {
+      if (p.postId) allPostIds.push(String(p.postId));
+      if (p._id) allPostIds.push(String(p._id));
+      if (p.id) allPostIds.push(String(p.id));
+    }
+
+    const userLikes = await CompanyPostLike.find({
+      userId: { $in: userIds },
+      postId: { $in: allPostIds },
+    }).lean();
+
+    const likedPostIdSet = new Set(userLikes.map(l => String(l.postId)));
 
     return posts.map(p => {
-      const pId = p.postId || String(p._id);
+      const isLiked = (p.postId && likedPostIdSet.has(String(p.postId))) ||
+                      (p._id && likedPostIdSet.has(String(p._id))) ||
+                      (p.id && likedPostIdSet.has(String(p.id))) ||
+                      false;
       return {
         ...p,
-        liked: likedPostIdSet.has(pId),
+        liked: isLiked,
       };
     });
   }
@@ -149,7 +169,7 @@ class PostController {
   async getPostById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const objectId = (req as any).resolvedObjectId;
-      const userId = (req as any).user?.id || (req as any).user?.userId;
+      const user = (req as any).user;
 
       const post = await postService.getPostById(objectId);
       if (!post) {
@@ -162,7 +182,7 @@ class PostController {
       );
 
       const postObj = post.toObject ? post.toObject() : post;
-      const [enriched] = await this.enrichPostsWithLiked([postObj], userId);
+      const [enriched] = await this.enrichPostsWithLiked([postObj], user);
 
       ResponseUtil.success(res, enriched, 'Post retrieved successfully');
     } catch (error: any) {
@@ -177,7 +197,7 @@ class PostController {
   async getPostBySlug(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { slug } = req.params;
-      const userId = (req as any).user?.id || (req as any).user?.userId;
+      const user = (req as any).user;
 
       const post = await postService.getPostBySlug(slug);
       if (!post) {
@@ -186,7 +206,7 @@ class PostController {
       }
 
       const postObj = post.toObject ? post.toObject() : post;
-      const [enriched] = await this.enrichPostsWithLiked([postObj], userId);
+      const [enriched] = await this.enrichPostsWithLiked([postObj], user);
 
       ResponseUtil.success(res, enriched, 'Post retrieved successfully');
     } catch (error: any) {
@@ -200,7 +220,7 @@ class PostController {
   // =====================================================
   async listPosts(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const userId = (req as any).user?.id || (req as any).user?.userId;
+      const user = (req as any).user;
       const filters: PostFilterQuery = {
         page: parseInt(req.query.page as string) || 1,
         pageSize: parseInt(req.query.pageSize as string) || 20,
@@ -214,7 +234,7 @@ class PostController {
       };
 
       const result = await postService.listPosts(filters);
-      const enrichedItems = await this.enrichPostsWithLiked(result.items, userId);
+      const enrichedItems = await this.enrichPostsWithLiked(result.items, user);
 
       ResponseUtil.success(res, { items: enrichedItems, pagination: result.pagination }, 'Posts retrieved successfully');
     } catch (error: any) {
@@ -229,7 +249,7 @@ class PostController {
   async getPostsByCompany(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const companyObjectId = (req as any).resolvedObjectId;
-      const userId = (req as any).user?.id || (req as any).user?.userId;
+      const user = (req as any).user;
 
       if (!companyObjectId) {
         ResponseUtil.badRequest(res, 'Company not found');
@@ -241,7 +261,7 @@ class PostController {
 
       const result = await postService.getPostsByCompany(companyObjectId, page, pageSize, sort);
       const rawPosts = result.posts || result.items || (Array.isArray(result) ? result : []);
-      const enriched = await this.enrichPostsWithLiked(rawPosts, userId);
+      const enriched = await this.enrichPostsWithLiked(rawPosts, user);
 
       if (result.posts) {
         result.posts = enriched;
@@ -404,19 +424,27 @@ class PostController {
   async toggleLike(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const postId = req.params.id;
-      const userId = (req as any).user?.id || (req as any).user?.userId;
+      const user = (req as any).user;
+      const userId = user?.id || user?.userId || user?._id;
+      const userIds = [user?.id, user?.userId, user?._id].filter(Boolean).map(String);
 
-      if (!userId) {
+      if (!userId || userIds.length === 0) {
         ResponseUtil.unauthorized(res, 'Authentication required');
         return;
       }
 
-      const post = await CompanyPost.findOne({
-        $or: [
-          { postId },
-          { _id: mongoose.Types.ObjectId.isValid(postId) ? postId : null },
-        ],
-      });
+      let post = (req as any).resolvedObjectId
+        ? await CompanyPost.findById((req as any).resolvedObjectId)
+        : null;
+
+      if (!post) {
+        post = await CompanyPost.findOne({
+          $or: [
+            { postId },
+            { _id: mongoose.Types.ObjectId.isValid(postId) ? postId : null },
+          ],
+        });
+      }
 
       if (!post) {
         ResponseUtil.notFound(res, 'Post not found');
@@ -424,27 +452,64 @@ class PostController {
       }
 
       const postUUID = post.postId || String(post._id);
+      const postIdsToCheck = Array.from(new Set([post.postId, String(post._id), postId].filter(Boolean).map(String)));
       const companyIdStr = extractIdString(post.company);
 
-      const existingLike = await CompanyPostLike.findOne({ postId: postUUID, userId });
+      const existingLike = await CompanyPostLike.findOne({
+        postId: { $in: postIdsToCheck },
+        userId: { $in: userIds },
+      });
+
       let isLiked = false;
 
       if (existingLike) {
         // UNLIKE: Remove like document & decrement count in DB
-        await CompanyPostLike.deleteOne({ _id: existingLike._id });
-        await CompanyPost.updateOne({ _id: post._id }, { $inc: { 'engagementMetrics.likesCount': -1 } });
-        const currentLikes = Math.max(0, (post.engagementMetrics?.likesCount || 1) - 1);
-        await CompanyActivity.deleteOne({ targetId: `like-${postUUID}-${userId}` });
+        await CompanyPostLike.deleteMany({
+          postId: { $in: postIdsToCheck },
+          userId: { $in: userIds },
+        });
+
+        const updatedPost = await CompanyPost.findByIdAndUpdate(
+          post._id,
+          { $inc: { 'engagementMetrics.likesCount': -1 } },
+          { new: true }
+        );
+
+        if (updatedPost?.engagementMetrics?.likesCount && updatedPost.engagementMetrics.likesCount < 0) {
+          await CompanyPost.updateOne({ _id: post._id }, { $set: { 'engagementMetrics.likesCount': 0 } });
+        }
+
+        const currentLikes = Math.max(0, updatedPost?.engagementMetrics?.likesCount ?? 0);
+
+        await CompanyActivity.deleteMany({
+          $or: [
+            { targetId: `like-${postUUID}-${userId}` },
+            { targetId: { $in: postIdsToCheck.flatMap(id => userIds.map(u => `like-${id}-${u}`)) } },
+          ],
+        });
+
         isLiked = false;
+
+        // Invalidate cache for company
+        if (companyIdStr) {
+          await postService.invalidatePostCache(post._id.toString(), companyIdStr, post.slug);
+        }
+
         ResponseUtil.success(res, { liked: false, likesCount: currentLikes }, 'Post unliked successfully');
       } else {
         // LIKE: Create like document & increment count & write Activity record to DB
-        await CompanyPostLike.create({ postId: postUUID, userId });
-        await CompanyPost.updateOne({ _id: post._id }, { $inc: { 'engagementMetrics.likesCount': 1 } });
-        const currentLikes = (post.engagementMetrics?.likesCount || 0) + 1;
+        await CompanyPostLike.create({ postId: postUUID, userId: String(userId) });
+
+        const updatedPost = await CompanyPost.findByIdAndUpdate(
+          post._id,
+          { $inc: { 'engagementMetrics.likesCount': 1 } },
+          { new: true }
+        );
+
+        const currentLikes = Math.max(0, updatedPost?.engagementMetrics?.likesCount ?? 1);
         isLiked = true;
 
-        const userName = `${(req as any).user?.firstName || ''} ${(req as any).user?.lastName || ''}`.trim() || (req as any).user?.email || 'User';
+        const userName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'User';
 
         if (companyIdStr) {
           await CompanyActivity.create({
@@ -458,6 +523,9 @@ class PostController {
             read: false,
             targetId: `like-${postUUID}-${userId}`,
           });
+
+          // Invalidate cache for company
+          await postService.invalidatePostCache(post._id.toString(), companyIdStr, post.slug);
         }
 
         ResponseUtil.success(res, { liked: true, likesCount: currentLikes }, 'Post liked successfully');
