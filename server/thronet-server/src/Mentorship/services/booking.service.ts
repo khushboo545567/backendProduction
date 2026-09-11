@@ -3,7 +3,7 @@ import videoService from './video.service';
 import emailService from './email.service';
 import smsService from './sms.service';
 import calendarService from './calendar.service';
-import refundService from './refund.service'; // ✅ FIX: use refund.service instead of duplicate logic
+import refundService from './refund.service';
 import { PaymentMethod } from '@/Mentorship/interface/session.types';
 import TimezoneUtils from '@/Mentorship/utils/timezone';
 import { SessionType } from '@/shared/constants/sessionTypes';
@@ -11,10 +11,10 @@ import { logger } from '@/shared/logger.util';
 import { User, UserProfile } from '@/shared/models/index.models';
 import { SessionMentor } from '../models';
 import { ConflictError } from '@/shared/errors/app.error';
-// import { redisClient } from '../../config/cache/redis.config';
 import { getRedisClient } from '@/services/redis.service';
-
 import waitlistCron from '@/jobs/waitlistCron';
+// ✅ NEW: in-app notification wiring
+import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 
 interface BookingInput {
   mentorId: string;
@@ -45,20 +45,12 @@ interface BookingResult {
 }
 
 class BookingService {
-  /**
-   * Complete booking flow - orchestrates all services
-   *
-   * ✅ FIX: Redis distributed lock added to prevent double booking.
-   * Lock key is unique per mentor + time slot.
-   * Lock is released in finally block only by the process that acquired it.
-   */
   async createBooking(input: BookingInput, authToken?: string): Promise<BookingResult> {
-    // ✅ FIX: Distributed lock — prevent double booking on same slot
     const lockKey = `booking:lock:${input.mentorId}:${input.scheduledAt.getTime()}`;
     const lockValue = `${input.menteeId}-${Date.now()}`;
 
     const redisClient = await getRedisClient();
-    const acquired = await redisClient.set(lockKey, lockValue, 'NX', 'EX', 60);
+    const acquired = await redisClient.set(lockKey, lockValue, 'NX', 'EX', 60);;
     if (!acquired) {
       throw new ConflictError(
         'This slot is currently being booked by another user. Please try again in a moment.'
@@ -70,12 +62,9 @@ class BookingService {
     try {
       logger.info(`🎫 Starting booking flow for ${input.sessionType}`);
 
-      // Step 1: Create session
       session = await sessionService.createSession(input, authToken);
       logger.info(`✅ Session created: ${session._id}`);
 
-      // Step 2: Create video meeting
-      // ✅ FIX: If video meeting fails, rollback the session
       let meetingDetails: any;
       try {
         meetingDetails = await this.createVideoMeeting(session, input.timezone);
@@ -92,7 +81,6 @@ class BookingService {
         throw new Error('Booking failed: Could not create video meeting. Please try again.');
       }
 
-      // Step 3: Update session with meeting details
       await session.setMeetingDetails(
         meetingDetails.platform,
         meetingDetails.meetingUrl,
@@ -100,7 +88,6 @@ class BookingService {
         meetingDetails.passcode
       );
 
-      // Step 4: Get user details for notifications
       const [mentee, mentor] = await Promise.all([
         User.findOne({ userId: input.menteeId, 'flags.isDeleted': false }),
         User.findOne({ userId: input.mentorId, 'flags.isDeleted': false }),
@@ -114,7 +101,6 @@ class BookingService {
         throw new Error('User not found');
       }
 
-      // Step 5: Create calendar event (non-critical — failure does not abort booking)
       let calendarEvent;
       try {
         calendarEvent = await calendarService.createCalendarEvent({
@@ -131,7 +117,6 @@ class BookingService {
         logger.warn(`⚠️ Calendar event creation failed: ${error.message}`);
       }
 
-      // Step 6: Send notifications
       const notifications = await this.sendBookingNotifications(
         session,
         mentee,
@@ -149,11 +134,9 @@ class BookingService {
         notifications,
       };
     } catch (error: any) {
-      // ✅ FIX: Correct template literal — no space between $ and {
       logger.error(`❌ Booking flow failed: ${error.message}`);
       throw error;
     } finally {
-      // ✅ FIX: Release lock only if this process acquired it (prevents releasing another process's lock)
       try {
         const redisClient = await getRedisClient();
         const current = await redisClient.get(lockKey);
@@ -166,9 +149,6 @@ class BookingService {
     }
   }
 
-  /**
-   * Create video meeting for session
-   */
   private async createVideoMeeting(session: any, timezone: string): Promise<any> {
     try {
       const meetingDetails = await videoService.createMeeting({
@@ -180,14 +160,17 @@ class BookingService {
       });
       return meetingDetails;
     } catch (error: any) {
-      // ✅ FIX: Correct template literal
       logger.error(`Failed to create video meeting: ${error.message}`);
       throw new Error('Failed to create video meeting');
     }
   }
 
   /**
-   * Send booking confirmation notifications
+   * Send booking confirmation notifications (email + SMS + in-app)
+   *
+   * ✅ NEW: added in-app notifications for BOTH mentee and mentor, on top of
+   * the existing email/SMS. In-app failures are swallowed (non-critical —
+   * the booking itself must not fail because of a notification hiccup).
    */
   private async sendBookingNotifications(
     session: any,
@@ -224,14 +207,33 @@ class BookingService {
       );
     }
 
+    // ✅ NEW: in-app notification to mentee
+    NotificationService.sendNotification({
+      userId: mentee.userId,
+      type: NotificationType.BOOKING_CONFIRMED,
+      channels: [NotificationChannel.IN_APP],
+      data: {
+        title: 'Booking Confirmed',
+        message: `Your session with ${mentor.name || mentor.email} on ${scheduledAtFormatted} is booked!`,
+      },
+    }).catch((e) => logger.error('Notification failed (sendBookingNotifications → mentee):', e));
+
+    // ✅ NEW: in-app notification to mentor
+    NotificationService.sendNotification({
+      userId: mentor.userId,
+      type: NotificationType.BOOKING_CONFIRMED,
+      channels: [NotificationChannel.IN_APP],
+      data: {
+        title: 'New Booking',
+        message: `${mentee.name || mentee.email} booked a session with you on ${scheduledAtFormatted}.`,
+      },
+    }).catch((e) => logger.error('Notification failed (sendBookingNotifications → mentor):', e));
+
     return { emailSent, smsSent };
   }
 
   /**
    * Cancel booking with refund processing + Waitlist notification
-   *
-   * ✅ FIX: Removed duplicate refund calculation logic.
-   * Now delegates entirely to refund.service.ts (single source of truth).
    */
   async cancelBooking(
     sessionId: string,
@@ -243,28 +245,17 @@ class BookingService {
     try {
       logger.info(`❌ Cancelling booking: ${sessionId}`);
 
-      /**
-       * TEMP FIX (UUID Lookup)
-       *
-       * Frontend passes the public UUID (sessionId),
-       * not the MongoDB ObjectId.
-       *
-       * Query by sessionId to prevent ObjectId cast errors
-       * while preserving the existing backend architecture.
-       */
       const session = await SessionMentor.findOne({ sessionId });
       if (!session) {
         throw new Error('Session not found');
       }
 
-      // ✅ FIX: Delegate to refund.service — single source of truth for refund logic
       const refundResult = await refundService.processRefund({
         sessionId,
         userId,
         reason,
       });
 
-      // Delete video meeting
       if (session.meeting?.meetingId) {
         try {
           await videoService.deleteMeeting(session.meeting.meetingId);
@@ -273,7 +264,6 @@ class BookingService {
         }
       }
 
-      // Get user details for calendar deletion
       const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
       const [mentee, mentor] = await Promise.all([
         actualMenteeId ? User.findByUserId(actualMenteeId) : null,
@@ -284,14 +274,12 @@ class BookingService {
         logger.warn('Mentee or Mentor not found for calendar deletion', { sessionId });
       }
 
-      // Delete calendar event
       try {
         await calendarService.deleteCalendarEvent(sessionId);
       } catch (error: any) {
         logger.warn(`⚠️ Calendar event deletion failed: ${error.message}`);
       }
 
-      // Notify waitlist users
       try {
         const notifiedCount = await waitlistCron.notifyWaitlistForSession(sessionId);
         if (notifiedCount > 0) {
@@ -299,6 +287,21 @@ class BookingService {
         }
       } catch (error: any) {
         logger.warn(`⚠️ Waitlist notification failed: ${error.message}`);
+      }
+
+      // ✅ NEW: notify refund outcome (mentee side, since refunds always go to the payer)
+      if (mentee?.userId) {
+        NotificationService.sendNotification({
+          userId: mentee.userId,
+          type: NotificationType.REFUND_PROCESSED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: refundResult.refundEligible ? 'Refund Processed' : 'Booking Cancelled',
+            message: refundResult.refundEligible
+              ? `Your refund for the cancelled session is being processed.`
+              : `Your session was cancelled. Reason: ${reason}`,
+          },
+        }).catch((e) => logger.error('Notification failed (cancelBooking → mentee):', e));
       }
 
       logger.info(`✅ Booking cancelled successfully: ${sessionId}`);
@@ -309,7 +312,6 @@ class BookingService {
         refundEligible: refundResult.refundEligible,
       };
     } catch (error: any) {
-      // ✅ FIX: Correct template literal
       logger.error(`❌ Booking cancellation failed: ${error.message}`);
       throw error;
     }
@@ -356,7 +358,6 @@ class BookingService {
         return updatedSession;
       }
 
-      // Update calendar event (non-critical)
       try {
         await calendarService.updateCalendarEvent(sessionId, {
           startTime: newScheduledAt,
@@ -367,7 +368,6 @@ class BookingService {
           meetingUrl: updatedSession.meeting?.meetingUrl || '',
         });
       } catch (error: any) {
-        // ✅ FIX: Correct template literal
         logger.warn(`⚠️ Calendar event update failed: ${error.message}`);
       }
 
@@ -402,10 +402,12 @@ class BookingService {
         );
       }
 
+      // Note: in-app SESSION_RESCHEDULED notification is already sent inside
+      // sessionService.rescheduleSession() above — not duplicated here.
+
       logger.info(`✅ Booking rescheduled successfully: ${sessionId}`);
       return updatedSession;
     } catch (error: any) {
-      // ✅ FIX: Correct template literal
       logger.error(`❌ Booking reschedule failed: ${error.message}`);
       throw error;
     }
@@ -455,9 +457,19 @@ class BookingService {
         );
       }
 
+      // ✅ NEW: in-app reminder
+      NotificationService.sendNotification({
+        userId: mentee.userId,
+        type: NotificationType.SESSION_REMINDER,
+        channels: [NotificationChannel.IN_APP],
+        data: {
+          title: 'Upcoming Session',
+          message: `Your session with ${mentor.fullName || mentor.email} starts in ${hoursUntil} hours.`,
+        },
+      }).catch((e) => logger.error('Notification failed (sendSessionReminder):', e));
+
       logger.info(`⏰ Reminder sent for session: ${sessionId} (${hoursUntil}h)`);
     } catch (error: any) {
-      // ✅ FIX: Correct template literal
       logger.error(`❌ Failed to send reminder: ${error.message}`);
     }
   }

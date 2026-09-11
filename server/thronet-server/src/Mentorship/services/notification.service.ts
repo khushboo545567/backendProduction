@@ -19,6 +19,8 @@ export enum NotificationType {
   PAYMENT_SUCCESS = 'payment_success',
   PAYMENT_FAILED = 'payment_failed',
   REFUND_PROCESSED = 'refund_processed',
+  REVIEW_RECEIVED = 'review_received',   
+  SESSION_COMPLETED = 'session_completed',
 }
 
 export enum NotificationChannel {

@@ -33,9 +33,7 @@ router.use(AuthMiddleware.authenticate as any);
 /**
  * @route   POST /api/v1/sessions/create
  * @desc    Naya session assign hoga (mentor karta hai)
- * @body    sessionType, session name, price assign per min or hrs, scheduledAt date + time wise, timezone, paymentMethod, duration, Follow-up Period, Follow-up Allowed, Buffer Time
  * @access  Private (Mentor)
- * @flow    Validation → pricing given by body → mentor DB me update → session create
  */
 router.post(
   '/create',
@@ -68,9 +66,18 @@ router.get('/get-all-db', sessionController.getAllSessionsFromDB);
  * @desc    Current user ke saare sessions lo (mentor ya mentee dono ke liye)
  * @query   role=mentee|mentor, page=1, limit=10, status, sessionType, startDate, endDate
  * @access  Private
- * @flow    userId + role se filter karo → paginated list return karo
  */
 router.get('/get-all', sessionController.getAllSessions);
+
+/**
+ * @route   GET /api/v1/sessions/upcoming
+ * @desc    Current user ke upcoming sessions lo (mentor ya mentee dono ke liye)
+ * @query   role=mentee|mentor, limit=10
+ * @access  Private
+ * ✅ FIX: controller function already existed, route was never registered —
+ * this was causing 404s on the mentor dashboard and mentee "My Sessions" page.
+ */
+router.get('/upcoming', sessionController.getUpcomingSessions);
 
 /**
  * @route   POST /api/v1/sessions/book
@@ -81,15 +88,23 @@ router.get('/get-all', sessionController.getAllSessions);
 router.post('/book', validateJoi(sessionValidator.bookSession), sessionController.bookSession);
 
 /**
- * @route   GET /api/v1/sessions/:id/progress
+ * @route   GET /api/v1/sessions/stats
  * @desc    Mentee ka session progress — completed, left, total
  * @access  Private
  */
 router.get('/stats', sessionController.getSessionStats);
+
+/**
+ * @route   GET /api/v1/sessions/past
+ * @desc    Get past/completed sessions
+ * @access  Private
+ */
 router.get('/past', sessionController.getPastSessions);
+// ✅ FIX: removed duplicate `router.get('/past', ...)` registration that
+// existed further down this file — Express would've only ever used this
+// first one, but the duplicate was dead code worth cleaning up.
 
 router.get('/:id/progress', sessionController.getSessionProgress);
-
 
 /**
  * @route   POST /api/v1/sessions/:id/confirm
@@ -115,15 +130,6 @@ router.post(
   validateJoi(sessionValidator.completeSession),
   sessionController.completeSession
 );
-
-
-/**
- * @route   GET /api/v1/sessions/past
- * @desc    Get past/completed sessions
- * @access  Private
- */
-router.get('/past', sessionController.getPastSessions);
-
 
 /**
  * 🆕 PHASE 10: Get refund estimate
@@ -152,7 +158,6 @@ router.put(
  * @access  Private (Mentor)
  */
 router.delete('/:id', sessionController.deleteSession);
-
 
 /**
  * 🆕 PHASE 10: Cancel session

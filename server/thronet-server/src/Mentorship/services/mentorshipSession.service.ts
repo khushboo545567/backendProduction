@@ -6,6 +6,8 @@ import { Availability, Mentor, SessionMentor } from '../models';
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
 import { TrustScoreEvents } from '../events/trustScore.events';
+// ✅ NEW: in-app notification wiring
+import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 /**
  * ============================================================
  * TEMP FIX SUMMARY
@@ -189,30 +191,10 @@ class MentorshipSessionService {
     try {
       logger.info(`Fetching assigned sessions for mentor: ${mentorId}`);
 
-      // ✅ FIX: .lean() returns Mongoose's FlattenMaps type (_id: ObjectId),
-      // which doesn't structurally match ISessionMentor (_id: string). Cast
-      // once here so all downstream forEach/map/filter calls type-check.
       const sessions = (await SessionMentor.find({ mentorId })
         .sort({ scheduledAt: 1 })
         .lean()) as unknown as ISessionMentor[];
 
-      /**
-       * Mentee Enrichment
-       *
-       * We intentionally enrich mentee data on the backend instead of
-       * forcing the mobile application to perform N+1 profile requests.
-       *
-       * Benefits:
-       * - Single API request from React Native
-       * - Faster rendering on mobile networks
-       * - Reduced battery and bandwidth usage
-       * - Consistent payload shape for BookingsPage
-       *
-       * We use a 2-query in-memory mapping strategy instead of MongoDB
-       * aggregation lookups because SessionMentor stores UUID strings
-       * rather than ObjectId references and nested booking lookups would
-       * require expensive unwind/group operations.
-       */
       const userIds = new Set<string>();
 
       sessions.forEach((session: ISessionMentor) => {
@@ -290,9 +272,6 @@ class MentorshipSessionService {
 
   /**
    * Book an existing mentor-posted session slot.
-   *
-   * ✅ Note: slot-level locking (Redis) should be added here before production
-   * if concurrent bookings on the same slot are expected (same as booking.service).
    */
   async bookSession(input: any, authToken?: string): Promise<any> {
     try {
@@ -311,16 +290,6 @@ class MentorshipSessionService {
       const session = await SessionMentor.findOne(query);
       if (!session) throw new NotFoundError('Session not found');
 
-      // OLD IMPLEMENTATION (Reference)
-      // if (session.status !== BookingStatus.AVAILABLE) {
-      //   throw new BadRequestError('Session is not available for booking');
-      // }
-
-      // TEMP FIX (Pallav)
-      // Reason: Session templates hold multiple bookings. Confirming one booking changes the template status, blocking new bookings.
-      // Previous: Strictly required AVAILABLE status.
-      // Current: Allows booking on active template states (AVAILABLE, CONFIRMED, IN_PROGRESS).
-      // TODO: Refactor during architecture cleanup.
       if (
         session.status === BookingStatus.CANCELLED ||
         session.status === BookingStatus.NO_SHOW ||
@@ -374,20 +343,6 @@ class MentorshipSessionService {
         },
       } as any);
 
-      /**
-       * TEMP FIX (Pallav)
-       *
-       * Compatibility layer for the legacy mentorship architecture.
-       *
-       * Existing modules (Authorization, Refunds, Notifications,
-       * Interview, Cron, etc.) still read the root booking fields.
-       *
-       * Keep these fields synchronized with the first booking until
-       * the backend is fully migrated to bookings[].
-       *
-       * Controller logic check the menteeID throguh root
-       * Which was supposed to go though bookings array
-       */
       if (session.bookings.length === 1) {
         session.menteeId = input.menteeId;
         session.bookedBy = input.menteeId;
@@ -401,6 +356,24 @@ class MentorshipSessionService {
       await availability.save();
 
       logger.info(`✅ Booking added: ${session.sessionId} for mentee: ${input.menteeId}`);
+
+      // ✅ NEW: notify the mentor that a new booking request has come in
+      try {
+        const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+        if (mentorDoc?.userId) {
+          NotificationService.sendNotification({
+            userId: mentorDoc.userId,
+            type: NotificationType.BOOKING_CONFIRMED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'New Booking Request',
+              message: `You have a new booking request for "${session.title}".`,
+            },
+          }).catch((e) => logger.error('Notification failed (bookSession):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
+      }
 
       const myBooking = session.bookings[session.bookings.length - 1];
       return {
@@ -424,7 +397,6 @@ class MentorshipSessionService {
    */
   async getSessionProgress(sessionId: string, userId: string): Promise<any> {
     try {
-      // ✅ FIX: same ObjectId-vs-string _id cast as getMentorAssignedSessions above.
       const sessions = (await SessionMentor.find({
         $or: [{ menteeId: userId }, { mentorId: userId }],
       }).lean()) as unknown as ISessionMentor[];
@@ -451,10 +423,6 @@ class MentorshipSessionService {
 
   /**
    * Get session by sessionId.
-   *
-   * ✅ FIX: Correctly resolves mentor authorization.
-   * userId from the JWT token is the user's UUID — not the mentor's mentorId.
-   * We look up the mentor profile to get the mentorId, then compare.
    */
   async getSessionById(
     sessionId: string,
@@ -470,15 +438,6 @@ class MentorshipSessionService {
       if (userId) {
         const mentor  = await Mentor.findOne({ userId, isDeleted: false });
         const isMentor = mentor && session.mentorId === mentor.mentorId;
-        // OLD IMPLEMENTATION (Reference)
-        // const isMentee = session.menteeId === userId;
-        // END OLD IMPLEMENTATION
-
-        // TEMP FIX (Pallav)
-        // Reason: Because bookings are appended to an array, the root menteeId is null.
-        // Previous: Checked root menteeId only.
-        // Current: Checks both root and within the bookings array.
-        // TODO: Refactor during architecture cleanup.
         const isMentee = session.menteeId === userId || (session.bookings && session.bookings.some((b: any) => b.menteeId === userId));
 
         if (!isMentor && !isMentee) {
@@ -495,9 +454,6 @@ class MentorshipSessionService {
 
   /**
    * Get all sessions for a user with pagination and filters.
-   *
-   * ✅ FIX: sessionRepository.findAll now returns { data, total }.
-   * Previously this was destructured as an array [sessions, total] which was wrong.
    */
   async getAllSessions(
     userId: string,
@@ -515,15 +471,6 @@ class MentorshipSessionService {
         if (!mentor) throw new NotFoundError('MENTOR_NOT_FOUND');
         query.mentorId = mentor.mentorId;
       } else {
-        // OLD IMPLEMENTATION (Reference)
-        // query.menteeId = userId;
-        // END OLD IMPLEMENTATION
-
-        // TEMP FIX (Pallav)
-        // Reason: Because bookings are appended to an array, the root menteeId is null.
-        // Previous: Queried root menteeId.
-        // Current: Queries bookings.menteeId to allow mentees to see their sessions.
-        // TODO: Refactor during architecture cleanup.
         query['bookings.menteeId'] = userId;
       }
 
@@ -537,7 +484,6 @@ class MentorshipSessionService {
 
       const skip = (page - 1) * limit;
 
-      // ✅ FIX: findAll returns { data, total } — not [sessions, total]
       const { data: sessions, total } = await sessionRepository.findAll(query, skip, limit);
 
       return { sessions, total, page, limit };
@@ -555,7 +501,6 @@ class MentorshipSessionService {
       logger.info('Fetching all sessions from database');
       const skip = (page - 1) * limit;
 
-      // ✅ FIX: findAll returns { data, total }
       const { data: sessions, total } = await sessionRepository.findAll({}, skip, limit);
       return { sessions, total, page, limit };
     } catch (error: any) {
@@ -565,21 +510,7 @@ class MentorshipSessionService {
   }
 
   /**
-   * Get upcoming sessions for a user (mentor dashboard + mentee "My Sessions").
-   *
-   * ✅ FIX: Previously used a bare `SessionMentor.find()` with no $lookup,
-   * so the frontend never received the mentee's real name/photo and fell
-   * back to "Student" + a generic avatar. Now routes through
-   * sessionRepository.findAll(), which enriches each session with
-   * menteeName / menteeProfilePhoto / mentorName / mentorProfilePhoto via
-   * $lookup — same enrichment already used by getAllSessions().
-   *
-   * ✅ FIX: Also fixed the mentor query — was comparing session.mentorId
-   * (mentor's mentorId) against userId (the user's UUID), which never
-   * matched. Now resolves the mentor profile first, same as getAllSessions.
-   *
-   * ✅ FIX: Sessions now sort ascending (soonest first) via the new
-   * sortOrder param on findAll(), instead of relying on default desc order.
+   * Get upcoming sessions for a user
    */
   async getUpcomingSessions(
     userId: string,
@@ -611,8 +542,6 @@ class MentorshipSessionService {
 
   /**
    * Get past sessions for a user
-   *
-   * ✅ FIX: Same enrichment + mentor-lookup fix as getUpcomingSessions above.
    */
   async getPastSessions(
     userId: string,
@@ -643,12 +572,7 @@ class MentorshipSessionService {
   }
 
     /**
-   * Update session (only allowed fields: notes, description, title)
-   *
-   * ✅ FIX: Uses getSessionById which correctly resolves mentor authorization.
-   * ✅ FIX: Uses findOneAndUpdate with $set instead of Object.assign + save() —
-   * this avoids re-validating the ENTIRE document (which was crashing on
-   * legacy/schema-mismatched fields) and only touches the changed fields.
+   * Update session
    */
     async updateSession(
       sessionId: string,
@@ -658,7 +582,6 @@ class MentorshipSessionService {
       file?: any
     ): Promise<any> {
       try {
-        // Authorization check only — we don't need the full doc anymore
         await this.getSessionById(sessionId, userId, authToken);
 
         if (file) {
@@ -688,10 +611,9 @@ class MentorshipSessionService {
         throw error;
       }
     }
+
   /**
    * Delete a session (mentor only).
-   * Only allowed when the session has no active (non-cancelled) bookings —
-   * mentor must cancel existing bookings first (refund flow handled separately).
    */
   async deleteSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
     try {
@@ -747,7 +669,6 @@ class MentorshipSessionService {
         throw new BadRequestError(`Booking is not pending. Current status: ${booking.status}`);
       }
 
-      // Perform an atomic update to avoid any Document.save() validation issues
       await SessionMentor.updateOne(
         { sessionId, 'bookings._id': bookingId },
         {
@@ -760,7 +681,20 @@ class MentorshipSessionService {
 
       logger.info(`Session confirmed: ${sessionId}, bookedBy/bookingId: ${bookingId}`);
 
-      // Fetch the updated document returning lean for response
+      // ✅ NEW: notify the mentee that the mentor confirmed their booking
+      const menteeIdToNotify = booking.menteeId || booking.bookedBy;
+      if (menteeIdToNotify) {
+        NotificationService.sendNotification({
+          userId: menteeIdToNotify,
+          type: NotificationType.BOOKING_CONFIRMED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Booking Confirmed',
+            message: `Your session "${session.title}" has been confirmed by the mentor.`,
+          },
+        }).catch((e) => logger.error('Notification failed (confirmSession):', e));
+      }
+
       return await SessionMentor.findOne({ sessionId });
     } catch (error: any) {
       logger.error(`Failed to confirm session (${sessionId}): ${error.message}`);
@@ -770,9 +704,6 @@ class MentorshipSessionService {
 
   /**
    * Start session (mentor only).
-   *
-   * ✅ FIX: Correctly compares mentor.mentorId vs session.mentorId.
-   * userId from JWT is the user UUID — must look up mentor profile first.
    */
   async startSession(sessionId: string, userId: string, authToken?: string): Promise<any> {
     try {
@@ -808,9 +739,6 @@ class MentorshipSessionService {
 
   /**
    * Complete session (mentor only).
-   *
-   * ✅ FIX: Correctly compares mentor.mentorId vs session.mentorId.
-   * Previously compared session.mentorId (UUID format) against userId (user UUID) directly.
    */
   async completeSession(
     sessionId: string,
@@ -846,8 +774,22 @@ class MentorshipSessionService {
 
       logger.info(`Session completed: ${sessionId}`);
 
-      // TODO: Update mentor stats
-      // TODO: Send notification for review request
+      // ✅ NEW: notify mentee — request a review
+      const confirmedBooking = session.bookings?.find((b: any) =>
+        b.status === BookingStatus.COMPLETED || b.status === BookingStatus.CONFIRMED
+      );
+      const menteeIdToNotify = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy;
+      if (menteeIdToNotify) {
+        NotificationService.sendNotification({
+          userId: menteeIdToNotify,
+          type: NotificationType.SESSION_COMPLETED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Session Completed',
+            message: `Your session "${session.title}" is complete. Please leave a review!`,
+          },
+        }).catch((e) => logger.error('Notification failed (completeSession):', e));
+      }
 
       return session;
     } catch (error: any) {
@@ -858,10 +800,6 @@ class MentorshipSessionService {
 
   /**
    * Cancel session
-   *
-   * ✅ Note: Refund logic is intentionally not duplicated here.
-   * Call refund.service.processRefund() separately after cancelling,
-   * or use booking.service.cancelBooking() which does both.
    */
   async cancelSession(
     sessionId: string,
@@ -914,6 +852,34 @@ class MentorshipSessionService {
 
       logger.info(`Session cancelled: ${sessionId}`);
 
+      // ✅ NEW: notify whichever side did NOT cancel
+      try {
+        const cancellingMenteeId = booking.menteeId || booking.bookedBy;
+        const isCancelledByMentee = userId === cancellingMenteeId;
+
+        let otherPartyUserId: string | null = null;
+        if (isCancelledByMentee) {
+          const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+          otherPartyUserId = mentorDoc?.userId || null;
+        } else {
+          otherPartyUserId = cancellingMenteeId || null;
+        }
+
+        if (otherPartyUserId) {
+          NotificationService.sendNotification({
+            userId: otherPartyUserId,
+            type: NotificationType.SESSION_CANCELLED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session Cancelled',
+              message: `Session "${session.title}" has been cancelled. Reason: ${reason}`,
+            },
+          }).catch((e) => logger.error('Notification failed (cancelSession):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send cancellation notification: ${notifErr.message}`);
+      }
+
       return session;
     } catch (error: any) {
       logger.error(`Failed to cancel session: ${error.message}`);
@@ -943,7 +909,6 @@ class MentorshipSessionService {
         throw new BadRequestError('Booking not found');
       }
 
-      // Use the specific booking's start time for the 24-hour check
       const existingStartTime = booking.scheduledAt || session.scheduledAt;
       const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
       if (hoursDiff < 24) {
@@ -977,8 +942,35 @@ class MentorshipSessionService {
       );
       logger.info(`Session rescheduled: ${sessionId}`);
 
+      // ✅ NEW: notify whichever side did NOT initiate the reschedule
+      try {
+        const menteeId = booking.menteeId || booking.bookedBy;
+        const isRescheduledByMentee = userId === menteeId;
+
+        let otherPartyUserId: string | null = null;
+        if (isRescheduledByMentee) {
+          const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+          otherPartyUserId = mentorDoc?.userId || null;
+        } else {
+          otherPartyUserId = menteeId || null;
+        }
+
+        if (otherPartyUserId) {
+          NotificationService.sendNotification({
+            userId: otherPartyUserId,
+            type: NotificationType.SESSION_RESCHEDULED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session Rescheduled',
+              message: `Session "${session.title}" has been rescheduled to ${newScheduledAt}.`,
+            },
+          }).catch((e) => logger.error('Notification failed (rescheduleSession):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send reschedule notification: ${notifErr.message}`);
+      }
+
       // TODO: Update calendar via calendarSync.service
-      // TODO: Send notifications via notification.service
 
       return session;
     } catch (error: any) {
@@ -1010,7 +1002,37 @@ class MentorshipSessionService {
       await session.addReview(rating, review, reviewerType);
       logger.info(`Review added to session: ${sessionId}`);
 
-      // TODO: Update mentor average rating
+      // ✅ NEW: notify the reviewed party
+      try {
+        let reviewedUserId: string | null = null;
+
+        if (reviewerType === 'mentor') {
+          // mentor reviewed → notify mentee
+          const confirmedBooking = session.bookings?.find((b: any) =>
+            b.status === BookingStatus.COMPLETED || b.status === BookingStatus.CONFIRMED
+          );
+          reviewedUserId = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy || null;
+        } else {
+          // mentee reviewed → notify mentor (fetch mentor's userId via session.mentorId,
+          // since `mentor` above is null here — it was looked up by the reviewer's own userId)
+          const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+          reviewedUserId = mentorDoc?.userId || null;
+        }
+
+        if (reviewedUserId) {
+          NotificationService.sendNotification({
+            userId: reviewedUserId,
+            type: NotificationType.REVIEW_RECEIVED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'New Review',
+              message: `You received a new review with a rating of ${rating}★.`,
+            },
+          }).catch((e) => logger.error('Notification failed (addReview):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send review notification: ${notifErr.message}`);
+      }
 
       return session;
     } catch (error: any) {
