@@ -808,15 +808,15 @@ class PostService {
   // =====================================================
   // HELPER: INVALIDATE CACHE
   // =====================================================
-  private async invalidatePostCache(
+  public async invalidatePostCache(
     postId: string,
     companyId: string,
-    slug: string
+    slug?: string
   ): Promise<void> {
     try {
       await Promise.all([
         CacheUtil.del(`${this.CACHE_PREFIX}${postId}`),
-        CacheUtil.del(`${this.CACHE_PREFIX}slug:${slug}`),
+        slug ? CacheUtil.del(`${this.CACHE_PREFIX}slug:${slug}`) : Promise.resolve(),
         CacheUtil.clearByPattern(`${this.CACHE_PREFIX}company:${companyId}:*`),
         CacheUtil.clearByPattern(`${this.CACHE_PREFIX}list:*`),
       ]);
