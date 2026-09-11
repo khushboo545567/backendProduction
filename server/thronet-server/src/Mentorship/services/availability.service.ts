@@ -349,7 +349,7 @@ class AvailabilityService {
 
         finalUpdates.slots = [...incomingSlots, ...preservedSlots] as any;
 
-        
+
         // ✅ FIX: Overlap check runs on the final merged array
         this.validateSlots(finalUpdates.slots ?? []);
       }
@@ -434,6 +434,35 @@ class AvailabilityService {
     }
   }
 
+  async blockDateByDate(mentorId: string, date: Date, timezone: string, reason?: string): Promise<any> {
+    try {
+      logger.info(`Blocking date ${date.toISOString()} for mentor: ${mentorId}`);
+      const mentor = await mentorRepository.findByMentorId(mentorId);
+      if (!mentor) {
+        throw new NotFoundError('Mentor not found');
+      }
+      return await availabilityRepository.blockByDate(mentorId, date, timezone, reason);
+    } catch (error: any) {
+      logger.error(`Failed to block date: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async unblockDateByDate(mentorId: string, date: Date): Promise<any> {
+    try {
+      logger.info(`Unblocking date ${date.toISOString()} for mentor: ${mentorId}`);
+      const result = await availabilityRepository.unblockByDate(mentorId, date);
+      if (!result) {
+        throw new NotFoundError('No availability found for this date');
+      }
+      return result;
+    } catch (error: any) {
+      logger.error(`Failed to unblock date: ${error.message}`);
+      throw error;
+    }
+  }
+
+  
   /**
    * Validate slot format and check for overlaps within the same availability record.
    *

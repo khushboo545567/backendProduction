@@ -108,7 +108,10 @@ class AvailabilityRepository {
         async setAllSlotsBlocked(availabilityId: string, isBlocked: boolean, reason?: string): Promise<any | null> {
             const availability = await Availability.findOne({ availabilityId, isDeleted: false });
             if (!availability) return null;
-    
+
+            (availability as any).isDateBlocked = isBlocked;
+            (availability as any).dateBlockReason = isBlocked ? reason : undefined;
+
             availability.slots.forEach((slot: any) => {
                 if (!slot.isBooked) {
                     slot.isBlocked = isBlocked;
@@ -119,7 +122,71 @@ class AvailabilityRepository {
             await availability.save();
             return availability.toObject();
         }
-    
+
+        /**
+         * Block a whole date — creates a record if none exists yet (leave/holiday case)
+         */
+        async blockByDate(mentorId: string, date: Date, timezone: string, reason?: string): Promise<any> {
+            const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+
+            let availability = await Availability.findOne({
+                mentorId,
+                date: { $gte: startOfDay, $lte: endOfDay },
+                isDeleted: false,
+            });
+
+            if (!availability) {
+                availability = new Availability({
+                    mentorId,
+                    date,
+                    slots: [],
+                    dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase(),
+                    timezone,
+                    isDateBlocked: true,
+                    dateBlockReason: reason,
+                });
+            } else {
+                (availability as any).isDateBlocked = true;
+                (availability as any).dateBlockReason = reason;
+                availability.slots.forEach((slot: any) => {
+                    if (!slot.isBooked) {
+                        slot.isBlocked = true;
+                        slot.blockReason = reason;
+                    }
+                });
+            }
+
+            await availability.save();
+            return availability.toObject();
+        }
+
+        /**
+         * Unblock a whole date by mentorId + date (no availabilityId needed)
+         */
+        async unblockByDate(mentorId: string, date: Date): Promise<any | null> {
+            const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+
+            const availability = await Availability.findOne({
+                mentorId,
+                date: { $gte: startOfDay, $lte: endOfDay },
+                isDeleted: false,
+            });
+            if (!availability) return null;
+
+            (availability as any).isDateBlocked = false;
+            (availability as any).dateBlockReason = undefined;
+            availability.slots.forEach((slot: any) => {
+                if (!slot.isBooked) {
+                    slot.isBlocked = false;
+                    slot.blockReason = undefined;
+                }
+            });
+
+            await availability.save();
+            return availability.toObject();
+        }
         /**
          * Get availability stats
          */

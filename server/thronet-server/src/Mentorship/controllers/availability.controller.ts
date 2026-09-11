@@ -192,6 +192,36 @@ class AvailabilityController {
     }
   }
 
+  async blockDateByDate(req: Request, res: Response): Promise<void> {
+    try {
+      const { mentorId, date, reason, timezone } = req.body;
+      const availability = await availabilityService.blockDateByDate(
+        String(mentorId),
+        new Date(String(date)),
+        timezone || 'Asia/Kolkata',
+        reason
+      );
+      ResponseHandler.success(res, 'Date blocked successfully', availability);
+    } catch (error: any) {
+      logger.error('Block date by date error:', error);
+      ResponseHandler.error(res, 'Failed to block date', 500, error);
+    }
+  }
+
+  async unblockDateByDate(req: Request, res: Response): Promise<void> {
+    try {
+      const { mentorId, date } = req.body;
+      const availability = await availabilityService.unblockDateByDate(
+        String(mentorId),
+        new Date(String(date))
+      );
+      ResponseHandler.success(res, 'Date unblocked successfully', availability);
+    } catch (error: any) {
+      logger.error('Unblock date by date error:', error);
+      ResponseHandler.error(res, 'Failed to unblock date', 500, error);
+    }
+  }
+
   async compareMentors(req: Request, res: Response): Promise<void> {
     try {
       const { mentorIds } = req.body;

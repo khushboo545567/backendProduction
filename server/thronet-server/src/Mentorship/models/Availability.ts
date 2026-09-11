@@ -17,9 +17,12 @@ export interface IAvailability {
   date: Date;
   slots: SlotType[];
   dayOfWeek: string;
+
   isRecurring: boolean;
   timezone: string;
   overrideReason?: string;
+  isDateBlocked: boolean;
+  dateBlockReason?: string;
   isDeleted: boolean;
   deletedAt?: Date;
   createdAt: Date;
@@ -92,6 +95,8 @@ const AvailabilitySchema = new Schema<AvailabilityDocument>(
       default: 'UTC',
     },
     overrideReason: String,
+    isDateBlocked: { type: Boolean, default: false, index: true },
+    dateBlockReason: String,
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date },
   },

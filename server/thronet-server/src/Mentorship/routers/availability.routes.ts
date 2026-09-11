@@ -196,6 +196,28 @@ router.patch(
 );
 
 router.post(
+  '/block-date',
+  AuthMiddleware.authenticate as any,
+  validate([
+    body('mentorId').isString().notEmpty().withMessage('Mentor ID is required'),
+    body('date').isISO8601().withMessage('Valid date is required'),
+    body('reason').optional().isString(),
+    body('timezone').optional().isString(),
+  ]),
+  availabilityController.blockDateByDate
+);
+
+router.post(
+  '/unblock-date',
+  AuthMiddleware.authenticate as any,
+  validate([
+    body('mentorId').isString().notEmpty().withMessage('Mentor ID is required'),
+    body('date').isISO8601().withMessage('Valid date is required'),
+  ]),
+  availabilityController.unblockDateByDate
+);
+
+router.post(
   '/compare',
   AuthMiddleware.authenticate as any,
   validate(compareMentorsValidation),
