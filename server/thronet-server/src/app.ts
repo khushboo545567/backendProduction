@@ -55,6 +55,7 @@ console.log('🔍 App.ts LOADING START');
 
 interface CustomError extends Error {
     status?: number;
+    statusCode?: number;
     code?: string;
 }
 
@@ -299,11 +300,23 @@ app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => 
         path: req.path,
         method: req.method,
     });
-    return res.status(err.statusCode || err.status || 500).json({
+
+    const statusCode = err.statusCode || err.status || 500;
+
+    // ✅ FIX: Sirf genuine 500 (unexpected/unknown) errors ke liye generic
+    // message chhupao. Operational errors (400/401/403/404/409 etc — jo
+    // BadRequestError, NotFoundError, ConflictError se aate hain aur
+    // .message already set hoti hai) ka asli message hamesha bhejo,
+    // production mein bhi — warna debugging/UX dono break ho jate hain.
+    const isKnownOperationalError = statusCode < 500 && !!err.message;
+
+    return res.status(statusCode).json({
         status: 'error',
-        message: process.env['NODE_ENV'] === 'production'
-            ? 'Internal server error'
-            : err.message || 'Internal server error',
+        message: isKnownOperationalError
+            ? err.message
+            : (process.env['NODE_ENV'] === 'production'
+                ? 'Internal server error'
+                : err.message || 'Internal server error'),
     });
 }) as express.ErrorRequestHandler);
 
