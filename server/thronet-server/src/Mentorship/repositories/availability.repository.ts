@@ -101,10 +101,29 @@ class AvailabilityRepository {
         return await Availability.countDocuments({ isDeleted: false, ...query });
     }
 
-    /**
-     * Get availability stats
+        /**
+     * Block/unblock ALL non-booked slots of a given availability record
+     * (used for "block whole date" feature — booked slots kabhi touch nahi hote)
      */
-    async getStatsByMentorId(mentorId: string): Promise<any | null> {
+        async setAllSlotsBlocked(availabilityId: string, isBlocked: boolean, reason?: string): Promise<any | null> {
+            const availability = await Availability.findOne({ availabilityId, isDeleted: false });
+            if (!availability) return null;
+    
+            availability.slots.forEach((slot: any) => {
+                if (!slot.isBooked) {
+                    slot.isBlocked = isBlocked;
+                    slot.blockReason = isBlocked ? reason : undefined;
+                }
+            });
+    
+            await availability.save();
+            return availability.toObject();
+        }
+    
+        /**
+         * Get availability stats
+         */
+        async getStatsByMentorId(mentorId: string): Promise<any | null> {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 

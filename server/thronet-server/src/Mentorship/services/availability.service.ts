@@ -349,8 +349,9 @@ class AvailabilityService {
 
         finalUpdates.slots = [...incomingSlots, ...preservedSlots] as any;
 
+        
         // ✅ FIX: Overlap check runs on the final merged array
-        this.validateSlots(finalUpdates.slots);
+        this.validateSlots(finalUpdates.slots ?? []);
       }
 
       const availability = await availabilityRepository.updateByAvailabilityId(
@@ -403,6 +404,32 @@ class AvailabilityService {
       return await availabilityRepository.getStatsByMentorId(mentorId);
     } catch (error: any) {
       logger.error(`Failed to get availability stats: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async setDateBlocked(availabilityId: string, isBlocked: boolean, reason?: string): Promise<any> {
+    try {
+      logger.info(`${isBlocked ? 'Blocking' : 'Unblocking'} date: ${availabilityId}`);
+
+      const existingDoc = await availabilityRepository.findByAvailabilityId(availabilityId);
+      if (!existingDoc) {
+        throw new NotFoundError('Availability not found');
+      }
+
+      const hasBookedSlots = existingDoc.slots.some((s: any) => s.isBooked);
+      if (isBlocked && hasBookedSlots) {
+        logger.warn(`Blocking date with booked slots — booked slots will remain untouched: ${availabilityId}`);
+      }
+
+      const updated = await availabilityRepository.setAllSlotsBlocked(availabilityId, isBlocked, reason);
+      if (!updated) {
+        throw new NotFoundError('Availability not found');
+      }
+
+      return updated;
+    } catch (error: any) {
+      logger.error(`Failed to ${isBlocked ? 'block' : 'unblock'} date: ${error.message}`);
       throw error;
     }
   }
