@@ -19,7 +19,7 @@ export enum NotificationType {
   PAYMENT_SUCCESS = 'payment_success',
   PAYMENT_FAILED = 'payment_failed',
   REFUND_PROCESSED = 'refund_processed',
-  REVIEW_RECEIVED = 'review_received',   
+  REVIEW_RECEIVED = 'review_received',
   SESSION_COMPLETED = 'session_completed',
 }
 
@@ -56,19 +56,20 @@ interface NotificationResult {
 class NotificationService {
   /**
    * Send notification via multiple channels
+   *
+   * ✅ FIX: IN_APP notifications no longer depend on a successful User lookup.
+   * Previously, `User.findByUserId(input.userId)` was called FIRST and the
+   * whole method threw ('User not found') if it failed/returned null —
+   * silently killing in-app notifications (e.g. booking requests) even
+   * though `Notification.create()` only needs `userId`, not the full user
+   * record. Now IN_APP is attempted independently; the user record is only
+   * fetched when a channel that actually needs it (email/sms/whatsapp/push)
+   * is requested.
    */
   async sendNotification(input: NotificationInput): Promise<NotificationResult> {
     try {
       logger.info(`📬 Sending ${input.type} notification to user: ${input.userId}`);
 
-      // Get user details
-      const user = await User.findByUserId(input.userId);
-
-      if (!user) {
-        throw new Error('User not found');
-      }
-
-      // Determine channels if not specified
       const channels = input.channels || this.getDefaultChannels(input.type, input.priority);
 
       const result: NotificationResult = {
@@ -76,40 +77,59 @@ class NotificationService {
         channels: {},
       };
 
-      // Send via each channel
-      for (const channel of channels) {
+      // ✅ FIX: send IN_APP first, independent of user lookup.
+      // Notification.create() only needs userId/type/data — no dependency
+      // on the User collection at all.
+      if (channels.includes(NotificationChannel.IN_APP)) {
         try {
-          switch (channel) {
-            case NotificationChannel.EMAIL:
-              result.channels.email = await this.sendEmailNotification(user, input);
-              break;
-
-            case NotificationChannel.SMS:
-              if (user.phoneNumber) {
-                result.channels.sms = await this.sendSMSNotification(user, input);
-              }
-              break;
-
-            case NotificationChannel.WHATSAPP:
-              if (user.phoneNumber) {
-                result.channels.whatsapp = await this.sendWhatsAppNotification(user, input);
-              }
-              break;
-
-            case NotificationChannel.PUSH:
-              result.channels.push = await this.sendPushNotification(user, input);
-              break;
-
-            // ADD — IN_APP channel case mein
-            case NotificationChannel.IN_APP:
-              result.channels.inApp = await this.sendInAppNotification(user, input);
-              break;
-
-            default:
-              logger.warn(`Unknown notification channel: ${channel}`);
-          }
+          result.channels.inApp = await this.sendInAppNotification(null, input);
         } catch (error: any) {
-          logger.error(`Failed to send via ${channel}:`, error);
+          logger.error(`Failed to send via ${NotificationChannel.IN_APP}:`, error);
+        }
+      }
+
+      // Other channels (email/sms/whatsapp/push) genuinely need the user
+      // record (email address, phone number) — only fetch user if needed.
+      const remainingChannels = channels.filter((c) => c !== NotificationChannel.IN_APP);
+
+      if (remainingChannels.length > 0) {
+        const user = await User.findByUserId(input.userId);
+
+        if (!user) {
+          logger.warn(
+            `User not found for userId: ${input.userId} — skipping email/sms/push channels (in-app already handled above)`
+          );
+        } else {
+          for (const channel of remainingChannels) {
+            try {
+              switch (channel) {
+                case NotificationChannel.EMAIL:
+                  result.channels.email = await this.sendEmailNotification(user, input);
+                  break;
+
+                case NotificationChannel.SMS:
+                  if (user.phoneNumber) {
+                    result.channels.sms = await this.sendSMSNotification(user, input);
+                  }
+                  break;
+
+                case NotificationChannel.WHATSAPP:
+                  if (user.phoneNumber) {
+                    result.channels.whatsapp = await this.sendWhatsAppNotification(user, input);
+                  }
+                  break;
+
+                case NotificationChannel.PUSH:
+                  result.channels.push = await this.sendPushNotification(user, input);
+                  break;
+
+                default:
+                  logger.warn(`Unknown notification channel: ${channel}`);
+              }
+            } catch (error: any) {
+              logger.error(`Failed to send via ${channel}:`, error);
+            }
+          }
         }
       }
 
@@ -192,9 +212,16 @@ class NotificationService {
     }
   }
 
-  private async sendInAppNotification(user: any, input: NotificationInput): Promise<boolean> {
+  /**
+   * Create in-app (DB) notification.
+   *
+   * ✅ FIX: `user` param is now genuinely optional/unused — this method
+   * never actually read anything off `user` (it only used input.userId,
+   * input.type, input.data). Kept the param for backward-compat signature
+   * but it can safely be `null`.
+   */
+  private async sendInAppNotification(_user: any, input: NotificationInput): Promise<boolean> {
     try {
-      // In-app notification is created in the database, so we consider it sent if creation succeeded
       await Notification.create({
         notificationId: generateSecureId(), // Generate unique ID for notification
         userId: input.userId,
@@ -372,15 +399,11 @@ class NotificationService {
    * Send bulk notifications
    */
   async sendBulkNotifications(inputs: NotificationInput[]): Promise<NotificationResult[]> {
-    // const results: NotificationResult[] = [];
-
-    // ✅ Replace with
     const results = await Promise.allSettled(
-      inputs.map(input => this.sendNotification(input))
+      inputs.map((input) => this.sendNotification(input))
     );
 
-    // Results map karo
-    return results.map(result => {
+    return results.map((result) => {
       if (result.status === 'fulfilled') {
         return result.value;
       }
@@ -390,22 +413,6 @@ class NotificationService {
         error: result.reason?.message || 'Failed',
       };
     });
-
-    // for (const input of inputs) {
-    //   try {
-    //     const result = await this.sendNotification(input);
-    //     results.push(result);
-    //   } catch (error: any) {
-    //     logger.error(`Failed to send bulk notification:`, error);
-    //     results.push({
-    //       sent: false,
-    //       channels: {},
-    //       error: error instanceof Error ? error.message : 'Unknown error',
-    //     });
-    //   }
-    // }
-
-    // return results;
   }
 }
 
