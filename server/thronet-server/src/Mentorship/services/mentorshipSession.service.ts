@@ -94,6 +94,22 @@ class MentorshipSessionService {
       const user = await User.findOne({ userId: input.menteeId, 'flags.isDeleted': false });
       if (!user) throw new NotFoundError('MENTEE_NOT_FOUND');
 
+      // ✅ FIX: Prevent duplicate booking — same mentor + same mentee + exact
+      // scheduled time. Redis lock in bookingService only guards concurrent
+      // double-clicks within its 60s window; this DB-level check guarantees
+      // no duplicate session gets created even on delayed/retried requests.
+      const existingSession = await SessionMentor.findOne({
+        mentorId: input.mentorId,
+        menteeId: input.menteeId,
+        scheduledAt: new Date(input.scheduledAt),
+        status: { $nin: ['cancelled', 'no_show', 'refunded'] },
+      });
+      if (existingSession) {
+        throw new BadRequestError(
+          'You already have a booking with this mentor for this date and time.'
+        );
+      }
+
       const duration = SESSION_DURATIONS[input.sessionType];
       const isFree   = input.paymentMethod === PaymentMethod.FREE;
 
