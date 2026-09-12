@@ -429,7 +429,10 @@ class MentorshipSessionService {
 
 
 
-      const myBooking = session.bookings[session.bookings.length - 1];
+          // ✅ FIX: session.bookings is optional in the type — use safe access
+      // instead of direct indexing (pre-existing TS18048 build error).
+      const bookings = session.bookings ?? [];
+      const myBooking = bookings[bookings.length - 1];
       return {
         sessionId:     session.sessionId,
         mentorId:      session.mentorId,
@@ -437,7 +440,7 @@ class MentorshipSessionService {
         sessionType:   session.sessionType,
         duration:      session.duration,
         booking:       myBooking,
-        totalBookings: session.bookings.length,
+        totalBookings: bookings.length,
       };
     } catch (error: any) {
       console.log('>>> [SERVICE] ERROR in bookSession:', error);
@@ -800,7 +803,7 @@ class MentorshipSessionService {
             message: `Your session "${session.title}" has started. Join now!`,
           },
         }).catch((e) => logger.error('Notification failed (startSession):', e));
-      }
+      } 
 
       return session;
     } catch (error: any) {
@@ -809,7 +812,7 @@ class MentorshipSessionService {
     }
   }
 
-  
+
 
   /**
    * Complete session (mentor only).
