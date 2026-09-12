@@ -1,7 +1,7 @@
 import { logger } from '@/shared/logger.util';
 import emailService from './email.service';
 import smsService from './sms.service';
-import { CancellationLog, SessionMentor } from '../models';
+import { CancellationLog, SessionMentor, Mentor } from '../models';
 import { User } from '@/auth/models';
 import { BookingStatus } from '@/shared/constants/bookingStatus';
 import refundCalculator from '@/Mentorship/utils/refundCalculator';
@@ -33,10 +33,12 @@ interface RefundInput {
   sessionId: string;
   userId: string;
   reason: string;
+  bookingId?: string;
   cancellationCategory?: 'personal' | 'emergency' | 'scheduling_conflict' | 'technical' | 'other';
   additionalNotes?: string;
   isEmergency?: boolean;
 }
+
 
 interface RefundResult {
   success: boolean;
@@ -73,44 +75,71 @@ class RefundService {
        * the existing backend architecture.
        */
       const session = await SessionMentor.findOne({
-          sessionId: input.sessionId,
+        sessionId: input.sessionId,
+    });
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    // ✅ FIX: resolve the SPECIFIC booking being cancelled. A session
+    // "template" can have multiple bookings from different mentees.
+    // The old code only ever compared against session.menteeId (set
+    // only for whichever mentee booked FIRST) — any other mentee
+    // cancelling their own valid booking got wrongly rejected.
+    const targetBooking = input.bookingId
+      ? session.bookings?.find((b: any) => b._id?.toString() === input.bookingId)
+      : undefined;
+
+    const effectiveMenteeId = targetBooking?.menteeId || targetBooking?.bookedBy || session.menteeId;
+    const effectivePricing = targetBooking?.pricing?.totalAmount ? targetBooking.pricing : session.pricing;
+    const effectiveScheduledAt = targetBooking?.scheduledAt || session.scheduledAt;
+
+    // Step 2: Idempotency check — prevent double refund
+    if (
+      session.status === BookingStatus.CANCELLED ||
+      session.status === BookingStatus.REFUNDED ||
+      (targetBooking && targetBooking.status === 'cancelled')
+    ) {
+      logger.warn(`Refund already processed for session: ${input.sessionId}`);
+      throw new Error('Refund has already been processed for this session');
+    }
+
+        // ✅ FIX: session.mentorId is the Mentor-PROFILE id (e.g. from the
+    // Mentor collection), not the mentor's actual auth userId. The old
+    // validation compared session.mentorId directly against input.userId
+    // (the logged-in user's real userId) — for a mentor cancelling their
+    // own session, these can NEVER match, so every mentor-initiated
+    // cancellation was wrongly rejected as "not authorized" (a plain Error
+    // with no statusCode -> 500). Resolve the mentor's real userId first.
+    const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+    const mentorUserId = mentorDoc?.userId;
+
+    // Step 3: Validate cancellation is allowed (against the correct mentee/mentor)
+    this.validateCancellation(session, input.userId, effectiveMenteeId, mentorUserId);
+
+
+
+    // Step 4: Calculate refund using the specific booking's pricing/time
+    const refundCalculation = input.isEmergency
+      ? refundCalculator.calculateEmergencyRefund(
+        effectivePricing.totalAmount,
+        effectivePricing.platformFee,
+        effectivePricing.basePrice
+      )
+      : refundCalculator.calculateRefund({
+        sessionPrice: effectivePricing.basePrice,
+        platformFee: effectivePricing.platformFee,
+        totalAmount: effectivePricing.totalAmount,
+        scheduledAt: effectiveScheduledAt,
       });
-      if (!session) {
-        throw new Error('Session not found');
-      }
 
-      // Step 2: Idempotency check — prevent double refund
-      if (
-        session.status === BookingStatus.CANCELLED ||
-        session.status === BookingStatus.REFUNDED
-      ) {
-        logger.warn(`Refund already processed for session: ${input.sessionId}`);
-        throw new Error('Refund has already been processed for this session');
-      }
+    logger.info(
+      `Refund calculated: ${refundCalculation.refundPercentage}% = Rs.${refundCalculation.refundAmount}`
+    );
 
-      // Step 3: Validate cancellation is allowed
-      this.validateCancellation(session, input.userId);
+    // Step 5: Determine user role
+    const userRole = effectiveMenteeId === input.userId ? 'mentee' : 'mentor';
 
-      // Step 4: Calculate refund
-      const refundCalculation = input.isEmergency
-        ? refundCalculator.calculateEmergencyRefund(
-          session.pricing.totalAmount,
-          session.pricing.platformFee,
-          session.pricing.basePrice
-        )
-        : refundCalculator.calculateRefund({
-          sessionPrice: session.pricing.basePrice,
-          platformFee: session.pricing.platformFee,
-          totalAmount: session.pricing.totalAmount,
-          scheduledAt: session.scheduledAt,
-        });
-
-      logger.info(
-        `Refund calculated: ${refundCalculation.refundPercentage}% = Rs.${refundCalculation.refundAmount}`
-      );
-
-      // Step 5: Determine user role
-      const userRole = session.menteeId === input.userId ? 'mentee' : 'mentor';
 
       // Step 6: Create cancellation log first (before touching session status)
       const cancellationLog = await this.createCancellationLog(
@@ -153,20 +182,40 @@ class RefundService {
         await cancellationLog.save();
       }
 
-      // ✅ FIX: One atomic DB write for session — replaces two separate session.save() calls
-      await SessionMentor.findByIdAndUpdate(
-        session._id,
-        {
-          $set: {
-            status: finalStatus,
-            ...paymentUpdate,
+         // ✅ FIX: When a specific booking is cancelled (multi-mentee session
+      // template), only THAT booking's status is updated via arrayFilters.
+      // Previously, session-level `status` was always overwritten — which
+      // would incorrectly cancel every other mentee's booking on the same
+      // session template too.
+      if (input.bookingId && targetBooking) {
+        await SessionMentor.findByIdAndUpdate(
+          session._id,
+          {
+            $set: {
+              'bookings.$[elem].status': finalStatus,
+              ...paymentUpdate,
+            },
           },
-        },
-        { runValidators: true }
-      );
+          {
+            runValidators: true,
+            arrayFilters: [{ 'elem._id': input.bookingId }],
+          }
+        );
+      } else {
+        await SessionMentor.findByIdAndUpdate(
+          session._id,
+          {
+            $set: {
+              status: finalStatus,
+              ...paymentUpdate,
+            },
+          },
+          { runValidators: true }
+        );
+      }
 
-      // Step 8: Send notifications (non-critical — failure does not throw)
-      await this.sendRefundNotifications(session, refundCalculation, input.reason);
+            // Step 8: Send notifications (non-critical — failure does not throw)
+            await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId);
 
       // Step 9: Mark notifications sent in log
       cancellationLog.mentorNotified = true;
@@ -195,10 +244,20 @@ class RefundService {
   /**
    * Validate if session can be cancelled
    */
-  private validateCancellation(session: any, userId: string): void {
-    if (session.menteeId !== userId && session.mentorId !== userId) {
+  private validateCancellation(
+    session: any,
+    userId: string,
+    effectiveMenteeId?: string,
+    mentorUserId?: string
+  ): void {
+    const menteeIdToCheck = effectiveMenteeId ?? session.menteeId;
+    // ✅ FIX: compare against the mentor's resolved userId, not the raw
+    // session.mentorId (which is a Mentor-profile id, not an auth userId).
+    if (menteeIdToCheck !== userId && mentorUserId !== userId) {
       throw new Error('You are not authorized to cancel this session');
     }
+
+    
 
     if (session.status === BookingStatus.CANCELLED || session.status === BookingStatus.REFUNDED) {
       throw new Error('Session is already cancelled');
@@ -299,15 +358,18 @@ class RefundService {
   private async sendRefundNotifications(
     session: any,
     refundCalculation: any,
-    reason: string
+    reason: string,
+    menteeId?: string
   ): Promise<void> {
     try {
       logger.info('Sending refund notifications');
 
       const [mentee, mentor] = await Promise.all([
-        User.findByUserId(session.menteeId),
+        User.findByUserId(menteeId || session.menteeId),
         User.findByUserId(session.mentorId),
       ]);
+
+
 
       if (!mentee || !mentor) {
         logger.warn('Mentee or Mentor user not found for notifications', {

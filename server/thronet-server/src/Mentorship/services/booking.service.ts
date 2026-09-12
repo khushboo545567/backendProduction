@@ -250,11 +250,19 @@ class BookingService {
         throw new Error('Session not found');
       }
 
+      // ✅ FIX: pass bookingId through so refundService validates/updates
+      // the SPECIFIC booking being cancelled, not the session template's
+      // top-level menteeId (which only ever reflects whichever mentee
+      // booked FIRST). Without this, any other mentee gets wrongly
+      // rejected as "not authorized" — a plain Error with no statusCode,
+      // which the global error handler turns into a 500.
       const refundResult = await refundService.processRefund({
         sessionId,
         userId,
         reason,
+        bookingId,
       });
+      
 
       if (session.meeting?.meetingId) {
         try {

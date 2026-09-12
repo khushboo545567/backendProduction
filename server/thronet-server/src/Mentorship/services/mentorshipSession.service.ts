@@ -303,7 +303,7 @@ class MentorshipSessionService {
           ]
         };
       }
-      const session = await SessionMentor.findOne(query);
+      let session = await SessionMentor.findOne(query);
       if (!session) throw new NotFoundError('Session not found');
 
       if (
@@ -314,62 +314,96 @@ class MentorshipSessionService {
         throw new BadRequestError('Session is not available for booking');
       }
 
-      const alreadyBooked = (session.bookings || []).some(
-        (b: any) => b.menteeId === input.menteeId && b.status !== 'cancelled'
-      );
-      if (alreadyBooked) {
-        throw new BadRequestError('You have already booked this session');
-      }
-
       if (session.mentorId !== input.mentorId) {
         throw new BadRequestError('Session does not belong to this mentor');
       }
 
-      const availability = await Availability.findOne({
-        availabilityId: input.availabilityId,
-        isDeleted: false,
-      });
-      if (!availability) throw new NotFoundError('AVAILABILITY_NOT_FOUND');
-
-      const slot = availability.slots.find(
-        (s: any) => `${s.startTime} - ${s.endTime}` === input.slotTime
+      // ✅ REAL FIX for double booking: atomic slot lock.
+      // Old code did findOne() → check isBooked in JS → save() later — two
+      // near-simultaneous requests could both pass the check before either
+      // save() landed. findOneAndUpdate() is a single atomic DB op: if two
+      // requests race, Mongo serializes them and only the FIRST one's filter
+      // (isBooked: false) matches — the second gets `null` back and fails cleanly.
+      const [slotStart, slotEnd] = input.slotTime.split(' - ');
+      const availability = await Availability.findOneAndUpdate(
+        {
+          availabilityId: input.availabilityId,
+          isDeleted: false,
+          slots: {
+            $elemMatch: {
+              startTime: slotStart,
+              endTime: slotEnd,
+              isBooked: false,
+              isBlocked: false,
+            },
+          },
+        },
+        { $set: { 'slots.$.isBooked': true } },
+        { new: true }
       );
-      if (!slot)          throw new BadRequestError('Slot not found');
-      if (slot.isBooked)  throw new BadRequestError('Slot already booked');
-      if (slot.isBlocked) throw new BadRequestError('Slot is blocked');
-
-      session.bookings = session.bookings || [];
-      session.bookings.push({
-        menteeId:       input.menteeId,
-        bookedBy:       input.menteeId,
-        bookedAt:       new Date(),
-        status:         'pending',
-        slotTime:       input.slotTime,
-        scheduledAt:    new Date(input.scheduledAt),
-        availabilityId: input.availabilityId,
-        payment: {
-          status: PaymentStatus.PENDING,
-          method: input.paymentMethod,
-        },
-        pricing: {
-          basePrice:   input.pricing.basePrice,
-          platformFee: input.pricing.platformFee,
-          totalAmount: input.pricing.totalAmount,
-          currency:    input.pricing.currency || 'INR',
-        },
-      } as any);
-
-      if (session.bookings.length === 1) {
-        session.menteeId = input.menteeId;
-        session.bookedBy = input.menteeId;
-        session.bookedAt = new Date();
-        session.isBooked = true;
+      if (!availability) {
+        throw new BadRequestError('Slot not found, already booked, or blocked');
       }
 
-      await session.save();
+      // ✅ REAL FIX for double booking: atomic duplicate-booking guard.
+      // Replaces the old "check-then-push" pattern. The $not/$elemMatch in
+      // the filter means: only push if NO active (non-cancelled) booking for
+      // this mentee already exists on this session. Mongo evaluates the
+      // filter and the write together — no window for two requests to both
+      // "see" zero bookings and both push.
+      const updatedSession = await SessionMentor.findOneAndUpdate(
+        {
+          sessionId: session.sessionId,
+          status: { $nin: [BookingStatus.CANCELLED, BookingStatus.NO_SHOW, BookingStatus.REFUNDED] },
+          bookings: {
+            $not: { $elemMatch: { menteeId: input.menteeId, status: { $ne: 'cancelled' } } },
+          },
+        },
+        {
+          $push: {
+            bookings: {
+              menteeId:       input.menteeId,
+              bookedBy:       input.menteeId,
+              bookedAt:       new Date(),
+              status:         'pending',
+              slotTime:       input.slotTime,
+              scheduledAt:    new Date(input.scheduledAt),
+              availabilityId: input.availabilityId,
+              payment: {
+                status: PaymentStatus.PENDING,
+                method: input.paymentMethod,
+              },
+              pricing: {
+                basePrice:   input.pricing.basePrice,
+                platformFee: input.pricing.platformFee,
+                totalAmount: input.pricing.totalAmount,
+                currency:    input.pricing.currency || 'INR',
+              },
+            } as any,
+          },
+          $set: {
+            menteeId: input.menteeId,
+            bookedBy: input.menteeId,
+            bookedAt: new Date(),
+            isBooked: true,
+          },
+        },
+        { new: true }
+      );
 
-      slot.isBooked = true;
-      await availability.save();
+      if (!updatedSession) {
+        // Booking didn't happen (duplicate/cancelled/not-found) — release the
+        // slot lock we took above so it doesn't stay stuck as booked.
+        await Availability.updateOne(
+          { availabilityId: input.availabilityId, 'slots.startTime': slotStart, 'slots.endTime': slotEnd },
+          { $set: { 'slots.$.isBooked': false } }
+        );
+        throw new BadRequestError('You have already booked this session for this date and time.');
+      }
+
+      session = updatedSession;
+
+      
 
       logger.info(`✅ Booking added: ${session.sessionId} for mentee: ${input.menteeId}`);
 
