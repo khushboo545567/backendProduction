@@ -35,11 +35,6 @@ class QueryService {
         throw new NotFoundError('MENTOR_NOT_FOUND');
       }
 
-      // ✅ FIX: the mentee lookup result was never captured or checked —
-      // `await User.findByUserId(input.menteeId)` ran but its return value
-      // was discarded, so a bad/nonexistent menteeId silently passed through
-      // instead of throwing NOT_FOUND. Now it's actually validated, and we
-      // keep the record to use the mentee's name in the mentor's notification.
       const mentee = await User.findByUserId(input.menteeId);
       if (!mentee) {
         throw new NotFoundError('MENTEE_NOT_FOUND');
@@ -50,7 +45,7 @@ class QueryService {
 
       // Create query
       const query = new Query({
-        queryId: generateSecureId(), // Generate unique queryId UUID
+        queryId: generateSecureId(),
         mentorId: input.mentorId,
         menteeId: input.menteeId,
         question: input.question,
@@ -71,10 +66,6 @@ class QueryService {
 
       logger.info(`Query submitted successfully: ${query._id}`);
 
-      // ✅ Notify the mentor — this was a TODO before, mentor dashboard's
-      // Notifications page stayed empty because nothing ever created a
-      // notification row. Non-blocking: a notification failure shouldn't
-      // fail the query submission itself.
       const menteeName = `${(mentee as any).firstName ?? ''} ${(mentee as any).lastName ?? ''}`.trim() || 'A mentee';
       try {
         await notificationService.sendNotification({
@@ -112,11 +103,8 @@ class QueryService {
         throw new NotFoundError('QUERY_NOT_FOUND');
       }
 
-      // Check access permission
       if (userId && query.mentorId !== userId && query.menteeId !== userId) {
-        throw new ForbiddenError(
-          'UNAUTHORIZED_ACCESS'
-        );
+        throw new ForbiddenError('UNAUTHORIZED_ACCESS');
       }
 
       return query;
@@ -128,6 +116,10 @@ class QueryService {
 
   /**
    * Get all queries for a user
+   * 🔴 FIX: role === 'mentor' case pehle userId (auth id) seedha
+   * mentorId maan leta tha, jabki Query.mentorId asal mein
+   * Mentor.mentorId hota hai (alag ID). Ab mentorRepository se
+   * asli mentorId nikal ke filter karte hain.
    */
   async getAllQueries(
     userId: string,
@@ -145,14 +137,16 @@ class QueryService {
     try {
       const query: any = {};
 
-      // Role-based filter
       if (role === 'mentor') {
-        query.mentorId = userId;
+        const mentor = await mentorRepository.findByUserId(userId);
+        if (!mentor) {
+          throw new NotFoundError('MENTOR_NOT_FOUND');
+        }
+        query.mentorId = mentor.mentorId; // ✅ fix: userId → mentor.mentorId
       } else {
         query.menteeId = userId;
       }
 
-      // Status filter
       if (status) {
         query.status = status;
       }
@@ -178,10 +172,18 @@ class QueryService {
 
   /**
    * Get pending queries for mentor
+   * 🔴 FIX: pehle seedha auth userId ko mentorId maan ke query chalti thi,
+   * isliye Queries tab hamesha empty aata tha (Query.mentorId !== userId).
+   * Ab pehle mentorRepository se asli mentorId nikaalte hain.
    */
-  async getPendingQueries(mentorId: string, _authToken?: string): Promise<any[]> {
+  async getPendingQueries(userId: string, _authToken?: string): Promise<any[]> {
     try {
-      const queries = await queryRepository.findPendingByMentorId(mentorId);
+      const mentor = await mentorRepository.findByUserId(userId);
+      if (!mentor) {
+        throw new NotFoundError('MENTOR_NOT_FOUND');
+      }
+
+      const queries = await queryRepository.findPendingByMentorId(mentor.mentorId); // ✅ fix
       return queries;
     } catch (error: any) {
       logger.error('Failed to fetch pending queries:', error);
@@ -194,12 +196,11 @@ class QueryService {
    */
   async answerQuery(
     queryId: string,
-    userId: string,      // ye User ka userId hai (auth se aata hai)
+    userId: string,
     answer: string,
     authToken?: string
   ): Promise<any> {
     try {
-      // ✅ Pehle userId se mentor dhundo
       const mentor = await mentorRepository.findByUserId(userId);
 
       if (!mentor) {
@@ -208,7 +209,6 @@ class QueryService {
 
       const mentorId = mentor.mentorId;
 
-      // ✅ Ab getQueryById ko mentorId se call karo, userId se nahi
       const query = await this.getQueryById(queryId, mentorId, authToken);
 
       if (query.mentorId !== mentorId) {
@@ -223,7 +223,6 @@ class QueryService {
 
       logger.info(`Query answered: ${queryId}`);
 
-      // ✅ Notify the mentee that their query was answered
       try {
         const mentorUser = await User.findByUserId(userId);
         const mentorName = `${(mentorUser as any)?.firstName ?? ''} ${(mentorUser as any)?.lastName ?? ''}`.trim() || 'Your mentor';
@@ -245,7 +244,6 @@ class QueryService {
       }
 
       return query;
-
     } catch (error: any) {
       logger.error('Failed to answer query:', error);
       throw error;
@@ -265,28 +263,21 @@ class QueryService {
       const query = await this.getQueryById(queryId, menteeId, authToken);
 
       if (query.menteeId !== menteeId) {
-        throw new ForbiddenError(
-          'Only the mentee can submit a follow-up'
-        );
+        throw new ForbiddenError('Only the mentee can submit a follow-up');
       }
 
       if (query.status !== 'answered') {
-        throw new BadRequestError(
-          'Can only submit follow-up for answered queries'
-        );
+        throw new BadRequestError('Can only submit follow-up for answered queries');
       }
 
       if (query.followUp?.askedAt) {
-        throw new BadRequestError(
-          'Follow-up already submitted'
-        );
+        throw new BadRequestError('Follow-up already submitted');
       }
 
       await query.addFollowUp(question);
 
       logger.info(`Follow-up submitted for query: ${queryId}`);
 
-      // ✅ Notify the mentor of the follow-up, same pattern as new queries
       try {
         const mentee = await User.findByUserId(menteeId);
         const menteeName = `${(mentee as any)?.firstName ?? ''} ${(mentee as any)?.lastName ?? ''}`.trim() || 'A mentee';
@@ -327,28 +318,21 @@ class QueryService {
       const query = await this.getQueryById(queryId, mentorId, authToken);
 
       if (query.mentorId !== mentorId) {
-        throw new ForbiddenError(
-          'Only the mentor can answer the follow-up'
-        );
+        throw new ForbiddenError('Only the mentor can answer the follow-up');
       }
 
       if (!query.followUp?.question) {
-        throw new BadRequestError(
-          'No follow-up question found'
-        );
+        throw new BadRequestError('No follow-up question found');
       }
 
       if (query.followUp.answeredAt) {
-        throw new BadRequestError(
-          'Follow-up already answered'
-        );
+        throw new BadRequestError('Follow-up already answered');
       }
 
       await query.answerFollowUp(answer);
 
       logger.info(`Follow-up answered for query: ${queryId}`);
 
-      // ✅ Notify the mentee, same pattern as answerQuery
       try {
         const mentorUser = await User.findByUserId(userId);
         const mentorName = `${(mentorUser as any)?.firstName ?? ''} ${(mentorUser as any)?.lastName ?? ''}`.trim() || 'Your mentor';
@@ -390,21 +374,15 @@ class QueryService {
       const query = await this.getQueryById(queryId, menteeId, authToken);
 
       if (query.menteeId !== menteeId) {
-        throw new ForbiddenError(
-          'Only the mentee can provide feedback'
-        );
+        throw new ForbiddenError('Only the mentee can provide feedback');
       }
 
       if (query.status !== 'answered') {
-        throw new BadRequestError(
-          'Can only provide feedback for answered queries'
-        );
+        throw new BadRequestError('Can only provide feedback for answered queries');
       }
 
       if (query.feedback) {
-        throw new BadRequestError(
-          'Feedback already submitted'
-        );
+        throw new BadRequestError('Feedback already submitted');
       }
 
       await query.addFeedback(rating, comment);
@@ -420,6 +398,10 @@ class QueryService {
 
   /**
    * Get query statistics
+   * 🔴 FIX: role === 'mentor' case ke liye bhi asli mentorId
+   * resolve karke repository ko pass karo, warna stats bhi hamesha
+   * 0 aayenge kyunki repository userId se match kar raha hoga
+   * jabki Query documents mein mentorId store hai.
    */
   async getQueryStats(
     userId: string,
@@ -427,7 +409,17 @@ class QueryService {
     _authToken?: string
   ): Promise<any> {
     try {
-      return await queryRepository.getStatsByUserId(userId, role);
+      let idToUse = userId;
+
+      if (role === 'mentor') {
+        const mentor = await mentorRepository.findByUserId(userId);
+        if (!mentor) {
+          throw new NotFoundError('MENTOR_NOT_FOUND');
+        }
+        idToUse = mentor.mentorId; // ✅ fix
+      }
+
+      return await queryRepository.getStatsByUserId(idToUse, role);
     } catch (error: any) {
       logger.error('Failed to fetch query stats:', error);
       throw error;
@@ -439,7 +431,7 @@ class QueryService {
    */
   async markExpiredQueries(): Promise<number> {
     try {
-      const cutoffDate = new Date(Date.now() - 48 * 60 * 60 * 1000); // 48 hours ago
+      const cutoffDate = new Date(Date.now() - 48 * 60 * 60 * 1000);
       return await queryRepository.markExpired(cutoffDate);
     } catch (error: any) {
       logger.error('Failed to mark expired queries:', error);
