@@ -8,6 +8,7 @@ import { generateSecureId } from '@/shared/security';
 import queryRepository from '../repositories/query.repository';
 import queryValidator from '../validations/query.validator';
 import mentorRepository from '../repositories/mentor.repository';
+import notificationService, { NotificationType, NotificationChannel } from './notification.service';
 
 interface SubmitQueryInput {
   mentorId: string;
@@ -34,8 +35,15 @@ class QueryService {
         throw new NotFoundError('MENTOR_NOT_FOUND');
       }
 
-      // Verify mentee exists
-      await User.findByUserId(input.menteeId)
+      // ✅ FIX: the mentee lookup result was never captured or checked —
+      // `await User.findByUserId(input.menteeId)` ran but its return value
+      // was discarded, so a bad/nonexistent menteeId silently passed through
+      // instead of throwing NOT_FOUND. Now it's actually validated, and we
+      // keep the record to use the mentee's name in the mentor's notification.
+      const mentee = await User.findByUserId(input.menteeId);
+      if (!mentee) {
+        throw new NotFoundError('MENTEE_NOT_FOUND');
+      }
 
       // Get pricing
       const amount = mentor.pricing?.askQuery || 199;
@@ -63,9 +71,30 @@ class QueryService {
 
       logger.info(`Query submitted successfully: ${query._id}`);
 
-      // TODO: Send notification to mentor
+      // ✅ Notify the mentor — this was a TODO before, mentor dashboard's
+      // Notifications page stayed empty because nothing ever created a
+      // notification row. Non-blocking: a notification failure shouldn't
+      // fail the query submission itself.
+      const menteeName = `${(mentee as any).firstName ?? ''} ${(mentee as any).lastName ?? ''}`.trim() || 'A mentee';
+      try {
+        await notificationService.sendNotification({
+          userId: mentor.userId,
+          type: NotificationType.QUERY_RECEIVED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'New Query',
+            message: `${menteeName} asked you a query`,
+            menteeName,
+            question: input.question,
+            queryId: query.queryId,
+            mentorId: input.mentorId,
+          },
+          priority: 'normal',
+        });
+      } catch (notifyErr: any) {
+        logger.error('Failed to notify mentor of new query:', notifyErr);
+      }
 
-      // return query;
       return query.toObject();
     } catch (error: any) {
       logger.error('Failed to submit query:', error);
@@ -78,8 +107,6 @@ class QueryService {
    */
   async getQueryById(queryId: string, userId?: string, _authToken?: string): Promise<any> {
     try {
-      // const query = await Query.findById(queryId);
-      // ✅ Fix — queryId (UUID) se dhundho
       const query = await queryRepository.findByQueryId(queryId);
       if (!query) {
         throw new NotFoundError('QUERY_NOT_FOUND');
@@ -132,15 +159,6 @@ class QueryService {
 
       const skip = (page - 1) * limit;
 
-      // const [queries, total] = await Promise.all([
-      //   Query.find(query)
-      //     .sort({ createdAt: -1 })
-      //     .skip(skip)
-      //     .limit(limit)
-      //     .lean(),
-      //   Query.countDocuments(query),
-      // ]);
-
       const [queries, total] = await Promise.all([
         queryRepository.findAll(query, skip, limit),
         queryRepository.count(query),
@@ -163,15 +181,7 @@ class QueryService {
    */
   async getPendingQueries(mentorId: string, _authToken?: string): Promise<any[]> {
     try {
-      // const queries = await Query.find({
-      //   mentorId,
-      //   status: 'pending',
-      // })
-      //   .sort({ priority: -1, createdAt: 1 })
-      //   .lean();
-
       const queries = await queryRepository.findPendingByMentorId(mentorId);
-
       return queries;
     } catch (error: any) {
       logger.error('Failed to fetch pending queries:', error);
@@ -181,7 +191,6 @@ class QueryService {
 
   /**
    * Answer a query (mentor only)
-   * 🔴 FIXED: Proper string comparison
    */
   async answerQuery(
     queryId: string,
@@ -197,7 +206,7 @@ class QueryService {
         throw new ForbiddenError('Only mentors can answer queries');
       }
 
-      const mentorId = mentor.mentorId; // "25cb9b21-8dae-4f4f-b650-67df3e00bc4e"
+      const mentorId = mentor.mentorId;
 
       // ✅ Ab getQueryById ko mentorId se call karo, userId se nahi
       const query = await this.getQueryById(queryId, mentorId, authToken);
@@ -213,6 +222,28 @@ class QueryService {
       await query.answerQuery(answer);
 
       logger.info(`Query answered: ${queryId}`);
+
+      // ✅ Notify the mentee that their query was answered
+      try {
+        const mentorUser = await User.findByUserId(userId);
+        const mentorName = `${(mentorUser as any)?.firstName ?? ''} ${(mentorUser as any)?.lastName ?? ''}`.trim() || 'Your mentor';
+
+        await notificationService.sendNotification({
+          userId: query.menteeId,
+          type: NotificationType.QUERY_ANSWERED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Query Answered',
+            message: `${mentorName} answered your query`,
+            mentorName,
+            queryId: query.queryId,
+          },
+          priority: 'normal',
+        });
+      } catch (notifyErr: any) {
+        logger.error('Failed to notify mentee of answered query:', notifyErr);
+      }
+
       return query;
 
     } catch (error: any) {
@@ -223,7 +254,6 @@ class QueryService {
 
   /**
    * Submit follow-up question (mentee only)
-   * 🔴 FIXED: Proper string comparison
    */
   async submitFollowUp(
     queryId: string,
@@ -234,7 +264,6 @@ class QueryService {
     try {
       const query = await this.getQueryById(queryId, menteeId, authToken);
 
-      // 🔴 FIX: Direct string comparison
       if (query.menteeId !== menteeId) {
         throw new ForbiddenError(
           'Only the mentee can submit a follow-up'
@@ -257,7 +286,27 @@ class QueryService {
 
       logger.info(`Follow-up submitted for query: ${queryId}`);
 
-      // TODO: Notify mentor
+      // ✅ Notify the mentor of the follow-up, same pattern as new queries
+      try {
+        const mentee = await User.findByUserId(menteeId);
+        const menteeName = `${(mentee as any)?.firstName ?? ''} ${(mentee as any)?.lastName ?? ''}`.trim() || 'A mentee';
+
+        await notificationService.sendNotification({
+          userId: query.mentorId,
+          type: NotificationType.QUERY_RECEIVED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Follow-up Question',
+            message: `${menteeName} sent a follow-up question`,
+            menteeName,
+            question,
+            queryId: query.queryId,
+          },
+          priority: 'normal',
+        });
+      } catch (notifyErr: any) {
+        logger.error('Failed to notify mentor of follow-up:', notifyErr);
+      }
 
       return query;
     } catch (error: any) {
@@ -268,7 +317,6 @@ class QueryService {
 
   /**
    * Answer follow-up question (mentor only)
-   * 🔴 FIXED: Proper string comparison
    */
   async answerFollowUp(queryId: string, userId: string, answer: string, authToken?: string) {
     try {
@@ -278,7 +326,6 @@ class QueryService {
       const mentorId = mentor.mentorId;
       const query = await this.getQueryById(queryId, mentorId, authToken);
 
-      // 🔴 FIX: Direct string comparison
       if (query.mentorId !== mentorId) {
         throw new ForbiddenError(
           'Only the mentor can answer the follow-up'
@@ -301,7 +348,26 @@ class QueryService {
 
       logger.info(`Follow-up answered for query: ${queryId}`);
 
-      // TODO: Notify mentee
+      // ✅ Notify the mentee, same pattern as answerQuery
+      try {
+        const mentorUser = await User.findByUserId(userId);
+        const mentorName = `${(mentorUser as any)?.firstName ?? ''} ${(mentorUser as any)?.lastName ?? ''}`.trim() || 'Your mentor';
+
+        await notificationService.sendNotification({
+          userId: query.menteeId,
+          type: NotificationType.QUERY_ANSWERED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Follow-up Answered',
+            message: `${mentorName} answered your follow-up`,
+            mentorName,
+            queryId: query.queryId,
+          },
+          priority: 'normal',
+        });
+      } catch (notifyErr: any) {
+        logger.error('Failed to notify mentee of answered follow-up:', notifyErr);
+      }
 
       return query;
     } catch (error: any) {
@@ -312,7 +378,6 @@ class QueryService {
 
   /**
    * Add feedback to query
-   * 🔴 FIXED: Proper string comparison
    */
   async addFeedback(
     queryId: string,
@@ -324,7 +389,6 @@ class QueryService {
     try {
       const query = await this.getQueryById(queryId, menteeId, authToken);
 
-      // 🔴 FIX: Direct string comparison
       if (query.menteeId !== menteeId) {
         throw new ForbiddenError(
           'Only the mentee can provide feedback'
@@ -363,41 +427,7 @@ class QueryService {
     _authToken?: string
   ): Promise<any> {
     try {
-      const matchField = role === 'mentor' ? 'mentorId' : 'menteeId';
-
-      // const stats = 
-      // await Query.aggregate([
-      //   { $match: { [matchField]: userId } },
-      //   {
-      //     $group: {
-      //       _id: null,
-      //       total: { $sum: 1 },
-      //       pending: {
-      //         $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] },
-      //       },
-      //       answered: {
-      //         $sum: { $cond: [{ $eq: ['$status', 'answered'] }, 1, 0] },
-      //       },
-      //       expired: {
-      //         $sum: { $cond: [{ $eq: ['$status', 'expired'] }, 1, 0] },
-      //       },
-      //       totalRevenue: { $sum: '$pricing.amount' },
-      //       avgRating: { $avg: '$feedback.rating' },
-      //     },
-      //   },
-      // ]);
-
-      // return stats[0] || {
-      //   total: 0,
-      //   pending: 0,
-      //   answered: 0,
-      //   expired: 0,
-      //   totalRevenue: 0,
-      //   avgRating: 0,
-      // };
-
       return await queryRepository.getStatsByUserId(userId, role);
-
     } catch (error: any) {
       logger.error('Failed to fetch query stats:', error);
       throw error;
@@ -410,23 +440,7 @@ class QueryService {
   async markExpiredQueries(): Promise<number> {
     try {
       const cutoffDate = new Date(Date.now() - 48 * 60 * 60 * 1000); // 48 hours ago
-
-      // const result = await Query.updateMany(
-      //   {
-      //     status: 'pending',
-      //     createdAt: { $lt: cutoffDate },
-      //   },
-      //   {
-      //     $set: { status: 'expired' },
-      //   }
-      // );
-
-      // ✅ REPLACE WITH
       return await queryRepository.markExpired(cutoffDate);
-
-      // logger.info(`Marked ${result.modifiedCount} queries as expired`);
-
-      // return result.modifiedCount;
     } catch (error: any) {
       logger.error('Failed to mark expired queries:', error);
       throw error;

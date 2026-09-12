@@ -211,13 +211,19 @@ class MentorService {
         updates.bannerImage = bannerImageUrl;
       }
 
-        // ✅ FIX: experience aur socialProof ko bhi merge karo, warna poora subdocument overwrite ho jata hai
+      // ✅ FIX: experience aur socialProof ko bhi merge karo, warna poora subdocument overwrite ho jata hai.
+      // ✅ FIX (TS18048): merged object ko ek local `const` mein nikala — pehle
+      // `updates.experience = {...}` reassign karne ke baad TS agli line par
+      // `updates.experience.total` access karte waqt use phir se "possibly
+      // undefined" maan raha tha (optional property + object literal se
+      // widen ho jana). Local const par TS ki narrowing reliably kaam karti hai.
       if (updates.experience) {
-        updates.experience = { ...mentor.experience, ...updates.experience };
+        const mergedExperience = { ...mentor.experience, ...updates.experience };
         // ✅ FIX: total change hone par level bhi recalculate karo, warna purana level hi reh jayega
-        if (updates.experience.total !== undefined) {
-          updates.experience.level = this.calculateExperienceLevel(updates.experience.total);
+        if (mergedExperience.total !== undefined) {
+          mergedExperience.level = this.calculateExperienceLevel(mergedExperience.total);
         }
+        updates.experience = mergedExperience;
       }
       if (updates.socialProof) {
         updates.socialProof = { ...mentor.socialProof, ...updates.socialProof };

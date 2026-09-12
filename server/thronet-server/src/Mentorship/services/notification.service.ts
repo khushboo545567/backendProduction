@@ -1,4 +1,4 @@
-// src/services/notification.service.ts
+// src/Mentorship/services/notification.service.ts
 import { User } from '@/auth/models';
 import emailService from './email.service';
 import smsService from './sms.service';
@@ -21,6 +21,9 @@ export enum NotificationType {
   REFUND_PROCESSED = 'refund_processed',
   REVIEW_RECEIVED = 'review_received',
   SESSION_COMPLETED = 'session_completed',
+  // ✅ NEW — query flow had no notification at all before this
+  QUERY_RECEIVED = 'query_received',
+  QUERY_ANSWERED = 'query_answered',
 }
 
 export enum NotificationChannel {
@@ -77,7 +80,7 @@ class NotificationService {
         channels: {},
       };
 
-      // ✅ FIX: send IN_APP first, independent of user lookup.
+      // ✅ send IN_APP first, independent of user lookup.
       // Notification.create() only needs userId/type/data — no dependency
       // on the User collection at all.
       if (channels.includes(NotificationChannel.IN_APP)) {
@@ -214,16 +217,11 @@ class NotificationService {
 
   /**
    * Create in-app (DB) notification.
-   *
-   * ✅ FIX: `user` param is now genuinely optional/unused — this method
-   * never actually read anything off `user` (it only used input.userId,
-   * input.type, input.data). Kept the param for backward-compat signature
-   * but it can safely be `null`.
    */
   private async sendInAppNotification(_user: any, input: NotificationInput): Promise<boolean> {
     try {
       await Notification.create({
-        notificationId: generateSecureId(), // Generate unique ID for notification
+        notificationId: generateSecureId(),
         userId: input.userId,
         type: input.type,
         category: 'system',
@@ -327,6 +325,29 @@ class NotificationService {
           `,
         };
 
+      case NotificationType.QUERY_RECEIVED:
+        return {
+          subject: '❓ New Query Received',
+          html: `
+            <h2>You've Received a New Query</h2>
+            <p>Hi ${userName},</p>
+            <p><strong>${data.menteeName || 'A mentee'}</strong> has asked you a query.</p>
+            <p>${data.question ? `<em>"${data.question}"</em>` : ''}</p>
+            <p>Log in to your dashboard to respond.</p>
+          `,
+        };
+
+      case NotificationType.QUERY_ANSWERED:
+        return {
+          subject: '✅ Your Query Has Been Answered',
+          html: `
+            <h2>Your Mentor Replied</h2>
+            <p>Hi ${userName},</p>
+            <p><strong>${data.mentorName || 'Your mentor'}</strong> has answered your query.</p>
+            <p>Log in to your dashboard to view the response.</p>
+          `,
+        };
+
       default:
         return {
           subject: 'Notification from Mentorship Platform',
@@ -357,6 +378,12 @@ class NotificationService {
 
       case NotificationType.REFUND_PROCESSED:
         return `💰 Refund of ₹${data.refundAmount} initiated. Will be credited in 3-5 days.`;
+
+      case NotificationType.QUERY_RECEIVED:
+        return `❓ New query from ${data.menteeName || 'a mentee'}. Check your dashboard to respond.`;
+
+      case NotificationType.QUERY_ANSWERED:
+        return `✅ ${data.mentorName || 'Your mentor'} answered your query. Check your dashboard.`;
 
       default:
         return 'You have a new notification from Mentorship Platform';
@@ -389,6 +416,12 @@ class NotificationService {
       case NotificationType.PACKAGE_EXPIRING:
       case NotificationType.CREDIT_LOW:
         return [NotificationChannel.EMAIL];
+
+      // ✅ NEW — queries default to in-app only (no email/SMS noise for a
+      // simple text question). Callers can still pass explicit channels.
+      case NotificationType.QUERY_RECEIVED:
+      case NotificationType.QUERY_ANSWERED:
+        return [NotificationChannel.IN_APP];
 
       default:
         return [NotificationChannel.EMAIL];

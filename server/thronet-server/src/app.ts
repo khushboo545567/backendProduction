@@ -1,19 +1,8 @@
-// /**
-//  * app.ts
-//  * server/thronet-server/src/app.ts
-//  * Express Application Configuration
-//  * ./version 4.1.2 (FIX — mentorRoutes was imported but never mounted)
-//  *
-//  * 🟢 FIXED:
-//  *    - mentorRoutes (./Mentorship/routers) was imported but the
-//  *      `app.use('/api/v1/mentorship', mentorRoutes)` line was missing
-//  *      from the ROUTES section below — it got accidentally dropped
-//  *      while SeniorMentorship was being disabled to debug a startup
-//  *      hang. This caused every /api/v1/mentorship/* route to 404.
-//  *      Now mounted correctly.
-//  *    - SeniorMentorship import/mount still commented out (unrelated
-//  *      startup-hang issue — debug separately when ready).
-//  */
+/**
+ * app.ts
+ * server/thronet-server/src/app.ts
+ * Express Application Configuration
+ */
 
 import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
@@ -22,36 +11,28 @@ import rateLimit from 'express-rate-limit';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import mongoSanitize from 'express-mongo-sanitize'; 
-import hpp from 'hpp'; 
+import mongoSanitize from 'express-mongo-sanitize';
+import hpp from 'hpp';
 import mongoose from 'mongoose';
-import { MongoStore } from 'connect-mongo';   
+import { MongoStore } from 'connect-mongo';
 import passport from '@/config/oauth/passport.config';
 
 // Routes
 import AuthRoutes from './routes/index';
-console.log("Verifiy route import mounting....")
-// import verifyRoutes from './auth/routes/index';
 import mentorRoutes from './Mentorship/routers';
-// import seniorMentorRoutes from './SeniorMentorship/routers';
-console.log('🔍 mentorRoutes imported successfully');
+// import seniorMentorRoutes from './SeniorMentorship/routers'; // disabled — causes a startup hang, debug separately
 import companyRoutes from './company/routers';
 import studyGroupRoutes from './StudyGroup/routers';
 import messageRoutes from './message/routes/message.routes';
 import notificationRoutes from './notifications/routes/notification.routes';
 import jobServiceRoutes from './Job-Service/routers';
 
-
 import { User } from './auth/models';
 
 // Config
 import { LoggerUtil, requestLogger } from './shared/logger.util';
 import NotificationService from './auth/services/notification.service';
-// const NotificationService = { initialize: async () => false };
-
 import CacheUtil from './shared/cache.util';
-
-console.log('🔍 App.ts LOADING START');
 
 interface CustomError extends Error {
     status?: number;
@@ -60,7 +41,7 @@ interface CustomError extends Error {
 }
 
 const logger = LoggerUtil;
-const app: Express = express();  
+const app: Express = express();
 
 // ==================== TRUST PROXY ====================
 // Railway sits behind exactly one reverse proxy layer.
@@ -100,8 +81,6 @@ app.use(cors({
     exposedHeaders: ['Authorization', 'Content-Length', 'X-CSRF-Token'],
     credentials: true
 }));
-
-console.log('🔍 cors configured successfully');
 
 // 1. Cookie parser and request logger
 app.use(cookieParser());
@@ -150,15 +129,11 @@ const authLimiter = rateLimit({
 });
 app.use('/api/v1/auth', authLimiter);
 
-console.log('🔍 Express, cookie parser, body parser, security middleware, rate limiting configured successfully');
-
 // ==================== SESSION ====================
 const sessionSecret = process.env['SESSION_SECRET'];
 if (!sessionSecret) {
     throw new Error('SESSION_SECRET environment variable is required. Set it in .env.production');
 }
-
-console.log('🔍 Session configuration initialized');
 
 app.use(session({
     secret: sessionSecret,
@@ -171,8 +146,8 @@ app.use(session({
             ttl: 5 * 60,
             autoRemove: 'native',
         })
-        : MongoStore.create({
-            clientPromise: mongoose.connection.asPromise().then((m) => m.connection.getClient()),
+        :  MongoStore.create({
+            clientPromise: mongoose.connection.asPromise().then((m) => m.getClient()),
             collectionName: 'sessions',
             ttl: 5 * 60,
             autoRemove: 'native',
@@ -185,8 +160,8 @@ app.use(session({
         // no separate CSRF-token middleware here. If you ever need
         // cross-site form posts (e.g. an external partner site submitting
         // to your API), you'd need to relax this and add real CSRF tokens.
-            sameSite: 'lax',  // 'strict' se change
-        maxAge: 5 * 60 * 1000  // 5 min in ms
+        sameSite: 'lax',
+        maxAge: 5 * 60 * 1000 // 5 min in ms
     }
 }));
 
@@ -201,8 +176,6 @@ passport.deserializeUser(async (userId: string, done) => {
         done(err as Error);
     }
 });
-
-console.log('🔍 Session configured successfully');
 
 // ==================== HEALTH CHECK ====================
 // Liveness probe — just confirms the process is up and responding.
@@ -235,34 +208,15 @@ app.get('/api/v1/health/ready', (_req: Request, res: Response) => {
     });
 });
 
-
-console.log('🔍 Health check configured successfully');
 // ==================== ROUTES ====================
-console.log('Mounting API routes...');
-
 app.use('/api/v1', AuthRoutes);
-console.log('🔍 AuthRoutes mounted successfully in app');
-
-console.log("Verifiy route mounting....")
-// app.use('/api/v1/verify', verifyRoutes);
-console.log('🔍 VerifyRoutes mounted successfully in app');
-// app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
-
-app.use('/api/v1/mentorship', mentorRoutes);          // 👈 YE LINE ADD KARO
-console.log('🔍 MentorRoutes mounted successfully in app');
-
-// app.use('/api/v1/senior-mentorship', seniorMentorRoutes);
+// app.use('/api/v1/senior-mentorship', seniorMentorRoutes); // disabled — see import above
+app.use('/api/v1/mentorship', mentorRoutes);
 app.use('/api/v1/company', companyRoutes);
-console.log('🔍 CompanyRoutes mounted successfully in app');
 app.use('/api/v1/study-group', studyGroupRoutes);
-console.log('🔍 StudyGroupRoutes mounted successfully in app');
 app.use('/api/v1/messaging', messageRoutes);
-console.log('🔍 MessageRoutes mounted successfully in app');
 app.use('/api/v1/notifications', notificationRoutes);
-console.log('🔍 NotificationRoutes mounted successfully in app');
 app.use('/api/v1/job-service', jobServiceRoutes);
-
-console.log('All routes mounted successfully.');
 
 // ==================== 404 HANDLER ====================
 // Catches anything that didn't match a mounted route, before the error
@@ -291,7 +245,7 @@ app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => 
             status: 'error',
             message: 'Origin not allowed',
             code: 'CORS_NOT_ALLOWED',
-        }); 
+        });
     }
 
     logger.error('Unhandled error', {
@@ -303,7 +257,7 @@ app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => 
 
     const statusCode = err.statusCode || err.status || 500;
 
-    // ✅ FIX: Sirf genuine 500 (unexpected/unknown) errors ke liye generic
+    // ✅ Sirf genuine 500 (unexpected/unknown) errors ke liye generic
     // message chhupao. Operational errors (400/401/403/404/409 etc — jo
     // BadRequestError, NotFoundError, ConflictError se aate hain aur
     // .message already set hoti hai) ka asli message hamesha bhejo,
@@ -321,6 +275,3 @@ app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => 
 }) as express.ErrorRequestHandler);
 
 export { app, NotificationService };
-
-
-console.log('🔍 Error handler configured successfully');
