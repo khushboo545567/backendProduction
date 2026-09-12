@@ -17,7 +17,7 @@ class SessionRepository {
    * Use for read-only: listing, displaying, analytics.
    *
    * ✅ FIX: Renamed to make intent clear. Use findByIdForUpdate()
-   * when you need to call Mongoose instance methods (e.g. setMeetingDetails).
+   * when you need  to call Mongoose instance methods (e.g. setMeetingDetails).
    */
   async findById(objectId: string): Promise<any | null> {
     return await SessionMentor.findById(objectId).lean();

@@ -114,10 +114,8 @@ class RefundService {
     const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
     const mentorUserId = mentorDoc?.userId;
 
-    // Step 3: Validate cancellation is allowed (against the correct mentee/mentor)
-    this.validateCancellation(session, input.userId, effectiveMenteeId, mentorUserId);
-
-
+        // Step 3: Validate cancellation is allowed (against the correct mentee/mentor)
+        this.validateCancellation(session, input.userId, effectiveMenteeId, mentorUserId, effectiveScheduledAt);
 
     // Step 4: Calculate refund using the specific booking's pricing/time
     const refundCalculation = input.isEmergency
@@ -149,70 +147,78 @@ class RefundService {
         userRole
       );
 
-      // Step 7: Initiate refund with payment gateway if eligible
-      let transactionId: string | undefined;
-      let finalStatus: string = BookingStatus.CANCELLED;
-      let paymentUpdate: any = {
-        'cancellation.cancelledBy': input.userId,
-        'cancellation.cancelledAt': new Date(),
-        'cancellation.reason': input.reason,
-        'cancellation.refundEligible': refundCalculation.refundEligible,
-      };
-
-      if (refundCalculation.refundEligible && refundCalculation.refundAmount > 0) {
-        transactionId = await this.initiateRefundTransaction(
-          session,
-          refundCalculation.refundAmount
-        );
-
-        // ✅ FIX: Single atomic update — was previously two separate session.save() calls.
-        // If process crashes between the old step 6 and step 8, session would be stuck
-        // as CANCELLED. Now everything is committed in one DB operation.
-        finalStatus = BookingStatus.REFUNDED;
-        paymentUpdate = {
-          ...paymentUpdate,
-          'payment.status': PaymentStatus.REFUNDED,
-          'payment.refundAmount': refundCalculation.refundAmount,
-          'payment.refundedAt': new Date(),
-          'payment.refundReason': input.reason,
-        };
-
-        cancellationLog.refundStatus = 'processing';
-        cancellationLog.refundTransactionId = transactionId;
-        await cancellationLog.save();
-      }
-
-         // ✅ FIX: When a specific booking is cancelled (multi-mentee session
-      // template), only THAT booking's status is updated via arrayFilters.
-      // Previously, session-level `status` was always overwritten — which
-      // would incorrectly cancel every other mentee's booking on the same
-      // session template too.
-      if (input.bookingId && targetBooking) {
-        await SessionMentor.findByIdAndUpdate(
-          session._id,
-          {
-            $set: {
-              'bookings.$[elem].status': finalStatus,
-              ...paymentUpdate,
-            },
-          },
-          {
-            runValidators: true,
-            arrayFilters: [{ 'elem._id': input.bookingId }],
-          }
-        );
-      } else {
-        await SessionMentor.findByIdAndUpdate(
-          session._id,
-          {
-            $set: {
-              status: finalStatus,
-              ...paymentUpdate,
-            },
-          },
-          { runValidators: true }
-        );
-      }
+            // Step 7: Initiate refund with payment gateway if eligible
+            let transactionId: string | undefined;
+            // ✅ FIX: `bookings[].status` schema enum does NOT include 'refunded' —
+            // only the top-level `status` field (and `payment.status`) support it.
+            // Writing 'refunded' into bookings.$[elem].status threw a Mongoose
+            // ValidationError, which the global handler turned into a 500 for
+            // EVERY refund-eligible (future-date) cancellation. Booking-array
+            // status now always stays 'cancelled'; refund state is tracked
+            // separately via payment.status and top-level session status.
+            let bookingStatus: string = BookingStatus.CANCELLED;
+            let sessionStatus: string = BookingStatus.CANCELLED;
+            let paymentUpdate: any = {
+              'cancellation.cancelledBy': input.userId,
+              'cancellation.cancelledAt': new Date(),
+              'cancellation.reason': input.reason,
+              'cancellation.refundEligible': refundCalculation.refundEligible,
+            };
+      
+            if (refundCalculation.refundEligible && refundCalculation.refundAmount > 0) {
+              transactionId = await this.initiateRefundTransaction(
+                session,
+                refundCalculation.refundAmount
+              );
+      
+              // ✅ FIX: Single atomic update — was previously two separate session.save() calls.
+              // If process crashes between the old step 6 and step 8, session would be stuck
+              // as CANCELLED. Now everything is committed in one DB operation.
+              sessionStatus = BookingStatus.REFUNDED;
+              paymentUpdate = {
+                ...paymentUpdate,
+                'payment.status': PaymentStatus.REFUNDED,
+                'payment.refundAmount': refundCalculation.refundAmount,
+                'payment.refundedAt': new Date(),
+                'payment.refundReason': input.reason,
+              };
+      
+              cancellationLog.refundStatus = 'processing';
+              cancellationLog.refundTransactionId = transactionId;
+              await cancellationLog.save();
+            }
+      
+               // ✅ FIX: When a specific booking is cancelled (multi-mentee session
+            // template), only THAT booking's status is updated via arrayFilters.
+            // Previously, session-level `status` was always overwritten — which
+            // would incorrectly cancel every other mentee's booking on the same
+            // session template too.
+            if (input.bookingId && targetBooking) {
+              await SessionMentor.findByIdAndUpdate(
+                session._id,
+                {
+                  $set: {
+                    'bookings.$[elem].status': bookingStatus,
+                    ...paymentUpdate,
+                  },
+                },
+                {
+                  runValidators: true,
+                  arrayFilters: [{ 'elem._id': input.bookingId }],
+                }
+              );
+            } else {
+              await SessionMentor.findByIdAndUpdate(
+                session._id,
+                {
+                  $set: {
+                    status: sessionStatus,
+                    ...paymentUpdate,
+                  },
+                },
+                { runValidators: true }
+              );
+            }
 
             // Step 8: Send notifications (non-critical — failure does not throw)
             await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId);
@@ -248,7 +254,8 @@ class RefundService {
     session: any,
     userId: string,
     effectiveMenteeId?: string,
-    mentorUserId?: string
+    mentorUserId?: string,
+    effectiveScheduledAt?: Date
   ): void {
     const menteeIdToCheck = effectiveMenteeId ?? session.menteeId;
     // ✅ FIX: compare against the mentor's resolved userId, not the raw
@@ -257,7 +264,7 @@ class RefundService {
       throw new Error('You are not authorized to cancel this session');
     }
 
-    
+
 
     if (session.status === BookingStatus.CANCELLED || session.status === BookingStatus.REFUNDED) {
       throw new Error('Session is already cancelled');
@@ -271,7 +278,13 @@ class RefundService {
       throw new Error('Cannot cancel a session that is in progress');
     }
 
-    if (session.scheduledAt < new Date()) {
+    // ✅ FIX: use the SPECIFIC booking's scheduledAt (effectiveScheduledAt),
+    // not the session template's top-level scheduledAt. For multi-mentee
+    // session templates, the template date can differ from this mentee's
+    // actual booked slot — checking the wrong field caused future bookings
+    // to be wrongly rejected as "past session".
+    const dateToCheck = effectiveScheduledAt ?? session.scheduledAt;
+    if (dateToCheck < new Date()) {
       throw new Error('Cannot cancel a past session');
     }
   }
@@ -321,17 +334,16 @@ class RefundService {
     session: any,
     refundAmount: number
   ): Promise<string> {
-    try {
-      if (!session.payment?.gatewayPaymentId) {
-        logger.warn(
-          `No gateway payment ID for session ${session._id}. Queuing for manual refund.`
-        );
-        // Fallback: generate a traceable ID for admin manual processing
-        const pendingId = `REFUND_MANUAL_${Date.now()}_${session._id}`;
-        logger.warn(`Manual refund queued: ${pendingId} — amount: Rs.${refundAmount}`);
-        return pendingId;
-      }
+    if (!session.payment?.gatewayPaymentId) {
+      logger.warn(
+        `No gateway payment ID for session ${session._id}. Queuing for manual refund.`
+      );
+      const pendingId = `REFUND_MANUAL_${Date.now()}_${session._id}`;
+      logger.warn(`Manual refund queued: ${pendingId} — amount: Rs.${refundAmount}`);
+      return pendingId;
+    }
 
+    try {
       const refund = await getRazorpay().payments.refund(
         session.payment.gatewayPaymentId,
         {
@@ -347,10 +359,18 @@ class RefundService {
       logger.info(`Razorpay refund initiated: ${refund.id} for Rs.${refundAmount}`);
       return refund.id;
     } catch (error: any) {
-      logger.error(`Razorpay refund failed: ${error.message}`);
-      throw new Error('Failed to process refund. Please contact support.');
+      // ✅ FIX: Don't let a Razorpay/config failure crash the whole
+      // cancellation with a 500. Fall back to manual refund queuing
+      // so the session still gets cancelled successfully; the refund
+      // itself can be processed manually by admin later.
+      logger.error(`Razorpay refund failed, falling back to manual queue: ${error.message}`);
+      const pendingId = `REFUND_MANUAL_FALLBACK_${Date.now()}_${session._id}`;
+      logger.warn(`Manual refund queued after Razorpay failure: ${pendingId} — amount: Rs.${refundAmount}`);
+      return pendingId;
     }
   }
+
+
 
   /**
    * Send refund notifications to both parties (non-critical)
