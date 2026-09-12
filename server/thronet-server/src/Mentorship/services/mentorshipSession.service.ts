@@ -421,13 +421,22 @@ class MentorshipSessionService {
               title: 'New Booking Request',
               message: `You have a new booking request for "${session.title}".`,
             },
-          }).catch((e) => logger.error('Notification failed (bookSession):', e));
+          }).catch((e) => logger.error('Notification failed (bookSession → mentor):', e));
         }
+
+        // ✅ NEW: confirm to the mentee that their booking request was sent
+        NotificationService.sendNotification({
+          userId: input.menteeId,
+          type: NotificationType.BOOKING_CONFIRMED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Booking Request Sent',
+            message: `Your booking request for "${session.title}" has been sent to the mentor.`,
+          },
+        }).catch((e) => logger.error('Notification failed (bookSession → mentee):', e));
       } catch (notifErr: any) {
         logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
       }
-
-
 
           // ✅ FIX: session.bookings is optional in the type — use safe access
       // instead of direct indexing (pre-existing TS18048 build error).

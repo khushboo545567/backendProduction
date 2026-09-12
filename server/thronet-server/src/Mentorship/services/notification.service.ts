@@ -241,6 +241,18 @@ class NotificationService {
       const title = input.data.title || input.type;
       const message = input.data.message || '';
 
+           // ✅ FIX: model's Notification schema only allows
+      // 'low' | 'medium' | 'high' | 'urgent' — 'normal' was never valid,
+      // so Notification.create() was silently failing schema validation
+      // for every call that didn't explicitly pass a matching priority.
+      const priorityMap: Record<string, 'low' | 'medium' | 'high' | 'urgent'> = {
+        low: 'low',
+        normal: 'medium',
+        medium: 'medium',
+        high: 'high',
+        urgent: 'urgent',
+      };
+
       await Notification.create({
         notificationId,
         userId: input.userId,
@@ -249,7 +261,7 @@ class NotificationService {
         title,
         message,
         data: input.data,
-        priority: input.priority || 'normal',
+        priority: priorityMap[input.priority || 'normal'] || 'medium',
         channels: { inApp: true, email: false, sms: false, push: false },
         status: { sent: true, read: false, clicked: false, sentAt: new Date() },
       });
@@ -278,7 +290,7 @@ class NotificationService {
 
 
 
-  
+
   /**
    * Build email content based on notification type
    */
