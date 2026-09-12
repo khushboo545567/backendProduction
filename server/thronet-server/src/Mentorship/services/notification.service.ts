@@ -5,18 +5,35 @@ import smsService from './sms.service';
 import logger from '@/config/logging/logger.config';
 import { Notification } from '../models';
 import { generateSecureId } from '@/shared/security';
+// ✅ NEW — for realtime push after DB save
+import { emitToUser } from '@/socket';
+
+
+
+
 
 export enum NotificationType {
+  // ✅ ADD — bookSession() needs this distinct type; was wrongly reusing
+  // BOOKING_CONFIRMED for both "new request" and "confirmed" before
+  NEW_BOOKING_REQUEST = 'new_booking_request',
   BOOKING_CONFIRMED = 'booking_confirmed',
-  SESSION_REMINDER = 'session_reminder',
-  SESSION_CANCELLED = 'session_cancelled',
-  SESSION_RESCHEDULED = 'session_rescheduled',
+  // ✅ FIX — was 'session_reminder', model enum only has 'session_starting_soon'
+  SESSION_REMINDER = 'session_starting_soon',
+  // ✅ ADD — startSession() needs this; model already supports it
+  SESSION_STARTED = 'session_started',
+  // ✅ FIX — was 'session_cancelled', model enum has 'booking_cancelled'
+  SESSION_CANCELLED = 'booking_cancelled',
+  // ✅ FIX — was 'session_rescheduled', model enum has 'booking_rescheduled'
+  SESSION_RESCHEDULED = 'booking_rescheduled',
   WAITLIST_JOINED = 'waitlist_joined',
-  WAITLIST_AVAILABLE = 'waitlist_available',
+  // ✅ FIX — was 'waitlist_available', model enum has 'waitlist_spot_available'
+  WAITLIST_AVAILABLE = 'waitlist_spot_available',
   PACKAGE_PURCHASED = 'package_purchased',
-  PACKAGE_EXPIRING = 'package_expiring',
+  // ✅ FIX — was 'package_expiring', model enum has 'package_expiring_soon'
+  PACKAGE_EXPIRING = 'package_expiring_soon',
   CREDIT_LOW = 'credit_low',
-  PAYMENT_SUCCESS = 'payment_success',
+  // ✅ FIX — was 'payment_success', model enum has 'payment_received'
+  PAYMENT_SUCCESS = 'payment_received',
   PAYMENT_FAILED = 'payment_failed',
   REFUND_PROCESSED = 'refund_processed',
   REVIEW_RECEIVED = 'review_received',
@@ -220,18 +237,38 @@ class NotificationService {
    */
   private async sendInAppNotification(_user: any, input: NotificationInput): Promise<boolean> {
     try {
+      const notificationId = generateSecureId();
+      const title = input.data.title || input.type;
+      const message = input.data.message || '';
+
       await Notification.create({
-        notificationId: generateSecureId(),
+        notificationId,
         userId: input.userId,
         type: input.type,
         category: 'system',
-        title: input.data.title || input.type,
-        message: input.data.message || '',
+        title,
+        message,
         data: input.data,
         priority: input.priority || 'normal',
         channels: { inApp: true, email: false, sms: false, push: false },
         status: { sent: true, read: false, clicked: false, sentAt: new Date() },
       });
+
+      // ✅ NEW: realtime push so mentor/mentee badge + list update instantly,
+      // same event name/shape the global notification service already uses
+      try {
+        emitToUser(input.userId, 'notification:new', {
+          notificationId,
+          type: input.type,
+          title,
+          message,
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (socketErr: any) {
+        logger.warn('Socket emit failed for mentorship notification:', socketErr.message);
+      }
+
       return true;
     } catch (error: any) {
       logger.error('In-app notification failed:', error);
@@ -239,6 +276,9 @@ class NotificationService {
     }
   }
 
+
+
+  
   /**
    * Build email content based on notification type
    */

@@ -86,14 +86,19 @@ const NotificationSchema = new Schema<INotification>(
         'email_verified',
         'account_suspended',
 
-        // Waitlist notifications
-        'waitlist_spot_available',
-        'waitlist_joined',
-
-        // Package notifications
-        'package_purchased',
-        'package_expiring_soon',
-        'package_expired',
+              // Waitlist notifications
+              'waitlist_spot_available',
+              'waitlist_joined',
+      
+              // Package notifications
+              'package_purchased',
+              'package_expiring_soon',
+              'package_expired',
+      
+              // ✅ ADD — service already sends these, model enum didn't allow them,
+              // so Notification.create() was silently failing for these two types
+              'query_answered',
+              'credit_low',
 
         // System notifications
         'maintenance_scheduled',

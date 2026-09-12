@@ -407,13 +407,15 @@ class MentorshipSessionService {
 
       logger.info(`✅ Booking added: ${session.sessionId} for mentee: ${input.menteeId}`);
 
-      // ✅ NEW: notify the mentor that a new booking request has come in
+           // ✅ FIX: was NotificationType.BOOKING_CONFIRMED — wrong, that type is
+      // meant for the mentee-facing "your booking is confirmed" message.
+      // Mentor here needs the distinct "new request" type.
       try {
         const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
         if (mentorDoc?.userId) {
           NotificationService.sendNotification({
             userId: mentorDoc.userId,
-            type: NotificationType.BOOKING_CONFIRMED,
+            type: NotificationType.NEW_BOOKING_REQUEST,
             channels: [NotificationChannel.IN_APP],
             data: {
               title: 'New Booking Request',
@@ -424,6 +426,8 @@ class MentorshipSessionService {
       } catch (notifErr: any) {
         logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
       }
+
+
 
       const myBooking = session.bookings[session.bookings.length - 1];
       return {
@@ -780,12 +784,32 @@ class MentorshipSessionService {
 
       await session.startSession();
       logger.info(`Session started: ${sessionId}`);
+
+      // ✅ NEW: notify mentee that the session has started
+      const confirmedBooking = session.bookings?.find((b: any) =>
+        b.status === BookingStatus.IN_PROGRESS || b.status === BookingStatus.CONFIRMED
+      );
+      const menteeIdToNotify = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy;
+      if (menteeIdToNotify) {
+        NotificationService.sendNotification({
+          userId: menteeIdToNotify,
+          type: NotificationType.SESSION_STARTED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Session Started',
+            message: `Your session "${session.title}" has started. Join now!`,
+          },
+        }).catch((e) => logger.error('Notification failed (startSession):', e));
+      }
+
       return session;
     } catch (error: any) {
       logger.error(`Failed to start session: ${error.message}`);
       throw error;
     }
   }
+
+  
 
   /**
    * Complete session (mentor only).
