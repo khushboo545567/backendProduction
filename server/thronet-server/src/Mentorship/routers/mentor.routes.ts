@@ -142,4 +142,28 @@ router.patch(
   mentorController.approveMentor as any
 );
 
+/**
+ * ⭐ NEW
+ * @route   PATCH /api/mentors/:id/save
+ * @desc    Toggle saving/bookmarking a mentor for the current user
+ * @access  Private
+ */
+router.patch(
+  '/:id/save',
+  AuthMiddleware.authenticate as any,
+  mentorController.toggleSaveMentor as any
+);
+
+/**
+ * ⭐ NEW
+ * @route   POST /api/mentors/:id/report
+ * @desc    Report a mentor profile
+ * @access  Private
+ */
+router.post(
+  '/:id/report',
+  AuthMiddleware.authenticate as any,
+  mentorController.reportMentor as any
+);
+
 export default router;

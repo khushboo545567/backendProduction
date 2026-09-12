@@ -20,6 +20,20 @@ export enum ExperienceLevel {
   ARCHITECT = 'architect',
 }
 
+// ⭐ NEW: report sub-document for the reportMentor feature
+export enum MentorReportStatus {
+  PENDING = 'pending',
+  REVIEWED = 'reviewed',
+  DISMISSED = 'dismissed',
+}
+
+export interface IMentorReport {
+  reportedBy: string; // userId of the reporter
+  reason: string;
+  status: MentorReportStatus;
+  createdAt: Date;
+}
+
 export interface IMentor extends TimeStamps, SoftDelete {
   _id: string;           // ✅ Keep for internal use
   mentorId: string;
@@ -113,6 +127,10 @@ export interface IMentor extends TimeStamps, SoftDelete {
     featuredOrder?: number;
   };
   trustScore?: ITrustScore;
+  // ⭐ NEW: userIds who saved/bookmarked this mentor
+  savedBy?: string[];
+  // ⭐ NEW: reports filed against this mentor
+  reports?: IMentorReport[];
   // profilePicUrl?: string; // 👈 ADD THIS - cloudinary URL
 }
 
@@ -152,6 +170,8 @@ export interface MentorWithRelations extends IMentor {
   company?: any; // Will be populated from Company Service
   upcomingSessions?: number;
   nextAvailableSlot?: Date;
+  // ⭐ NEW: computed per-request for the currently authenticated viewer
+  isSavedByCurrentUser?: boolean;
 }
 
 export interface CreateMentorInput {
@@ -193,4 +213,9 @@ export interface UpdateMentorInput {
   socialProof?: Partial<IMentor['socialProof']>;
   preferences?: Partial<IMentor['preferences']>;
   status?: MentorStatus;
+}
+
+// ⭐ NEW: input for reportMentor
+export interface ReportMentorInput {
+  reason: string;
 }

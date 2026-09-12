@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { Domain } from '@/shared/constants/domains';
-import { ExperienceLevel, IMentor, MentorStatus } from '@/Mentorship/interface/mentor.types';
+import { ExperienceLevel, IMentor, MentorStatus, MentorReportStatus } from '@/Mentorship/interface/mentor.types';
 
 export interface MentorDocument extends Omit<IMentor, '_id'>, Document {}
 
@@ -167,6 +167,25 @@ const MentorSchema = new Schema<MentorDocument>(
       version: { type: String, default: "1.0" },
       lastCalculatedAt: { type: Date }
     },
+    // ⭐ NEW: userIds who saved/bookmarked this mentor profile
+    savedBy: {
+      type: [String],
+      default: [],
+      index: true,
+    },
+    // ⭐ NEW: reports filed against this mentor
+    reports: [
+      {
+        reportedBy: { type: String, required: true },
+        reason: { type: String, required: true, trim: true, maxlength: 1000 },
+        status: {
+          type: String,
+          enum: Object.values(MentorReportStatus),
+          default: MentorReportStatus.PENDING,
+        },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date },
   },
@@ -293,6 +312,26 @@ MentorSchema.methods.toggleFeatured = async function (featured: boolean, order?:
     this.featured.featuredUntil = undefined;
     this.featured.featuredOrder = 0;
   }
+  return await this.save();
+};
+
+// ⭐ NEW: toggle a userId in savedBy — returns the new saved state (true = now saved)
+MentorSchema.methods.toggleSavedBy = async function (userId: string): Promise<boolean> {
+  const idx = (this.savedBy || []).indexOf(userId);
+  if (idx === -1) {
+    this.savedBy = [...(this.savedBy || []), userId];
+    await this.save();
+    return true;
+  }
+  this.savedBy = this.savedBy.filter((uid: string) => uid !== userId);
+  await this.save();
+  return false;
+};
+
+// ⭐ NEW: push a report onto this mentor
+MentorSchema.methods.addReport = async function (reportedBy: string, reason: string) {
+  this.reports = this.reports || [];
+  this.reports.push({ reportedBy, reason, status: MentorReportStatus.PENDING, createdAt: new Date() });
   return await this.save();
 };
 

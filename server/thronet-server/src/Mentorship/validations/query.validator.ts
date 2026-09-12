@@ -66,17 +66,16 @@ class QueryValidator {
    * Validate query answer
    */
   answerQuery = Joi.object({
-    answer: Joi.string()
-      .min(50)
-      .max(5000)
-      .required()
-      .messages({
-        'string.empty': 'Answer is required',
-        'string.min': 'Answer must be at least 50 characters',
-        'string.max': 'Answer cannot exceed 5000 characters',
-        'any.required': 'Answer is required',
-      }),
-  });
+  answer: Joi.string()
+    .min(10)  
+    .max(5000)
+    .required()
+    .messages({
+      'string.min': 'Answer must be at least 10 characters',
+      'string.max': 'Answer cannot exceed 5000 characters',
+      'any.required': 'Answer is required',
+    }),
+});
 
   /**
    * Validate follow-up question submission

@@ -94,6 +94,37 @@ class MentorRepository {
       .limit(limit)
       .lean();
   }
+
+  // ⭐ NEW: toggle a userId in savedBy atomically ($addToSet / $pull avoid
+  // read-then-save race conditions that a full-document .save() would have).
+  // Returns null if mentor not found, otherwise the new saved state.
+  async toggleSavedBy(mentorId: string, userId: string): Promise<{ saved: boolean } | null> {
+    const existing = await Mentor.findOne({ mentorId, isDeleted: false }).select('savedBy').lean();
+    if (!existing) return null;
+
+    const wasSaved = ((existing as any).savedBy || []).includes(userId);
+
+    if (wasSaved) {
+      await Mentor.updateOne({ mentorId, isDeleted: false }, { $pull: { savedBy: userId } });
+    } else {
+      await Mentor.updateOne({ mentorId, isDeleted: false }, { $addToSet: { savedBy: userId } });
+    }
+
+    return { saved: !wasSaved };
+  }
+
+  // ⭐ NEW: push a report onto a mentor's reports array
+  async addReport(
+    mentorId: string,
+    report: { reportedBy: string; reason: string; status: string; createdAt: Date }
+  ): Promise<any | null> {
+    const mentor = await Mentor.findOneAndUpdate(
+      { mentorId, isDeleted: false },
+      { $push: { reports: report } },
+      { new: true }
+    ).lean();
+    return mentor;
+  }
 }
 
 export default new MentorRepository();

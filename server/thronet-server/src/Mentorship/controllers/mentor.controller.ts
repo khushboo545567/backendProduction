@@ -14,6 +14,7 @@ import { TrustScoreService } from '@/Mentorship/services/trustScore.service';
 import mentorRepository from '@/Mentorship/repositories/mentor.repository';
 import { TrustScoreCalculator } from '../utils/trustScoreCalculator';
 import MentorshipAnalytics from '@/Mentorship/models/mentorshipAnalytics';
+
 class MentorController {
   /**
    * @route   POST /api/v1/mentorship/mentors
@@ -81,12 +82,10 @@ class MentorController {
         status: req.body.status,
       };
 
-      // Remove undefined fields before passing to service
       (Object.keys(updates) as (keyof UpdateMentorInput)[]).forEach((key) => {
         if (updates[key] === undefined) delete updates[key];
       });
 
-      // Extract uploaded files if any
       const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
       const profilePicFile = files?.['profilePic']?.[0];
       const bannerImageFile = files?.['bannerImage']?.[0];
@@ -110,12 +109,16 @@ class MentorController {
     try {
       const { id } = req.params;
       const authToken = req.headers.authorization?.split(' ')[1];
-      const mentor = await mentorService.getMentorById(id, authToken);
+      const mentor: any = await mentorService.getMentorById(id, authToken);
 
-      // ✅ record a mentor-profile view (fire-and-forget — never blocks/breaks the response)
       MentorshipAnalytics.recordEvent('mentor_analytics', 'mentor', id, 'views').catch((err: any) =>
         logger.error('Failed to record mentor profile view:', err)
       );
+
+      if (mentor && req.user?.id) {
+        const savedBy: string[] = mentor.savedBy || [];
+        mentor.isSavedByCurrentUser = savedBy.includes(req.user.id);
+      }
 
       ResponseHandler.success(res, 'Mentor profile fetched successfully', mentor);
     } catch (error: any) {
@@ -173,21 +176,17 @@ class MentorController {
 
       let trustScore = mentor.trustScore;
 
-      // 1. Identify if trustScore is missing OR if it's the empty Mongoose schema default
-      // Even if MongoDB defaults to `{ overall: 0, breakdown: ... }`, we treat it as uncalculated if all metrics are 0
-      const isUncalculated = 
-        !trustScore || 
-        Object.keys(trustScore).length === 0 || 
+      const isUncalculated =
+        !trustScore ||
+        Object.keys(trustScore).length === 0 ||
         (trustScore.overall === 0 && (!trustScore.metrics || trustScore.metrics.totalCompletedSessions === 0));
 
       if (isUncalculated) {
-        // 2. Try the primary service which also updates the Database
         const recalculatedScore = await TrustScoreService.recalculate(mentor.mentorId);
-        
+
         if (recalculatedScore) {
           trustScore = recalculatedScore;
         } else {
-          // 3. Complete Fallback: If DB errors out, dynamically generate it just for this request
           trustScore = TrustScoreCalculator.calculate({
             totalSessions: 0,
             completedSessions: 0,
@@ -336,6 +335,76 @@ class MentorController {
       );
     } catch (error: any) {
       logger.error('Error approving mentor:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   PATCH /api/v1/mentorship/mentors/:id/save
+   * @desc    Toggle saving/bookmarking a mentor for the current user
+   * @access  Private
+   */
+  async toggleSaveMentor(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params; // mentorId
+      const userId = req.user!.id;
+
+      const result = await mentorRepository.toggleSavedBy(id, userId);
+      if (!result) {
+        res.status(404).json({ success: false, message: 'Mentor not found' });
+        return;
+      }
+
+      logger.info(`Mentor ${id} ${result.saved ? 'saved' : 'unsaved'} by user: ${userId}`);
+      ResponseHandler.success(
+        res,
+        result.saved ? 'Mentor saved successfully' : 'Mentor removed from saved list',
+        { saved: result.saved }
+      );
+    } catch (error: any) {
+      logger.error('Error toggling saved mentor:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/v1/mentorship/mentors/:id/report
+   * @desc    Report a mentor profile
+   * @access  Private
+   *
+   * ✅ FIX: pehle ye seedha `Mentor` model use karta tha jo is file mein
+   * kabhi import hi nahi hua tha (compile error). Ab repository ke through
+   * jaata hai — baaki controller methods (createProfile, updateProfile,
+   * getMentorStats, etc.) bhi sab service/repository ke through hi jaate
+   * hain, isliye ye consistent hai.
+   */
+  async reportMentor(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params; // mentorId
+      const userId = req.user!.id;
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+
+      if (!reason) {
+        res.status(400).json({ success: false, message: 'Report reason is required' });
+        return;
+      }
+
+      const updatedMentor = await mentorRepository.addReport(id, {
+        reportedBy: userId,
+        reason,
+        status: 'pending',
+        createdAt: new Date(),
+      });
+
+      if (!updatedMentor) {
+        res.status(404).json({ success: false, message: 'Mentor not found' });
+        return;
+      }
+
+      logger.info(`Mentor ${id} reported by user: ${userId}`);
+      ResponseHandler.success(res, 'Report submitted. Our team will review it.');
+    } catch (error: any) {
+      logger.error('Error reporting mentor:', error);
       next(error);
     }
   }

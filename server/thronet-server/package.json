@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "description": "",
   "main": "server.ts",
-  "scripts": {
+    "scripts": {
     "dev": "nodemon",
-    "build": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
-   "start": "npx tsx server.ts"
-
+    "build": "node --max-old-space-size=12288 ./node_modules/typescript/bin/tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
+    "start": "npx tsx server.ts"
   },
   "nodemonConfig": {
     "watch": [

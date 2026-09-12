@@ -23,13 +23,52 @@ interface SubmitQueryInput {
 
 class QueryService {
   /**
+   * ✅ NAYA HELPER — Query document ke saath `mentee` object attach karta hai,
+   * exact shape jo frontend (QueriesPage.tsx) expect karta hai:
+   *   mentee: { firstName, lastName, fullName, profilePhotoId }
+   * Photo ka actual URL yahan nahi bhejte — frontend khud
+   * ProfileService.getProfilePhotoById(profilePhotoId) se resolve karta hai.
+   * Kahin bhi fail ho to bhi silently fallback deta hai, list render
+   * rukna nahi chahiye.
+   */
+  private async enrichWithMentee(query: any): Promise<any> {
+    const plain = query.toObject ? query.toObject() : query;
+    try {
+      const mentee = await User.findByUserId(plain.menteeId);
+      if (!mentee) {
+        return { ...plain, mentee: null };
+      }
+
+      const firstName = (mentee as any).firstName ?? '';
+      const lastName = (mentee as any).lastName ?? '';
+      const fullName = `${firstName} ${lastName}`.trim() || undefined;
+
+      return {
+        ...plain,
+        mentee: {
+          firstName,
+          lastName,
+          fullName,
+          profilePhotoId: (mentee as any).profilePhotoId ?? null,
+        },
+      };
+    } catch (err: any) {
+      logger.error('Failed to enrich query with mentee info:', err);
+      return { ...plain, mentee: null };
+    }
+  }
+
+  private async enrichListWithMentee(queries: any[]): Promise<any[]> {
+    return Promise.all(queries.map((q) => this.enrichWithMentee(q)));
+  }
+
+  /**
    * Submit a new query
    */
   async submitQuery(input: SubmitQueryInput, authToken?: string): Promise<any> {
     try {
       logger.info(`Submitting query to mentor ${input.mentorId}`);
 
-      // Validate mentor exists
       const mentor = await mentorService.getMentorById(input.mentorId, authToken);
       if (!mentor) {
         throw new NotFoundError('MENTOR_NOT_FOUND');
@@ -40,10 +79,8 @@ class QueryService {
         throw new NotFoundError('MENTEE_NOT_FOUND');
       }
 
-      // Get pricing
       const amount = mentor.pricing?.askQuery || 199;
 
-      // Create query
       const query = new Query({
         queryId: generateSecureId(),
         mentorId: input.mentorId,
@@ -86,7 +123,7 @@ class QueryService {
         logger.error('Failed to notify mentor of new query:', notifyErr);
       }
 
-      return query.toObject();
+      return this.enrichWithMentee(query);
     } catch (error: any) {
       logger.error('Failed to submit query:', error);
       throw error;
@@ -115,11 +152,19 @@ class QueryService {
   }
 
   /**
+   * ✅ NAYA — mentee-enriched single query, controller isko use kar sakta hai
+   */
+  async getQueryByIdEnriched(queryId: string, userId?: string, authToken?: string): Promise<any> {
+    const query = await this.getQueryById(queryId, userId, authToken);
+    return this.enrichWithMentee(query);
+  }
+
+  /**
    * Get all queries for a user
-   * 🔴 FIX: role === 'mentor' case pehle userId (auth id) seedha
-   * mentorId maan leta tha, jabki Query.mentorId asal mein
-   * Mentor.mentorId hota hai (alag ID). Ab mentorRepository se
-   * asli mentorId nikal ke filter karte hain.
+   * 🔴 FIX: role === 'mentor' case ke liye asli mentorId resolve karo
+   *         (pehle seedha auth userId hi mentorId maan liya jata tha)
+   * ✅ FIX: response ab `mentee: { firstName, lastName, fullName, profilePhotoId }`
+   *         ke saath enriched aata hai — frontend ka QueriesPage isi shape ko expect karta hai
    */
   async getAllQueries(
     userId: string,
@@ -142,7 +187,7 @@ class QueryService {
         if (!mentor) {
           throw new NotFoundError('MENTOR_NOT_FOUND');
         }
-        query.mentorId = mentor.mentorId; // ✅ fix: userId → mentor.mentorId
+        query.mentorId = mentor.mentorId;
       } else {
         query.menteeId = userId;
       }
@@ -158,8 +203,10 @@ class QueryService {
         queryRepository.count(query),
       ]);
 
+      const enrichedQueries = await this.enrichListWithMentee(queries);
+
       return {
-        queries,
+        queries: enrichedQueries,
         total,
         page,
         limit,
@@ -172,9 +219,8 @@ class QueryService {
 
   /**
    * Get pending queries for mentor
-   * 🔴 FIX: pehle seedha auth userId ko mentorId maan ke query chalti thi,
-   * isliye Queries tab hamesha empty aata tha (Query.mentorId !== userId).
-   * Ab pehle mentorRepository se asli mentorId nikaalte hain.
+   * 🔴 FIX: asli mentorId resolve karo
+   * ✅ FIX: mentee-enriched response
    */
   async getPendingQueries(userId: string, _authToken?: string): Promise<any[]> {
     try {
@@ -183,8 +229,8 @@ class QueryService {
         throw new NotFoundError('MENTOR_NOT_FOUND');
       }
 
-      const queries = await queryRepository.findPendingByMentorId(mentor.mentorId); // ✅ fix
-      return queries;
+      const queries = await queryRepository.findPendingByMentorId(mentor.mentorId);
+      return this.enrichListWithMentee(queries);
     } catch (error: any) {
       logger.error('Failed to fetch pending queries:', error);
       throw error;
@@ -243,7 +289,7 @@ class QueryService {
         logger.error('Failed to notify mentee of answered query:', notifyErr);
       }
 
-      return query;
+      return this.enrichWithMentee(query);
     } catch (error: any) {
       logger.error('Failed to answer query:', error);
       throw error;
@@ -299,7 +345,7 @@ class QueryService {
         logger.error('Failed to notify mentor of follow-up:', notifyErr);
       }
 
-      return query;
+      return this.enrichWithMentee(query);
     } catch (error: any) {
       logger.error('Failed to submit follow-up:', error);
       throw error;
@@ -353,7 +399,7 @@ class QueryService {
         logger.error('Failed to notify mentee of answered follow-up:', notifyErr);
       }
 
-      return query;
+      return this.enrichWithMentee(query);
     } catch (error: any) {
       logger.error('Failed to answer follow-up:', error);
       throw error;
@@ -389,7 +435,7 @@ class QueryService {
 
       logger.info(`Feedback added for query: ${queryId}`);
 
-      return query;
+      return this.enrichWithMentee(query);
     } catch (error: any) {
       logger.error('Failed to add feedback:', error);
       throw error;
@@ -398,10 +444,6 @@ class QueryService {
 
   /**
    * Get query statistics
-   * 🔴 FIX: role === 'mentor' case ke liye bhi asli mentorId
-   * resolve karke repository ko pass karo, warna stats bhi hamesha
-   * 0 aayenge kyunki repository userId se match kar raha hoga
-   * jabki Query documents mein mentorId store hai.
    */
   async getQueryStats(
     userId: string,
@@ -416,7 +458,7 @@ class QueryService {
         if (!mentor) {
           throw new NotFoundError('MENTOR_NOT_FOUND');
         }
-        idToUse = mentor.mentorId; // ✅ fix
+        idToUse = mentor.mentorId;
       }
 
       return await queryRepository.getStatsByUserId(idToUse, role);
