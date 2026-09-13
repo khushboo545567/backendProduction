@@ -82,7 +82,6 @@ export interface UserProfile extends IUser {
   avatar?: string;
   location?: string;
   website?: string;
-  dateOfBirth?: Date;
   phoneNumber?: string;
   verified?: boolean;
   createdAt?: Date;

@@ -11,7 +11,7 @@ import mongoose from 'mongoose';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 import sharp from 'sharp';
 import Constants from '@/shared/constants.util';
-import { Post, User } from '@/shared/models/index.models';
+import { Post, User, ProfilePhoto, Headline } from '@/shared/models/index.models';
 import { LoggerUtil } from '@/shared/logger.util';
 import { IPostEntry } from '@/Profile/models/Post.model';
 import NotificationService from '@/notifications/services/notification.service';
@@ -806,7 +806,15 @@ class PostService {
         try {
             LoggerUtil.info('Fetching post by entryId', { entryId, userId, correlationId });
 
-            const doc = await Post.findOne({ userId });
+            // Query by entryId across all user post documents (excluding soft-deleted posts)
+            const doc = await Post.findOne({
+                posts: {
+                    $elemMatch: {
+                        entryId,
+                        isDeleted: { $ne: true },
+                    },
+                },
+            });
             if (!doc) throw new Error('Post not found');
 
             const entry = doc.posts.find(
@@ -821,12 +829,71 @@ class PostService {
                 }
             }
 
+            // Enrich with author info from User / ProfilePhoto / Headline
+            let authorName = 'User';
+            let authorPhoto: string | undefined;
+            let headlineText = '';
+
+            try {
+                const author = await User.findOne({ userId: doc.userId }).select(
+                    'firstName lastName headlineId currentPosition company profilePhotoId'
+                );
+
+                if (author) {
+                    const fullName = [author.firstName, author.lastName].filter(Boolean).join(' ').trim();
+                    if (fullName) authorName = fullName;
+
+                    headlineText = author.currentPosition
+                        ? (author.company ? `${author.currentPosition} at ${author.company}` : author.currentPosition)
+                        : '';
+
+                    if (author.headlineId) {
+                        const headlineDoc = await Headline.findOne({ headlineId: author.headlineId });
+                        if (headlineDoc?.title) {
+                            headlineText = headlineDoc.title;
+                        }
+                    }
+
+                    const activePhoto = await ProfilePhoto.findActivePhoto(doc.userId);
+                    if (activePhoto?.cloudinarySecureUrl) {
+                        authorPhoto = activePhoto.cloudinarySecureUrl;
+                    } else if (author.profilePhotoId) {
+                        const photoDoc = await ProfilePhoto.findOne({ photoId: author.profilePhotoId });
+                        if (photoDoc?.cloudinarySecureUrl) {
+                            authorPhoto = photoDoc.cloudinarySecureUrl;
+                        }
+                    }
+                }
+            } catch (enrichErr: any) {
+                LoggerUtil.warn('Failed to enrich post author info', {
+                    error: enrichErr.message,
+                    authorUserId: doc.userId,
+                });
+            }
+
             LoggerUtil.info('Post fetched successfully', { entryId, userId, correlationId });
 
+            const entryObj = (entry as any).toObject ? (entry as any).toObject() : entry;
+            const imageMediaUrls = (entryObj.images || [])
+                .map((img: any) => img?.cloudinarySecureUrl || img?.cloudinaryUrl || (typeof img === 'string' ? img : ''))
+                .filter(Boolean);
+
             return {
-                ...(entry as any).toObject ? (entry as any).toObject() : entry,
-                userId,
+                ...entryObj,
+                userId: doc.userId,
                 documentPostId: doc.postId,
+                authorName,
+                authorPhoto,
+                headline: headlineText,
+                media: entryObj.media || imageMediaUrls,
+                image: entryObj.image || imageMediaUrls[0] || null,
+                imageUrl: entryObj.imageUrl || imageMediaUrls[0] || null,
+                user: {
+                    userId: doc.userId,
+                    name: authorName,
+                    avatar: authorPhoto,
+                    headline: headlineText,
+                },
             };
 
         } catch (error: any) {

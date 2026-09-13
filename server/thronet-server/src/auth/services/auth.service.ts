@@ -40,7 +40,7 @@ import userEmitter from '@/shared/events/emitters/user.emitter.js';
 import Constants from '@/shared/constants.util.js';
 import AuditProducer from '@/shared/kafka/producers/audit.producer';
 import NotificationService from './notification.service';
-import { User } from '@/shared/models/index.models';
+import { User, Contact } from '@/shared/models/index.models';
 
 import {
     UserRepository,
@@ -798,6 +798,14 @@ class AuthService {
 
             const profile = this.buildProfileResponse(user);
 
+            // Fetch Contact to determine hasDateOfBirth
+            const contact = await Contact.findOne({ userId }).select('birthday').lean();
+            if (contact && contact.birthday && contact.birthday.day && contact.birthday.month) {
+                profile.hasDateOfBirth = true;
+            } else {
+                profile.hasDateOfBirth = false;
+            }
+
             // Optional stats
             if (options.includeStats) {
                 const [activeSessions, activeDevices] = await Promise.all([
@@ -887,6 +895,14 @@ class AuthService {
             }
 
             const userResponse = this.buildProfileResponse(user);
+
+            // Fetch Contact to determine hasDateOfBirth
+            const contact = await Contact.findOne({ userId }).select('birthday').lean();
+            if (contact && contact.birthday && contact.birthday.day && contact.birthday.month) {
+                userResponse.hasDateOfBirth = true;
+            } else {
+                userResponse.hasDateOfBirth = false;
+            }
 
             if (options.includeStats) {
                 const [activeSessions, activeDevices] = await Promise.all([

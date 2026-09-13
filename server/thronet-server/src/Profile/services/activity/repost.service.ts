@@ -8,6 +8,7 @@ import { LoggerUtil } from '@/shared/logger.util';
 import AnalyticsService from '../analytics.service';
 import redisService from '@/services/redis.service';
 import { emitToUser } from '@/socket/index';
+import NotificationService from '@/notifications/services/notification.service';
 
 class RepostService {
 
@@ -132,6 +133,21 @@ class RepostService {
                 LoggerUtil.warn('Socket emit failed after repost (non-critical)', {
                     error: emitError.message,
                     repostedBy,
+                });
+            }
+
+            // ── Notify original post owner about the repost (non-critical) ──
+            try {
+                await NotificationService.notifyPostReposted(
+                    originalDoc.userId,   // post owner (recipient)
+                    repostedBy,           // who reposted (sender)
+                    originalPostEntryId   // original post's entryId
+                );
+            } catch (notifError: any) {
+                LoggerUtil.warn('Repost notification failed (non-critical)', {
+                    error: notifError.message,
+                    repostedBy,
+                    originalPostEntryId,
                 });
             }
 

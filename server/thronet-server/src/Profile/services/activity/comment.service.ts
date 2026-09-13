@@ -11,7 +11,7 @@ import { Comment, Post, User } from '@/shared/models/index.models';
 import { LoggerUtil } from '@/shared/logger.util';
 import redisService from '@/services/redis.service';
 
-////////////////////changed modified
+
 import NotificationService from '@/notifications/services/notification.service';
 // ==================== INTERFACES ====================
 
@@ -62,6 +62,7 @@ class CommentService {
             }
 
             let threadDepth = 0;
+            let parentCommentUserId: string | undefined;
 
             if (parentCommentId) {
                 const parentComment = await Comment.findOne({
@@ -81,6 +82,7 @@ class CommentService {
 
                 parentComment.replyCount++;
                 await parentComment.save();
+                parentCommentUserId = parentComment.userId;
             }
 
             const commentId = uuidv4();
@@ -129,6 +131,25 @@ class CommentService {
                         console.log('✅ [NOTIF] Post owner notified of comment:', postId);
                     } catch (err: any) {
                         console.warn('⚠️ [NOTIF] Comment notification failed (non-blocking):', err.message);
+                    }
+                });
+            }
+
+            // ✅ Notify comment owner if this is a reply
+            if (parentCommentId && parentCommentUserId && parentCommentUserId !== userId) {
+                setImmediate(async () => {
+                    try {
+                        await NotificationService.notifyCommentReplied(
+                            parentCommentUserId,
+                            userId,
+                            postId,
+                            parentCommentId,
+                            commentId,
+                            entry?.title
+                        );
+                        console.log('✅ [NOTIF] Comment owner notified of reply:', commentId);
+                    } catch (err: any) {
+                        console.warn('⚠️ [NOTIF] Comment reply notification failed (non-blocking):', err.message);
                     }
                 });
             }
@@ -548,6 +569,34 @@ class CommentService {
             comment.likesCount++;
             await comment.save();
 
+            // ✅ Notify comment owner
+            const commentOwnerId = comment.userId;
+            if (commentOwnerId && commentOwnerId !== userId) {
+                setImmediate(async () => {
+                    try {
+                        let postTitle: string | undefined;
+                        // For postTitle, we need to lookup Post. But we don't have Post imported directly in comment.service maybe?
+                        // Post is definitely imported because createComment uses it.
+                        // wait, let's verify if Post is available in scope. createComment uses Post.
+                        const PostModel = require('../../models/Post.model').default; // fallback if needed, but it's likely imported at the top. Let's just use Post.
+                        const post = await PostModel.findOne({ 'posts.entryId': comment.postId });
+                        const entry = post?.posts.find((p: any) => p.entryId === comment.postId && !p.isDeleted);
+                        postTitle = entry?.title;
+
+                        await NotificationService.notifyCommentLiked(
+                            commentOwnerId,
+                            userId,
+                            comment.postId,
+                            commentId,
+                            postTitle
+                        );
+                        console.log('✅ [NOTIF] Comment owner notified of like:', commentId);
+                    } catch (err: any) {
+                        console.warn('⚠️ [NOTIF] Comment like notification failed (non-blocking):', err.message);
+                    }
+                });
+            }
+
             LoggerUtil.info('Comment liked successfully', {
                 commentId,
                 userId,
@@ -577,6 +626,7 @@ class CommentService {
      */
     static async unlikeComment(commentId: string, userId: string): Promise<any> {
         const correlationId = uuidv4();
+      
 
         try {
             LoggerUtil.info('Unliking comment', {
@@ -602,6 +652,15 @@ class CommentService {
             comment.likedBy.splice(index, 1);
             comment.likesCount = Math.max(0, comment.likesCount - 1);
             await comment.save();
+
+            // Notification cleanup — remove the like notification since it's no longer valid
+setImmediate(async () => {
+    try {
+        await NotificationService.removeCommentLikeNotification(userId, commentId);
+    } catch (err: any) {
+        console.warn('⚠️ [NOTIF] Failed to remove comment like notification (non-blocking):', err.message);
+    }
+});
 
             LoggerUtil.info('Comment unliked successfully', {
                 commentId,

@@ -789,6 +789,11 @@ static async getPostAnalytics(
 
             const post = await PostService.getPostById(entryId, userId);
 
+            if (post.userId !== userId) {
+                ResponseUtil.forbidden(res, 'You can only view analytics for your own posts');
+                return;
+            }
+
             const analytics = {
                 entryId: post.entryId,
                 title: post.title,

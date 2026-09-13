@@ -20,7 +20,6 @@ export interface IUser extends Document {
     passwordSalt?: string;
     firstName: string;
     lastName?: string;
-    dateOfBirth?: Date;
     location?: string;
     currentPosition?: string;
     company?: string;
@@ -304,10 +303,8 @@ const UserSchema = new Schema<IUser, IUserModel>(
             trim: true,
             maxlength: [50, 'Last name cannot exceed 50 characters'],
         },
-        dateOfBirth: {
-            type: Date,
-            default: null,
-        },
+        // dateOfBirth removed — birthday data lives in Contact.birthday.{day,month,year}
+        // See: src/Profile/models/Contact.model.ts
         location: {
             type: String,
             trim: true,
@@ -744,7 +741,9 @@ const UserSchema = new Schema<IUser, IUserModel>(
 // NOTE: Sirf compound aur unique indexes yahan hain
 // Single-field indexes upar field definition mein  se handle hote hain
 
-UserSchema.index({ dateOfBirth: 1, status: 1 });
+// ⚠️ MIGRATION REQUIRED: run the following against the live DB to drop the obsolete index:
+// db.users.dropIndex({ dateOfBirth: 1, status: 1 })
+// This Mongoose definition is removed; the physical index must be dropped manually.
 UserSchema.index({ 'onboarding.workingProfile.startDate': 1, status: 1 });
 UserSchema.index({ email: 1, status: 1 });
 UserSchema.index({ userId: 1, emailVerified: 1 });
