@@ -39,3 +39,5 @@ Thumbs.db
 
 railway_utf8.env
 railway.env
+
+nginx/nginx.local.conf
