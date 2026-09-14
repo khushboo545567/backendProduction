@@ -436,20 +436,37 @@ class MentorshipSessionService {
         
 
 
-        // ✅ NEW: confirm to the mentee that their booking request was sent
-        NotificationService.sendNotification({
-          userId: input.menteeId,
-          type: NotificationType.BOOKING_CONFIRMED,
-          channels: [NotificationChannel.IN_APP],
-          data: {
-            title: 'Booking Request Sent',
-            message: `Your booking request for "${session.title}" has been sent to the mentor.`,
-          },
-        }).catch((e) => logger.error('Notification failed (bookSession → mentee):', e));
-      } catch (notifErr: any) {
-        logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
-      }
+               // ✅ NEW: confirm to the mentee that their booking request was sent
+               NotificationService.sendNotification({
+                userId: input.menteeId,
+                type: NotificationType.BOOKING_CONFIRMED,
+                channels: [NotificationChannel.IN_APP],
+                data: {
+                  title: 'Booking Request Sent',
+                  message: `Your booking request for "${session.title}" has been sent to the mentor.`,
+                },
+              }).catch((e) => logger.error('Notification failed (bookSession → mentee):', e));
+      
+              // ✅ NEW: payment-success notification to the mentee.
+              // Skip for FREE bookings — nothing was actually paid.
+              if (input.paymentMethod !== PaymentMethod.FREE) {
+                NotificationService.sendNotification({
+                  userId: input.menteeId,
+                  type: NotificationType.PAYMENT_SUCCESS,
+                  channels: [NotificationChannel.IN_APP],
+                  data: {
+                    title: 'Payment Successful',
+                    message: `Your payment of ₹${input.pricing.totalAmount} for "${session.title}" was successful.`,
+                    amount: input.pricing.totalAmount,
+                    transactionId: session.sessionId,
+                  },
+                }).catch((e) => logger.error('Notification failed (bookSession → payment):', e));
+              }
+            } catch (notifErr: any) {
+              logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
+            }
 
+            
           // ✅ FIX: session.bookings is optional in the type — use safe access
       // instead of direct indexing (pre-existing TS18048 build error).
       const bookings = session.bookings ?? [];

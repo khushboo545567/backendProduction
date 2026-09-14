@@ -6,6 +6,7 @@ import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 
 
 class AvailabilityController {
+  
   async createAvailability(req: Request, res: Response): Promise<void> {
     try {
       const { mentorId, date, slots, timezone, isRecurring, dayOfWeek } = req.body;
@@ -22,9 +23,13 @@ class AvailabilityController {
       ResponseHandler.created(res, 'Availability created successfully', availability);
     } catch (error: any) {
       logger.error('Create availability error:', error);
-      ResponseHandler.error(res, 'Failed to create availability', 500, error);
+      // ✅ FIX: forward the REAL error message + correct status code
+      // (NotFoundError/BadRequestError/ConflictError all set .statusCode)
+      // instead of always masking it as a generic 500.
+      ResponseHandler.error(res, error.message || 'Failed to create availability', error.statusCode || 500, error);
     }
   }
+  
 
   async bulkCreateAvailability(req: Request, res: Response): Promise<void> {
     try {
