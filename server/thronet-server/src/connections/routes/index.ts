@@ -26,6 +26,21 @@ router.use('/block', blockRouter);
 router.use('/profile-views', profileviewsRoutes);
 router.use('/network', networkRoutes);
 router.use('/suggestions', suggestionsRoutes);
+router.post('/test/birthday-notifications', async (_req, res) => {
+  try {
+    await BirthdayAnniversaryCron.triggerManually();
+
+    res.json({
+      status: 'success',
+      message: 'Birthday notification cron triggered successfully',
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Birthday cron failed',
+    });
+  }
+});
 
 // Initialize background crons
 ProfileViewDigestCron.init();

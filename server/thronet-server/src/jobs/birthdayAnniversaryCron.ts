@@ -1,137 +1,137 @@
 // src/jobs/birthdayAnniversaryCron.ts
 //
-// Once a day, finds users whose birthday or work anniversary falls on today's
-// date and notifies each of their active connections. Follows the same
-// static-class cron pattern as profileViewDigestCron.ts (registered the same
-// way, from connections/routes/index.ts).
+// Daily cron job that finds users whose birthday falls on today's date
+// and creates connection_birthday notifications for each of their active connections.
 
 import cron from 'node-cron';
 import logger from '@/shared/logger.util';
 import User from '@/auth/models/User.model';
+import Contact from '@/Profile/models/Contact.model';
 import Connection from '@/connections/models/Connection';
 import NotificationService from '@/notifications/services/notification.service';
 
 class BirthdayAnniversaryCron {
   private static isRunning = false;
+  private static initialized = false;
 
   static init(): void {
-    // Once a day, 8:00 AM server time
-    cron.schedule('0 8 * * *', async () => {
-      if (this.isRunning) {
-        logger.warn('Birthday/anniversary cron skipped — previous run still in progress');
-        return;
-      }
-      this.isRunning = true;
-      try {
-        logger.info('Running birthday/work-anniversary cron job');
-        await this.runDigest();
-        logger.info('Birthday/work-anniversary cron job completed');
-      } catch (error) {
-        logger.error('Error in birthday/work-anniversary cron job', {
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      } finally {
-        this.isRunning = false;
-      }
-    });
+    if (this.initialized) {
+      logger.warn('BirthdayAnniversaryCron.init() already called — ignoring duplicate registration');
+      return;
+    }
+    this.initialized = true;
 
-    logger.info('Birthday/work-anniversary cron job initialized');
+    // Run every day at 08:00 AM Asia/Kolkata time
+    cron.schedule(
+      '0 8 * * *',
+      async () => {
+        if (this.isRunning) {
+          logger.warn('Birthday cron skipped — previous run still in progress');
+          return;
+        }
+        this.isRunning = true;
+        try {
+          logger.info('Running daily connection birthday cron job');
+          await this.runDigest();
+
+          logger.info('Daily connection birthday cron job completed');
+        } catch (error) {
+          logger.error('Error in connection birthday cron job', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        } finally {
+          this.isRunning = false;
+        }
+      },
+      {
+        timezone: 'Asia/Kolkata',
+      }
+    );
+
+    logger.info('Connection birthday cron job initialized (08:00 Asia/Kolkata)');
   }
 
   /**
-   * Finds today's celebrants (by month/day, ignoring year) and notifies
-   * each of their active, non-archived connections.
+   * Finds today's birthday celebrants and notifies each of their active,
+   * non-archived connections.
    */
   private static async runDigest(): Promise<void> {
-    const now = new Date();
-    const todayMonth = now.getMonth() + 1; // Mongo $month is 1-indexed
-    const todayDay = now.getDate();
+    // 1. Determine today's date in Asia/Kolkata timezone
+    const kolkataDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const [todayYear, todayMonth, todayDay] = kolkataDateStr.split('-').map(Number);
 
-    const [birthdayUsers, anniversaryUsers] = await Promise.all([
-      User.aggregate([
-        {
-          $match: {
-            dateOfBirth: { $ne: null },
-            status: 'active',
-            'flags.isDeleted': false,
-          },
-        },
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $eq: [{ $month: '$dateOfBirth' }, todayMonth] },
-                { $eq: [{ $dayOfMonth: '$dateOfBirth' }, todayDay] },
-              ],
-            },
-          },
-        },
-        { $project: { userId: 1 } },
-      ]),
+    // Leap-year check: if non-leap year and today is Feb 28, include Feb 29 birthdays
+    const isLeapYear = (year: number) => (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+    const isFeb28NonLeap = todayMonth === 2 && todayDay === 28 && !isLeapYear(todayYear);
 
-      // Work anniversary: still-current role (no endDate) that started on
-      // this month/day in a previous year.
-      User.aggregate([
-        {
-          $match: {
-            'onboarding.workingProfile.startDate': { $ne: null },
-            'onboarding.workingProfile.endDate': null,
-            status: 'active',
-            'flags.isDeleted': false,
-          },
-        },
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $eq: [{ $month: '$onboarding.workingProfile.startDate' }, todayMonth] },
-                { $eq: [{ $dayOfMonth: '$onboarding.workingProfile.startDate' }, todayDay] },
-                { $lt: [{ $year: '$onboarding.workingProfile.startDate' }, now.getFullYear()] },
-              ],
-            },
-          },
-        },
-        { $project: { userId: 1 } },
-      ]),
-    ]);
+    // 2. Query Contact collection for birthdays
+    const contactQuery: any = {
+      isDeleted: false,
+      isArchived: false,
+      'birthday.month': todayMonth,
+    };
 
-    logger.info('Birthday/anniversary celebrants found', {
+    if (isFeb28NonLeap) {
+      contactQuery['birthday.day'] = { $in: [28, 29] };
+    } else {
+      contactQuery['birthday.day'] = todayDay;
+    }
+
+    const contacts = await Contact.find(contactQuery).select('userId').lean();
+    const contactUserIds = contacts.map((c: any) => c.userId);
+
+    // 3. Filter against User collection to ensure they are active and not deleted
+    let birthdayUsers: any[] = [];
+    if (contactUserIds.length > 0) {
+      birthdayUsers = await User.find({
+        userId: { $in: contactUserIds },
+        status: 'active',
+        'flags.isDeleted': false,
+      })
+        .select('userId')
+        .lean();
+    }
+
+
+
+    logger.info('Birthday celebrants found for today', {
+      date: kolkataDateStr,
       birthdayCount: birthdayUsers.length,
-      anniversaryCount: anniversaryUsers.length,
     });
 
-    await Promise.all([
-      this.notifyCelebrants(birthdayUsers.map((u) => u.userId), 'birthday'),
-      this.notifyCelebrants(anniversaryUsers.map((u) => u.userId), 'work_anniversary'),
-    ]);
-  }
+    if (!birthdayUsers.length) {
+      return;
+    }
 
-  private static async notifyCelebrants(
-    celebrantIds: string[],
-    occasion: 'birthday' | 'work_anniversary'
-  ): Promise<void> {
-    for (const celebrantId of celebrantIds) {
+    // 4. For each celebrant, find active connections and notify them
+    for (const celebrant of birthdayUsers) {
+      const celebrantId = celebrant.userId;
+
+
       try {
         const connections = await Connection.find({
           $or: [{ fromUserId: celebrantId }, { toUserId: celebrantId }],
           status: 'active',
           isArchived: false,
-        }).select('fromUserId toUserId').lean();
+        })
+          .select('fromUserId toUserId')
+          .lean();
 
-        const recipientIds = [
-          ...new Set(
-            connections.map((c: any) =>
-              c.fromUserId === celebrantId ? c.toUserId : c.fromUserId
-            )
-          ),
-        ];
+        // Extract connection user IDs, remove duplicates and self IDs
+        const recipientIds = Array.from(
+          new Set(
+            connections
+              .map((c: any) => (c.fromUserId === celebrantId ? c.toUserId : c.fromUserId))
+              .filter((id: string) => id && id !== celebrantId)
+          )
+        );
 
         if (!recipientIds.length) continue;
 
-        await NotificationService.notifyBirthdayOrAnniversary(celebrantId, occasion, recipientIds);
+        await NotificationService.notifyConnectionBirthdaysBatch(celebrantId, recipientIds);
       } catch (userError) {
-        // One user's failure shouldn't block the rest of the batch
-        logger.warn(`Failed to process ${occasion} notifications for user`, {
+        // Individual user failure should not halt the entire batch
+        logger.warn('Failed to process birthday notifications for celebrant', {
           celebrantId,
           error: userError instanceof Error ? userError.message : 'Unknown error',
         });
@@ -139,7 +139,7 @@ class BirthdayAnniversaryCron {
     }
   }
 
-  /** Manual trigger for testing, mirrors ProfileViewDigestCron's triggerManually() convention */
+  /** Manual trigger for testing and admin operations */
   static async triggerManually(): Promise<void> {
     await this.runDigest();
   }

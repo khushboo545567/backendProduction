@@ -560,41 +560,41 @@ const updateProfileSchema = Joi.object({
 
 
 
-         // ✅ ADD THESE 4 NEW FIELDS
+    // ✅ ADD THESE 4 NEW FIELDS
     currentPosition: Joi.string()
-    .max(100)
-    .trim()
-    .optional()
-    .allow('', null)
-    .messages({
-        'string.max': 'Current position cannot exceed 100 characters',
-    }),
+        .max(100)
+        .trim()
+        .optional()
+        .allow('', null)
+        .messages({
+            'string.max': 'Current position cannot exceed 100 characters',
+        }),
 
-company: Joi.string()
-    .max(100)
-    .trim()
-    .optional()
-    .allow('', null)
-    .messages({
-        'string.max': 'Company name cannot exceed 100 characters',
-    }),
+    company: Joi.string()
+        .max(100)
+        .trim()
+        .optional()
+        .allow('', null)
+        .messages({
+            'string.max': 'Company name cannot exceed 100 characters',
+        }),
 
-education: Joi.string()
-    .max(150)
-    .trim()
-    .optional()
-    .allow('', null)
-    .messages({
-        'string.max': 'Education cannot exceed 150 characters',
-    }),
+    education: Joi.string()
+        .max(150)
+        .trim()
+        .optional()
+        .allow('', null)
+        .messages({
+            'string.max': 'Education cannot exceed 150 characters',
+        }),
 
-pronouns: Joi.string()
-    .valid('He/Him', 'She/Her', 'They/Them', 'Other')
-    .optional()
-    .allow('', null)
-    .messages({
-        'any.only': 'Pronouns must be one of: He/Him, She/Her, They/Them, Other',
-    }),
+    pronouns: Joi.string()
+        .valid('He/Him', 'She/Her', 'They/Them', 'Other')
+        .optional()
+        .allow('', null)
+        .messages({
+            'any.only': 'Pronouns must be one of: He/Him, She/Her, They/Them, Other',
+        }),
 
 
     // ==================== ONBOARDING ====================

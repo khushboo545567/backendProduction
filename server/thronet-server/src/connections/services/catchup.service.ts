@@ -1,5 +1,5 @@
 // src/connections/services/catchup.service.ts
-import { Connection, User } from '@/shared/models/index.models';
+import { Connection, User, Contact } from '@/shared/models/index.models';
 import Experience from '@/Profile/models/Experience.model';
 import { LoggerUtil } from '@/shared/logger.util';
 
@@ -62,7 +62,7 @@ class CatchUpService {
                 userId: { $in: connectedUserIds },
                 status: 'active',
             })
-                .select('userId firstName lastName profilePhotoId dateOfBirth')
+                .select('userId firstName lastName profilePhotoId')
                 .lean();
 
             // 3. Un users ki current (ongoing) experience fetch karo (single bulk query)
@@ -120,11 +120,34 @@ class CatchUpService {
                 }
             }
 
-            // 5. Birthdays — User.dateOfBirth se
+            // 5. Birthdays — Contact.birthday se
+            const contacts = await Contact.find({
+                userId: { $in: connectedUserIds },
+                isDeleted: false,
+                isArchived: false,
+            })
+                .select('userId birthday')
+                .lean();
+
+            const contactsMap = new Map(contacts.map((c: any) => [c.userId, c]));
+
+            const kolkataDateStr = today.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const [todayYear, todayMonth, todayDay] = kolkataDateStr.split('-').map(Number);
+            const isLeapYear = (y: number) => (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+            const isFeb28NonLeap = todayMonth === 2 && todayDay === 28 && !isLeapYear(todayYear);
+
             for (const user of users as any[]) {
-                if (!user.dateOfBirth) continue;
-                const dob = new Date(user.dateOfBirth);
-                if (isSameMonthDay(dob, today)) {
+                const contact = contactsMap.get(user.userId) as any;
+                if (!contact || !contact.birthday) continue;
+
+                const bMonth = contact.birthday.month;
+                const bDay = contact.birthday.day;
+
+                const isBirthdayToday =
+                    (bMonth === todayMonth && bDay === todayDay) ||
+                    (isFeb28NonLeap && bMonth === 2 && bDay === 29);
+
+                if (isBirthdayToday) {
                     items.push({
                         type: 'birthday',
                         userId: user.userId,

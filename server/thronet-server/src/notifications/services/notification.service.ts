@@ -59,12 +59,7 @@ class NotificationService {
                 c.fromUserId === posterId ? c.toUserId : c.fromUserId
             );
 
-            console.log(`[POST NOTIFICATION] Post ID: ${entryId}`);
-            console.log(`[POST NOTIFICATION] Post Author ID: ${posterId}`);
-            console.log(`[FOLLOWERS] Followers found: ${followerIds.length}`);
-            console.log(`[FOLLOWERS] Follower IDs: ${JSON.stringify(followerIds)}`);
-            console.log(`[CONNECTIONS] Connections found: ${connectionIds.length}`);
-            console.log(`[CONNECTIONS] Connected User IDs: ${JSON.stringify(connectionIds)}`);
+
 
             // ── 3. Merge + deduplicate across both groups ──────────────────
             const allRecipientIds = [...new Set([...followerIds, ...connectionIds])];
@@ -72,7 +67,7 @@ class NotificationService {
             // Remove the poster themselves from recipients (safety guard)
             const candidateIds = allRecipientIds.filter((id) => id !== posterId);
 
-            console.log(`[RECIPIENTS] Total recipients (after dedup): ${candidateIds.length}`);
+
 
             if (!candidateIds.length) return;
 
@@ -86,8 +81,7 @@ class NotificationService {
             const alreadyNotified = new Set(existingNotifs.map((n: any) => n.recipientId));
             const recipientIds = candidateIds.filter((id) => !alreadyNotified.has(id));
 
-            console.log(`[NOTIFICATION] Already notified: ${alreadyNotified.size}`);
-            console.log(`[NOTIFICATION] New notifications to create: ${recipientIds.length}`);
+
 
             if (!recipientIds.length) return;
 
@@ -111,7 +105,7 @@ class NotificationService {
             });
 
             await Notification.insertMany(docs, { ordered: false });
-            console.log(`[NOTIFICATION] Notifications saved: ${docs.length}`);
+
 
             // ── 6. Real-time Socket.IO emit ────────────────────────────────
             try {
@@ -129,10 +123,8 @@ class NotificationService {
                         isRead: false,
                         createdAt: new Date().toISOString(),
                     };
-                    console.log(`[SOCKET] Emitting notification:new → user:${recipientId}`);
                     io.to(`user:${recipientId}`).emit('notification:new', payload);
                 });
-                console.log(`[SOCKET] notification:new emitted to ${recipientIds.length} recipients`);
             } catch (socketErr) {
                 // Socket is non-critical — DB record already saved
                 logger.warn('Socket emit failed for post notifications', {
@@ -166,8 +158,8 @@ class NotificationService {
             const firstSuggestion = suggestions[0];
             const senderId = firstSuggestion.id;
             const senderName = firstSuggestion.name;
-            const senderPhoto = firstSuggestion.image && firstSuggestion.image !== 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSdYRNQDghH1JvFXro2Yz3iWNmmFAubFZ-RGQ&s' 
-                ? firstSuggestion.image 
+            const senderPhoto = firstSuggestion.image && firstSuggestion.image !== 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSdYRNQDghH1JvFXro2Yz3iWNmmFAubFZ-RGQ&s'
+                ? firstSuggestion.image
                 : null;
 
             let message = '';
@@ -244,7 +236,7 @@ class NotificationService {
         return NotificationService.notifyPostRecipients(posterId, entryId, postTitle);
     }
 
-    ////////Changed Modified
+
     /**
          * Called after a post is liked.
          * Notifies the post owner (unless they liked their own post).
@@ -313,7 +305,94 @@ class NotificationService {
         }
     }
 
-    ////////////////////////////////Changed Modified
+    /**
+     * Called after a post is reposted.
+     * Notifies the original post owner (unless they reposted their own post).
+     * Duplicate-repost protection is already enforced by Repost.hasUserReposted()
+     * in repost.service.ts, but we add a belt-and-suspenders DB guard here to
+     * prevent a duplicate notification in any edge-case retry scenario.
+     */
+    static async notifyPostReposted(
+        postOwnerId: string,
+        reposterId: string,
+        originalPostEntryId: string
+    ): Promise<void> {
+        try {
+            if (postOwnerId === reposterId) return; // don't notify yourself
+
+            const reposter = await User.findOne({ userId: reposterId })
+                .select('firstName lastName profilePhotoId')
+                .lean();
+            if (!reposter) return;
+
+            const reposterName = `${reposter.firstName} ${(reposter as any).lastName || ''}`.trim();
+
+            // Resolve real Cloudinary URL — profilePhotoId is a UUID ref, not a URL
+            let reposterPhoto: string | null = null;
+            if ((reposter as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (reposter as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                reposterPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            const message = `${reposterName} reposted your post`;
+            const notificationId = uuidv4();
+
+            // Guard: only one repost-notification per (reposter, postOwner, post) pair
+            const existing = await Notification.findOne({
+                recipientId: postOwnerId,
+                senderId: reposterId,
+                type: 'post_reposted',
+                entityId: originalPostEntryId,
+            }).select('_id').lean();
+            if (existing) return;
+
+            await Notification.create({
+                notificationId,
+                recipientId: postOwnerId,
+                senderId: reposterId,
+                senderName: reposterName,
+                senderPhoto: reposterPhoto,
+                type: 'post_reposted' as const,
+                entityId: originalPostEntryId,
+                entityType: 'post' as const,
+                message,
+                isRead: false,
+            });
+
+            try {
+                const io = getIO();
+                io.to(`user:${postOwnerId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'post_reposted',
+                    senderId: reposterId,
+                    senderName: reposterName,
+                    senderPhoto: reposterPhoto,
+                    entityId: originalPostEntryId,
+                    entityType: 'post',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for repost notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Repost notification sent', { postOwnerId, reposterId, originalPostEntryId });
+        } catch (err) {
+            logger.error('notifyPostReposted failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                postOwnerId,
+                reposterId,
+                originalPostEntryId,
+            });
+        }
+    }
+
+
     /**
      * Called after a comment is added to a post.
      * Notifies the post owner (unless they commented on their own post).
@@ -383,8 +462,178 @@ class NotificationService {
         }
     }
 
+    /**
+     * Called after a comment is liked.
+     * Notifies the comment owner (unless they liked their own comment).
+     */
+    static async notifyCommentLiked(
+        commentOwnerId: string,
+        likerId: string,
+        postId: string,
+        commentId: string,
+        postTitle?: string
+    ): Promise<void> {
+        try {
+            if (commentOwnerId === likerId) return; // don't notify yourself
 
-    ////////////////////////////////Changed Modified
+            const liker = await User.findOne({ userId: likerId }).select('firstName lastName profilePhotoId').lean();
+            if (!liker) return;
+
+            const likerName = `${liker.firstName} ${(liker as any).lastName || ''}`.trim();
+            const likerPhoto = (liker as any).profilePhotoId || null;
+
+            const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'a post';
+            const message = `${likerName} liked your comment on ${shortTitle}`;
+
+            const notificationId = uuidv4();
+            const idempotencyKey = `comment_liked_${likerId}_${commentId}`;
+
+            // Use findOneAndUpdate with upsert to prevent duplicates on unlike/re-like
+            const existing = await Notification.findOne({ idempotencyKey }).lean();
+            if (existing) {
+                // Already notified for this like — update timestamp so it resurfaces
+                await Notification.updateOne(
+                    { idempotencyKey },
+                    { $set: { isRead: false, senderName: likerName, senderPhoto: likerPhoto, message } }
+                );
+                return;
+            }
+
+            await Notification.create({
+                notificationId,
+                recipientId: commentOwnerId,
+                senderId: likerId,
+                senderName: likerName,
+                senderPhoto: likerPhoto,
+                type: 'comment_liked',
+                entityId: postId,
+                entityIds: [commentId],
+                entityType: 'post',
+                message,
+                isRead: false,
+                idempotencyKey,
+            });
+
+            try {
+                const io = getIO();
+                io.to(`user:${commentOwnerId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'comment_liked',
+                    senderId: likerId,
+                    senderName: likerName,
+                    senderPhoto: likerPhoto,
+                    entityId: postId,
+                    entityIds: [commentId],
+                    entityType: 'post',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for comment like notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Comment like notification sent', { commentOwnerId, likerId, commentId });
+        } catch (err) {
+            logger.error('notifyCommentLiked failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                commentOwnerId,
+                likerId,
+                commentId,
+            });
+        }
+    }
+
+    /**
+     * Called after someone replies to a comment.
+     * Notifies the parent comment owner (unless they replied to themselves).
+     */
+    static async notifyCommentReplied(
+        commentOwnerId: string,
+        replierId: string,
+        postId: string,
+        parentCommentId: string,
+        replyCommentId: string,
+        postTitle?: string
+    ): Promise<void> {
+        try {
+            if (commentOwnerId === replierId) return; // don't notify yourself
+
+            const replier = await User.findOne({ userId: replierId }).select('firstName lastName profilePhotoId').lean();
+            if (!replier) return;
+
+            const replierName = `${replier.firstName} ${(replier as any).lastName || ''}`.trim();
+            const replierPhoto = (replier as any).profilePhotoId || null;
+
+            const shortTitle = postTitle ? `"${postTitle.slice(0, 60)}${postTitle.length > 60 ? '...' : ''}"` : 'a post';
+            const message = `${replierName} replied to your comment on ${shortTitle}`;
+
+            const notificationId = uuidv4();
+
+            await Notification.create({
+                notificationId,
+                recipientId: commentOwnerId,
+                senderId: replierId,
+                senderName: replierName,
+                senderPhoto: replierPhoto,
+                type: 'comment_replied',
+                entityId: postId,
+                entityIds: [parentCommentId, replyCommentId],
+                entityType: 'post',
+                message,
+                isRead: false,
+            });
+
+            try {
+                const io = getIO();
+                io.to(`user:${commentOwnerId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'comment_replied',
+                    senderId: replierId,
+                    senderName: replierName,
+                    senderPhoto: replierPhoto,
+                    entityId: postId,
+                    entityIds: [parentCommentId, replyCommentId],
+                    entityType: 'post',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for comment reply notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Comment reply notification sent', { commentOwnerId, replierId, replyCommentId });
+        } catch (err) {
+            logger.error('notifyCommentReplied failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                commentOwnerId,
+                replierId,
+                replyCommentId,
+            });
+        }
+    }
+
+     /**
+     * Removes a comment-like notification when the like is retracted (unlike).
+     */
+    static async removeCommentLikeNotification(likerId: string, commentId: string): Promise<void> {
+        try {
+            const idempotencyKey = `comment_liked_${likerId}_${commentId}`;
+            await Notification.deleteOne({ idempotencyKey, isRead: false });
+        } catch (err) {
+            logger.warn('removeCommentLikeNotification failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                likerId,
+                commentId,
+            });
+        }
+    }
+
     /**
      * Called after someone is @mentioned in a post or comment.
      * Notifies the mentioned user (unless they mentioned themselves).
@@ -714,7 +963,7 @@ class NotificationService {
                 senderId: celebrantUserId,
                 senderName: celebrantName,
                 senderPhoto: celebrantPhoto,
-                type: occasion ,
+                type: occasion,
                 entityId: celebrantUserId,
                 entityType: 'user' as const,
                 message,
@@ -756,6 +1005,253 @@ class NotificationService {
                 celebrantUserId,
                 occasion,
             });
+        }
+    }
+
+    /**
+     * Notifies a single connection about a user's birthday.
+     * Prevents duplicate notifications per recipient-celebrant-date using idempotencyKey.
+     */
+    static async notifyConnectionBirthday(
+        recipientId: string,
+        celebrantUserId: string
+    ): Promise<void> {
+        try {
+            // Never notify the celebrant themselves
+            if (!recipientId || !celebrantUserId || recipientId === celebrantUserId) {
+                return;
+            }
+
+            // Generate today's Asia/Kolkata date string (YYYY-MM-DD)
+            const todayDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const idempotencyKey = `${recipientId}:${celebrantUserId}:connection_birthday:${todayDateStr}`;
+
+            // Prevent duplicate notifications using the idempotency key (pre-check)
+            const existing = await Notification.findOne({ idempotencyKey }).select('_id').lean();
+            if (existing) {
+                logger.debug('Birthday notification already exists for today, skipping', {
+                    recipientId,
+                    celebrantUserId,
+                    idempotencyKey,
+                });
+                return;
+            }
+
+            // Fetch the celebrant from User using userId
+            const celebrant = await User.findOne({ userId: celebrantUserId })
+                .select('firstName lastName profilePhotoId')
+                .lean();
+            if (!celebrant) {
+                logger.warn('notifyConnectionBirthday: celebrant not found', { celebrantUserId });
+                return;
+            }
+
+            // Resolve firstName + lastName
+            const celebrantName = `${celebrant.firstName} ${(celebrant as any).lastName || ''}`.trim();
+
+            // Resolve profilePhotoId through ProfilePhoto and use cloudinarySecureUrl
+            let celebrantPhoto: string | null = null;
+            if ((celebrant as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (celebrant as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                celebrantPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            const message = `Today is ${celebrantName}'s birthday 🎂`;
+            const notificationId = uuidv4();
+
+            try {
+                await Notification.create({
+                    notificationId,
+                    recipientId,
+                    senderId: celebrantUserId,
+                    senderName: celebrantName,
+                    senderPhoto: celebrantPhoto,
+                    type: 'connection_birthday' as const,
+                    entityId: celebrantUserId,
+                    entityType: 'user' as const,
+                    message,
+                    isRead: false,
+                    idempotencyKey,
+                });
+            } catch (createErr: any) {
+                if (createErr.code === 11000) {
+                    logger.info('Duplicate connection_birthday notification suppressed by unique index', {
+                        idempotencyKey,
+                        recipientId,
+                        celebrantUserId,
+                    });
+                    return;
+                }
+                throw createErr;
+            }
+
+            // Emit notification:new through Socket.IO to user:${recipientId}
+            try {
+                const io = getIO();
+                io.to(`user:${recipientId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'connection_birthday',
+                    senderId: celebrantUserId,
+                    senderName: celebrantName,
+                    senderPhoto: celebrantPhoto,
+                    entityId: celebrantUserId,
+                    entityType: 'user',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr: any) {
+                logger.warn('Socket emit failed for connection_birthday notification', {
+                    recipientId,
+                    celebrantUserId,
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Connection birthday notification sent successfully', {
+                recipientId,
+                celebrantUserId,
+                idempotencyKey,
+            });
+        } catch (err: any) {
+            logger.error('notifyConnectionBirthday failed', {
+                recipientId,
+                celebrantUserId,
+                error: err instanceof Error ? err.message : 'unknown',
+            });
+        }
+    }
+
+    /**
+     * Batch notification helper for connection birthdays.
+     * Inserts documents with { ordered: false } to handle partial/duplicate cases safely,
+     * and emits Socket.IO only for newly inserted notifications.
+     */
+    static async notifyConnectionBirthdaysBatch(
+        celebrantUserId: string,
+        recipientIds: string[]
+    ): Promise<{ notifiedCount: number }> {
+        try {
+            if (!celebrantUserId || !recipientIds?.length) return { notifiedCount: 0 };
+
+            // Remove self-references and duplicates
+            const cleanRecipients = Array.from(
+                new Set(recipientIds.filter((id) => id && id !== celebrantUserId))
+            );
+            if (!cleanRecipients.length) return { notifiedCount: 0 };
+
+            const todayDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+            // Check which idempotency keys already exist
+            const possibleKeys = cleanRecipients.map(
+                (rId) => `${rId}:${celebrantUserId}:connection_birthday:${todayDateStr}`
+            );
+            const existingDocs = await Notification.find({
+                idempotencyKey: { $in: possibleKeys },
+            }).select('idempotencyKey').lean();
+
+            const existingKeySet = new Set(existingDocs.map((d: any) => d.idempotencyKey));
+            const newRecipientIds = cleanRecipients.filter(
+                (rId) => !existingKeySet.has(`${rId}:${celebrantUserId}:connection_birthday:${todayDateStr}`)
+            );
+
+            if (!newRecipientIds.length) {
+                logger.debug('All connection birthday notifications already exist for today', {
+                    celebrantUserId,
+                    totalRecipients: cleanRecipients.length,
+                });
+                return { notifiedCount: 0 };
+            }
+
+            // Fetch celebrant info
+            const celebrant = await User.findOne({ userId: celebrantUserId })
+                .select('firstName lastName profilePhotoId')
+                .lean();
+            if (!celebrant) {
+                logger.warn('notifyConnectionBirthdaysBatch: celebrant not found', { celebrantUserId });
+                return { notifiedCount: 0 };
+            }
+
+            const celebrantName = `${celebrant.firstName} ${(celebrant as any).lastName || ''}`.trim();
+
+            let celebrantPhoto: string | null = null;
+            if ((celebrant as any).profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: (celebrant as any).profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                celebrantPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            const message = `Today is ${celebrantName}'s birthday 🎂`;
+
+            const docsToInsert = newRecipientIds.map((recipientId) => ({
+                notificationId: uuidv4(),
+                recipientId,
+                senderId: celebrantUserId,
+                senderName: celebrantName,
+                senderPhoto: celebrantPhoto,
+                type: 'connection_birthday' as const,
+                entityId: celebrantUserId,
+                entityType: 'user' as const,
+                message,
+                isRead: false,
+                idempotencyKey: `${recipientId}:${celebrantUserId}:connection_birthday:${todayDateStr}`,
+            }));
+
+            let insertedDocs: any[] = [];
+            try {
+                insertedDocs = await Notification.insertMany(docsToInsert, { ordered: false });
+            } catch (insertErr: any) {
+                if (insertErr.insertedDocs && Array.isArray(insertErr.insertedDocs)) {
+                    insertedDocs = insertErr.insertedDocs;
+                }
+                logger.warn('Some birthday notifications may have been duplicate or errored in batch', {
+                    celebrantUserId,
+                    error: insertErr.message,
+                });
+            }
+
+            const actuallyInserted = insertedDocs && insertedDocs.length > 0 ? insertedDocs : docsToInsert;
+
+            // Emit Socket.IO only for newly inserted notifications
+            try {
+                const io = getIO();
+                actuallyInserted.forEach((doc: any) => {
+                    io.to(`user:${doc.recipientId}`).emit('notification:new', {
+                        notificationId: doc.notificationId,
+                        type: 'connection_birthday',
+                        senderId: celebrantUserId,
+                        senderName: celebrantName,
+                        senderPhoto: celebrantPhoto,
+                        entityId: celebrantUserId,
+                        entityType: 'user',
+                        message,
+                        isRead: false,
+                        createdAt: new Date().toISOString(),
+                    });
+                });
+            } catch (socketErr: any) {
+                logger.warn('Socket emit failed for connection_birthday batch', {
+                    celebrantUserId,
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Connection birthday batch notifications processed', {
+                celebrantUserId,
+                attemptedCount: newRecipientIds.length,
+                insertedCount: actuallyInserted.length,
+            });
+
+            return { notifiedCount: actuallyInserted.length };
+        } catch (err: any) {
+            logger.error('notifyConnectionBirthdaysBatch failed', {
+                celebrantUserId,
+                error: err instanceof Error ? err.message : 'unknown',
+            });
+            return { notifiedCount: 0 };
         }
     }
 
@@ -847,100 +1343,100 @@ class NotificationService {
  * viewers into ONE notification, LinkedIn-style:
  * "A, B and N others viewed your profile"
  */
-static async notifyProfileViewedBatch(
-    recipientId: string,
-    viewerIds: string[]
-): Promise<void> {
-    try {
-        if (!viewerIds || viewerIds.length === 0) return;
-
-        // Get unique viewer IDs (someone may have viewed multiple times)
-        const uniqueViewerIds = Array.from(new Set(viewerIds));
-
-        const viewers = await User.find({ userId: { $in: uniqueViewerIds } })
-            .select('userId firstName lastName profilePhotoId')
-            .lean();
-
-        if (!viewers.length) return;
-
-        // Build display names in the same order as uniqueViewerIds
-        const viewerMap = new Map(viewers.map((v: any) => [v.userId, v]));
-        const names = uniqueViewerIds
-            .map((id) => {
-                const v: any = viewerMap.get(id);
-                return v ? `${v.firstName} ${v.lastName || ''}`.trim() : null;
-            })
-            .filter((n): n is string => !!n);
-
-        if (!names.length) return;
-
-        // First viewer's photo is used as the notification's icon
-        const firstViewer: any = viewerMap.get(uniqueViewerIds[0]);
-        let senderPhoto: string | null = null;
-        if (firstViewer?.profilePhotoId) {
-            const photoDoc = await ProfilePhoto.findOne({
-                photoId: firstViewer.profilePhotoId,
-            }).select('cloudinarySecureUrl').lean();
-            senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
-        }
-
-        let message = '';
-        if (names.length === 1) {
-            message = `${names[0]} viewed your profile`;
-        } else if (names.length === 2) {
-            message = `${names[0]} and ${names[1]} viewed your profile`;
-        } else {
-            message = `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 > 1 ? 's' : ''} viewed your profile`;
-        }
-
-        const notificationId = uuidv4();
-
-        await Notification.create({
-            notificationId,
-            recipientId,
-            senderId: uniqueViewerIds[0],
-            senderName: names[0],
-            senderPhoto,
-            type: 'profile_viewed' as const,
-            entityId: uniqueViewerIds[0],
-            entityIds: uniqueViewerIds,
-            entityType: 'user' as const,
-            message,
-            isRead: false,
-        });
-
+    static async notifyProfileViewedBatch(
+        recipientId: string,
+        viewerIds: string[]
+    ): Promise<void> {
         try {
-            const io = getIO();
-            io.to(`user:${recipientId}`).emit('notification:new', {
+            if (!viewerIds || viewerIds.length === 0) return;
+
+            // Get unique viewer IDs (someone may have viewed multiple times)
+            const uniqueViewerIds = Array.from(new Set(viewerIds));
+
+            const viewers = await User.find({ userId: { $in: uniqueViewerIds } })
+                .select('userId firstName lastName profilePhotoId')
+                .lean();
+
+            if (!viewers.length) return;
+
+            // Build display names in the same order as uniqueViewerIds
+            const viewerMap = new Map(viewers.map((v: any) => [v.userId, v]));
+            const names = uniqueViewerIds
+                .map((id) => {
+                    const v: any = viewerMap.get(id);
+                    return v ? `${v.firstName} ${v.lastName || ''}`.trim() : null;
+                })
+                .filter((n): n is string => !!n);
+
+            if (!names.length) return;
+
+            // First viewer's photo is used as the notification's icon
+            const firstViewer: any = viewerMap.get(uniqueViewerIds[0]);
+            let senderPhoto: string | null = null;
+            if (firstViewer?.profilePhotoId) {
+                const photoDoc = await ProfilePhoto.findOne({
+                    photoId: firstViewer.profilePhotoId,
+                }).select('cloudinarySecureUrl').lean();
+                senderPhoto = (photoDoc as any)?.cloudinarySecureUrl || null;
+            }
+
+            let message = '';
+            if (names.length === 1) {
+                message = `${names[0]} viewed your profile`;
+            } else if (names.length === 2) {
+                message = `${names[0]} and ${names[1]} viewed your profile`;
+            } else {
+                message = `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 > 1 ? 's' : ''} viewed your profile`;
+            }
+
+            const notificationId = uuidv4();
+
+            await Notification.create({
                 notificationId,
-                type: 'profile_viewed',
+                recipientId,
                 senderId: uniqueViewerIds[0],
                 senderName: names[0],
                 senderPhoto,
+                type: 'profile_viewed' as const,
                 entityId: uniqueViewerIds[0],
                 entityIds: uniqueViewerIds,
-                entityType: 'user',
+                entityType: 'user' as const,
                 message,
                 isRead: false,
-                createdAt: new Date().toISOString(),
             });
-        } catch (socketErr) {
-            logger.warn('Socket emit failed for profile_viewed batch notification', {
-                error: socketErr instanceof Error ? socketErr.message : 'unknown',
+
+            try {
+                const io = getIO();
+                io.to(`user:${recipientId}`).emit('notification:new', {
+                    notificationId,
+                    type: 'profile_viewed',
+                    senderId: uniqueViewerIds[0],
+                    senderName: names[0],
+                    senderPhoto,
+                    entityId: uniqueViewerIds[0],
+                    entityIds: uniqueViewerIds,
+                    entityType: 'user',
+                    message,
+                    isRead: false,
+                    createdAt: new Date().toISOString(),
+                });
+            } catch (socketErr) {
+                logger.warn('Socket emit failed for profile_viewed batch notification', {
+                    error: socketErr instanceof Error ? socketErr.message : 'unknown',
+                });
+            }
+
+            logger.info('Profile viewed BATCH notification sent', {
+                recipientId,
+                viewerCount: uniqueViewerIds.length,
+            });
+        } catch (err) {
+            logger.error('notifyProfileViewedBatch failed', {
+                error: err instanceof Error ? err.message : 'unknown',
+                recipientId,
             });
         }
-
-        logger.info('Profile viewed BATCH notification sent', {
-            recipientId,
-            viewerCount: uniqueViewerIds.length,
-        });
-    } catch (err) {
-        logger.error('notifyProfileViewedBatch failed', {
-            error: err instanceof Error ? err.message : 'unknown',
-            recipientId,
-        });
     }
-}
 
 
 
