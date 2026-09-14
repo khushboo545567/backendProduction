@@ -7,7 +7,7 @@ import { BookingStatus } from '../shared/constants/bookingStatus';
 import { logger } from '@/shared/logger.util';
 import { emailService, smsService } from '@/Mentorship/services';
 import { NotFoundError } from '@/shared/errors/app.error';
-
+import NotificationService, { NotificationType, NotificationChannel } from '@/Mentorship/services/notification.service';
 /**
  * Send session reminders
  * Runs every 15 minutes
@@ -82,6 +82,26 @@ class ReminderCron {
               <p>Need to reschedule? Contact your mentor.</p>
             `,
           });
+          // ✅ NEW: in-app reminder for both mentee and mentor
+          NotificationService.sendNotification({
+            userId: user.userId,
+            type: NotificationType.SESSION_REMINDER,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session Tomorrow',
+              message: `Your session with ${mentor.fullName || mentor.email} is scheduled for tomorrow.`,
+            },
+          }).catch((e) => logger.error('In-app reminder failed (24h → mentee):', e));
+
+          NotificationService.sendNotification({
+            userId: mentor.userId,
+            type: NotificationType.SESSION_REMINDER,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session Tomorrow',
+              message: `Your session with ${user.fullName || user.email} is scheduled for tomorrow.`,
+            },
+          }).catch((e) => logger.error('In-app reminder failed (24h → mentor):', e));
 
           logger.info(`âœ… 24-hour reminder sent for session: ${session._id}`);
         } catch(error : any) {
@@ -149,6 +169,26 @@ class ReminderCron {
               message: `â° Your session with ${mentor.fullName || mentor.email} starts in 1 hour! ${session.meeting?.meetingUrl ? `Join: ${session.meeting.meetingUrl}` : ''}`,
             });
           }
+          // ✅ NEW: in-app reminder for both mentee and mentor
+          NotificationService.sendNotification({
+            userId: user.userId,
+            type: NotificationType.SESSION_REMINDER,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session in 1 Hour',
+              message: `Your session with ${mentor.fullName || mentor.email} starts in 1 hour.`,
+            },
+          }).catch((e) => logger.error('In-app reminder failed (1h → mentee):', e));
+
+          NotificationService.sendNotification({
+            userId: mentor.userId,
+            type: NotificationType.SESSION_REMINDER,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session in 1 Hour',
+              message: `Your session with ${user.fullName || user.email} starts in 1 hour.`,
+            },
+          }).catch((e) => logger.error('In-app reminder failed (1h → mentor):', e));
 
           logger.info(`âœ… 1-hour reminder sent for session: ${session._id}`);
         } catch(error : any) {
@@ -159,7 +199,6 @@ class ReminderCron {
       logger.error('Error sending 1-hour reminders:', error);
     }
   }
-
   /**
    * Send 15-minute reminders (Email + SMS + Push)
    */
@@ -217,15 +256,36 @@ class ReminderCron {
             });
           }
 
-          logger.info(`âœ… 15-minute reminder sent for session: ${session._id}`);
+              // ✅ NEW: in-app reminder for both mentee and mentor
+              NotificationService.sendNotification({
+                userId: user.userId,
+                type: NotificationType.SESSION_REMINDER,
+                channels: [NotificationChannel.IN_APP],
+                data: {
+                  title: 'Session Starting Soon',
+                  message: `Your session with ${mentor.fullName || mentor.email} starts in 15 minutes.`,
+                },
+              }).catch((e) => logger.error('In-app reminder failed (15min → mentee):', e));
+    
+              NotificationService.sendNotification({
+                userId: mentor.userId,
+                type: NotificationType.SESSION_REMINDER,
+                channels: [NotificationChannel.IN_APP],
+                data: {
+                  title: 'Session Starting Soon',
+                  message: `Your session with ${user.fullName || user.email} starts in 15 minutes.`,
+                },
+              }).catch((e) => logger.error('In-app reminder failed (15min → mentor):', e));
+    
+              logger.info(`âœ… 15-minute reminder sent for session: ${session._id}`);
+            } catch(error : any) {
+              logger.error(`Failed to send 15-minute reminder for session ${session._id}:`, error);
+            }
+          }
         } catch(error : any) {
-          logger.error(`Failed to send 15-minute reminder for session ${session._id}:`, error);
+          logger.error('Error sending 15-minute reminders:', error);
         }
       }
-    } catch(error : any) {
-      logger.error('Error sending 15-minute reminders:', error);
-    }
-  }
 
   /**
    * Manual trigger for testing

@@ -9,6 +9,7 @@ import { PaymentStatus } from '@/Mentorship/interface/session.types';
 import emailTemplates from '@/Mentorship/utils/emailTemplates';
 import smsTemplates from '@/Mentorship/utils/smsTemplates';
 import Razorpay from 'razorpay';
+import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 
 // Razorpay instance — initialized once, reused across calls
 let razorpay: Razorpay | null = null;
@@ -384,9 +385,14 @@ class RefundService {
     try {
       logger.info('Sending refund notifications');
 
+            // ✅ FIX: session.mentorId is the Mentor-profile id, not the auth
+      // userId — resolve mentor's real userId first (same pattern used
+      // in processRefund's validateCancellation step).
+      const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+
       const [mentee, mentor] = await Promise.all([
         User.findByUserId(menteeId || session.menteeId),
-        User.findByUserId(session.mentorId),
+        mentorDoc?.userId ? User.findByUserId(mentorDoc.userId) : Promise.resolve(null),
       ]);
 
 
@@ -446,18 +452,41 @@ class RefundService {
         }),
       });
 
-      // SMS to mentor
-      if (mentor.phoneNumber) {
-        const mentorSmsMessage = smsTemplates.mentorCancellationNotification({
-          menteeName: mentee.fullName || mentee.email,
-          sessionType: session.sessionType,
-          scheduledTime: scheduledAtFormatted,
-          compensationAmount: refundCalculation.mentorPayout,
-        });
-        await smsService.sendSMS({ to: mentor.phoneNumber, message: mentorSmsMessage });
-      }
-
-      logger.info('Refund notifications sent successfully');
+           // SMS to mentor
+           if (mentor.phoneNumber) {
+            const mentorSmsMessage = smsTemplates.mentorCancellationNotification({
+              menteeName: mentee.fullName || mentee.email,
+              sessionType: session.sessionType,
+              scheduledTime: scheduledAtFormatted,
+              compensationAmount: refundCalculation.mentorPayout,
+            });
+            await smsService.sendSMS({ to: mentor.phoneNumber, message: mentorSmsMessage });
+          }
+    
+          // ✅ NEW: in-app notifications for both parties
+          NotificationService.sendNotification({
+            userId: mentee.userId,
+            type: NotificationType.REFUND_PROCESSED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: refundCalculation.refundEligible ? 'Refund Processed' : 'Session Cancelled',
+              message: refundCalculation.refundEligible
+                ? `Your refund of ₹${refundCalculation.refundAmount} for "${session.sessionType}" is being processed.`
+                : `Your session "${session.sessionType}" was cancelled. Reason: ${reason}`,
+            },
+          }).catch((e) => logger.error('In-app notification failed (refund → mentee):', e));
+    
+          NotificationService.sendNotification({
+            userId: mentor.userId,
+            type: NotificationType.SESSION_CANCELLED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Session Cancelled',
+              message: `${mentee.fullName || mentee.email} cancelled the "${session.sessionType}" session. Reason: ${reason}`,
+            },
+          }).catch((e) => logger.error('In-app notification failed (refund → mentor):', e));
+    
+          logger.info('Refund notifications sent successfully');
     } catch (error: any) {
       // Non-critical — log but do not throw
       logger.error(`Failed to send refund notifications: ${error.message}`);

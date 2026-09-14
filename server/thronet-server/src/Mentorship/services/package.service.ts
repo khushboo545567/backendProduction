@@ -10,6 +10,8 @@ import { PackageType, IPackage, PackageStatus } from '../models/Package';
 import mentorRepository from '../repositories/mentor.repository';
 import packageRepository from '../repositories/package.repository';
 import { generateSecureId } from '@/shared/security';
+import { User } from '@/shared/models/index.models';
+import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 
 /**
  * Package configuration type (excludes CUSTOM)
@@ -102,19 +104,13 @@ class PackageService {
     try {
       logger.info(`📦 Creating package for user: ${input.userId}`);
 
-      // Validate mentor if provided
+            // Validate mentor if provided
+      // ✅ FIX: mentorDoc moved to outer scope so it can be reused later
+      // to send the mentor a "package purchased" notification.
+      let mentorDoc: any = null;
       if (input.mentorId) {
-        // const mentor = await Mentor.findOne({
-        //   $or: [
-        //     { _id: input.mentorId },      // Check by Mentor _id
-        //     { userId: input.mentorId }     // Check by User ID
-        //   ]
-        // });
-
-
-        // ✅ Replace with (UUID se dhundho)
-        const mentor = await mentorRepository.findByMentorId(input.mentorId);
-        if (!mentor) {
+        mentorDoc = await mentorRepository.findByMentorId(input.mentorId);
+        if (!mentorDoc) {
           throw new NotFoundError('Mentor not found');
         }
       }
@@ -205,6 +201,38 @@ class PackageService {
       );
 
       logger.info(`✅ Package created: ${packageData._id}`);
+
+      // ✅ NEW: notify buyer (payment success) and, if tied to a specific
+      // mentor, notify that mentor about the new package purchase.
+      try {
+        const buyer = await User.findByUserId(input.userId);
+        const buyerName = buyer?.fullName || buyer?.email || 'A user';
+
+        NotificationService.sendNotification({
+          userId: input.userId,
+          type: NotificationType.PAYMENT_SUCCESS,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Package Purchased',
+            message: `Your "${name}" package with ${totalSessions} sessions has been purchased successfully.`,
+          },
+        }).catch((e) => logger.error('Notification failed (createPackage → buyer):', e));
+
+        if (mentorDoc?.userId) {
+          NotificationService.sendNotification({
+            userId: mentorDoc.userId,
+            type: NotificationType.PACKAGE_PURCHASED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'New Package Purchased',
+              message: `${buyerName} purchased a "${name}" package (${totalSessions} sessions) with you.`,
+            },
+          }).catch((e) => logger.error('Notification failed (createPackage → mentor):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send package-purchase notification: ${notifErr.message}`);
+      }
+
       return packageData;
     } catch (error: any) {
       logger.error('Failed to create package:', error);
