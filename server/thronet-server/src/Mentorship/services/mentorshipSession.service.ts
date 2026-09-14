@@ -411,7 +411,17 @@ class MentorshipSessionService {
       // meant for the mentee-facing "your booking is confirmed" message.
       // Mentor here needs the distinct "new request" type.
       try {
-        const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+        const [mentorDoc, menteeDoc] = await Promise.all([
+          Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }),
+          User.findOne({ userId: input.menteeId }),
+        ]);
+
+        const menteeName =
+          menteeDoc?.fullName ||
+          `${menteeDoc?.firstName || ''} ${menteeDoc?.lastName || ''}`.trim() ||
+          menteeDoc?.email ||
+          'A user';
+
         if (mentorDoc?.userId) {
           NotificationService.sendNotification({
             userId: mentorDoc.userId,
@@ -419,10 +429,12 @@ class MentorshipSessionService {
             channels: [NotificationChannel.IN_APP],
             data: {
               title: 'New Booking Request',
-              message: `You have a new booking request for "${session.title}".`,
+              message: `${menteeName} sent a new booking request for "${session.title}".`,
             },
           }).catch((e) => logger.error('Notification failed (bookSession → mentor):', e));
         }
+        
+
 
         // ✅ NEW: confirm to the mentee that their booking request was sent
         NotificationService.sendNotification({
