@@ -103,7 +103,7 @@ export const getTestsByGroup = asyncHandler(async (req: Request, res: Response) 
     //   .lean()
     //   .exec(),
     // Test.countDocuments(filter),
-    testRepository.findWithFilters(filter, skip, limit, sortField, sortDir),
+    testRepository.findWithFilters(filter, skip, limitNum, sortField, sortDir),
     testRepository.count(filter)
   ]);
 

@@ -138,7 +138,7 @@ class RankingService {
         const batch = allRankings.slice(i, i + RECALC_BATCH_SIZE);
 
         const results = await Promise.allSettled(
-          batch.map(r => this.updateRankingMetrics(r.userId as unknown as string))
+          batch.map(r => this.updateRankingMetrics((r.userId || r._id) as unknown as string))
         );
 
         results.forEach((result, idx) => {

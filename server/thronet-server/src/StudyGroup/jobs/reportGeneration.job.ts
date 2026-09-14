@@ -176,7 +176,7 @@ const generateGroupReport = async (groupId: any): Promise<any> => {
       group: {
         title: group.title,
         memberCount: group.currentMemberCount,
-        leader: (group.leader as any).name,
+        leader: (group as any).leader?.name || group.leaderId,
       },
       period: {
         start: formatReadableDate(startOfLastMonth),

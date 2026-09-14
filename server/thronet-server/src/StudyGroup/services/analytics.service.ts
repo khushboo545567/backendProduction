@@ -529,7 +529,7 @@ export const GroupAnalytics = {
         .populate('user', 'name email avatar')
         .lean();
 
-      const memberIds = members.map((m) => m.user);
+      const memberIds = members.map((m: any) => m.userId || m.user);
 
       // Get contribution scores
       const contributions = await Promise.all(

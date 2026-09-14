@@ -65,7 +65,7 @@ export class DoubtRepository extends BaseRepository<IDoubt> {
         .skip(skip)
         .limit(limit)
         .lean()
-        .exec() as IDoubt[];
+        .exec() as unknown as IDoubt[];
     } catch (error: any) {
       throw new Error(`Error finding doubts with pagination: ${error}`);
     }
@@ -85,7 +85,7 @@ export class DoubtRepository extends BaseRepository<IDoubt> {
         .skip(skip)
         .limit(limit)
         .lean()
-        .exec() as IDoubt[];
+        .exec() as unknown as IDoubt[];
     } catch (error: any) {
       throw new Error(`Error finding doubts by user: ${error}`);
     }
@@ -99,7 +99,7 @@ export class DoubtRepository extends BaseRepository<IDoubt> {
         .sort({ createdAt: -1 })
         .limit(50)
         .lean()
-        .exec() as IDoubt[];
+        .exec() as unknown as IDoubt[];
     } catch (error: any) {
       throw new Error(`Error finding urgent doubts: ${error}`);
     }
@@ -116,7 +116,7 @@ export class DoubtRepository extends BaseRepository<IDoubt> {
         .sort({ score: { $meta: 'textScore' } })
         .limit(50)
         .lean()
-        .exec() as IDoubt[];
+        .exec() as unknown as IDoubt[];
     } catch (error: any) {
       throw new Error(`Error searching doubts: ${error}`);
     }
@@ -132,7 +132,7 @@ export class DoubtRepository extends BaseRepository<IDoubt> {
         .sort({ createdAt: -1 })
         .limit(100)
         .lean()
-        .exec() as IDoubt[];
+        .exec() as unknown as IDoubt[];
     } catch (error: any) {
       throw new Error(`Error finding doubts by category: ${error}`);
     }

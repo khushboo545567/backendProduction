@@ -211,7 +211,7 @@ export class StreakRepository extends BaseRepository<IStreak> {
         .findOne({ user: userId })
         .populate('user', 'name avatar')
         .lean()
-        .exec();
+        .exec() as unknown as IStreak | null;
     } catch (error: any) {
       throw new Error(`Error finding streak with populate: ${error}`);
     }

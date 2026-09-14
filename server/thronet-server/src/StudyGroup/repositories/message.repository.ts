@@ -306,7 +306,7 @@ export class MessageRepository extends BaseRepository<IMessage> {
   // ADD: findById (lean version)
   async findById(messageId: string): Promise<IMessage | null> {
     try {
-      return await this.model.findById(messageId).lean().exec();
+      return await this.model.findById(messageId).lean().exec() as unknown as IMessage | null;
     } catch (error: any) {
       throw new Error(`Error finding message by id: ${error}`);
     }
@@ -318,7 +318,7 @@ export class MessageRepository extends BaseRepository<IMessage> {
        return await this.model.findOne({ messageId })
         // .populate('readBy', 'fullName username avatar')
         .lean()
-        .exec();
+        .exec() as unknown as IMessage | null;
     } catch (error: any) {
       throw new Error(`Error finding message with populate: ${error}`);
     }

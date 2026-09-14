@@ -7,6 +7,7 @@ class AssignmentRepository extends BaseRepository<IAssignment> {
     super(Assignment);
   }
 
+
   async findByIdWithPopulate(assignmentId: string): Promise<IAssignment | null> {
     return await this.model
       .findById(assignmentId)
@@ -16,11 +17,11 @@ class AssignmentRepository extends BaseRepository<IAssignment> {
       .exec() as unknown as IAssignment | null;
   }
 
-  async findRawById(assignmentId: string): Promise<IAssignment | null> {
-    return await this.model.findById(assignmentId).exec();
+   async findRawByAssignmentId(assignmentId: string): Promise<IAssignment | null> {
+    return await this.model.findOne({ assignmentId }).exec();
   }
 
-   async findRawByAssignmentId(assignmentId: string): Promise<IAssignment | null> {
+  async findRawById(assignmentId: string): Promise<IAssignment | null> {
     return await this.model.findOne({ assignmentId }).exec();
   }
 

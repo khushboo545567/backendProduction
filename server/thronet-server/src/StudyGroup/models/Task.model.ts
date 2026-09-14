@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ====================================
  * TASK MODEL
  * ====================================
@@ -17,9 +17,10 @@ const taskSchema = new Schema<ITask>(
       type: String,
       ref: 'User',
       required: [true, 'User is required'],
-    }, 
+      index: true,
+    },
 
-    // ADD: taskId UUID � external identifier
+    // ADD: taskId UUID — external identifier
     taskId: {
       type: String,
       required: true,
@@ -28,8 +29,9 @@ const taskSchema = new Schema<ITask>(
     groupId: {
   type: String,
   ref: 'StudyGroup_Group',
-  required: false,   // CHANGE � was: required: true
+  required: false,   // CHANGE — was: required: true
   default: null,
+  index: true,
 },
     title: {
       type: String,
@@ -85,19 +87,18 @@ const taskSchema = new Schema<ITask>(
     timestamps: true,
     // ADD: toJSON transform
     toJSON: {
-  virtuals: true,
-  transform: function (_doc, ret) {
-    const r = ret as any;
-    r.id = r.taskId;
-    delete r._id;
-    delete r.__v;
-    return r;
-  },
-},
+      virtuals: true,
+      transform: function (_doc, ret: any) {
+        ret.id = ret.taskId;
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      }
+    },
     toObject: {
       virtuals: true,
-      transform: function (_doc, ret) {
-        delete (ret as any).__v;
+      transform: function (_doc, ret: any) {
+        delete ret.__v;
         return ret;
       },
     },
@@ -107,7 +108,7 @@ const taskSchema = new Schema<ITask>(
 /**
  * Indexes
  */
-
+taskSchema.index({ taskId: 1}, {unique: true});
 taskSchema.index({ userId: 1, createdAt: -1 });
 taskSchema.index({ userId: 1, status: 1 });
 taskSchema.index({ userId: 1, priority: 1 });
@@ -118,7 +119,7 @@ taskSchema.index({ tags: 1 });
 /**
  * Virtual: Days Remaining
  */
-taskSchema.virtual('daysRemaining').get(function () {
+taskSchema.virtual('daysRemaining').get(function (this: any) {
   if (!this.deadline) return null;
   const now = new Date();
   const diff = new Date(this.deadline).getTime() - now.getTime();
@@ -128,7 +129,7 @@ taskSchema.virtual('daysRemaining').get(function () {
 /**
  * Virtual: Is Overdue
  */
-taskSchema.virtual('isOverdue').get(function () {
+taskSchema.virtual('isOverdue').get(function (this: any) {
   if (!this.deadline || this.completed) return false;
   return new Date() > new Date(this.deadline);
 });
@@ -136,7 +137,7 @@ taskSchema.virtual('isOverdue').get(function () {
 /**
  * Pre-save middleware: Update status based on completion
  */
-taskSchema.pre('save', function (next) {
+taskSchema.pre('save', function (this: any, next) {
   // If task is marked as completed
   if (this.completed && !this.completedAt) {
     this.completedAt = new Date();

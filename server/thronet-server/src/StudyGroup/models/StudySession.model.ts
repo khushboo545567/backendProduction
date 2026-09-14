@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ====================================
  * STUDY SESSION MODEL
  * ====================================
@@ -14,16 +14,19 @@ const studySessionSchema = new Schema<IStudySession>(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
     user: {
       type: String,
       ref: 'User',
       required: [true, 'User is required'],
+      index: true,
     },
     goal: {
       type: String,
       ref: 'StudyGroup_Goal',
       default: null,
+      index: true,
     },
     startTime: {
       type: Date,
@@ -52,6 +55,7 @@ const studySessionSchema = new Schema<IStudySession>(
       type: String,
       enum: Object.values(SessionStatus),
       default: SessionStatus.ACTIVE,
+      index: true,
     },
     notes: {
       type: String,
@@ -68,15 +72,14 @@ const studySessionSchema = new Schema<IStudySession>(
     timestamps: true,
     // UPDATE: toJSON transform
     toJSON: {
-  virtuals: true,
-  transform: function (_doc, ret) {
-    const r = ret as any;
-    r.id = r.sessionId;
-    delete r._id;
-    delete r.__v;
-    return r;
-  },
-},
+      virtuals: true,
+      transform: function (_doc, ret: any) {
+        ret.id = ret.sessionId;
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      }
+    },
     toObject: { virtuals: true },
   }
 );
@@ -93,28 +96,28 @@ studySessionSchema.index({ status: 1 });
 /**
  * Virtual: Duration in minutes
  */
-studySessionSchema.virtual('durationInMinutes').get(function () {
+studySessionSchema.virtual('durationInMinutes').get(function (this: any) {
   return Math.floor(this.duration / 60);
 });
 
 /**
  * Virtual: Duration in hours
  */
-studySessionSchema.virtual('durationInHours').get(function () {
+studySessionSchema.virtual('durationInHours').get(function (this: any) {
   return parseFloat((this.duration / 3600).toFixed(2));
 });
 
 /**
  * Virtual: Is session active
  */
-studySessionSchema.virtual('isActive').get(function () {
+studySessionSchema.virtual('isActive').get(function (this: any) {
   return this.status === SessionStatus.ACTIVE;
 });
 
 /**
  * Pre-save hook: Calculate duration for completed sessions
  */
-studySessionSchema.pre('save', function (next) {
+studySessionSchema.pre('save', function (this: any, next) {
   if (this.status === SessionStatus.COMPLETED && this.endTime) {
     const totalTime = Math.floor(
       (this.endTime.getTime() - this.startTime.getTime()) / 1000

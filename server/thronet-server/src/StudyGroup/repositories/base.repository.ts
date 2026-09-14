@@ -1,5 +1,4 @@
-
-console.log('🟢 STEP-0: base.repository.ts file STARTED loading');/**
+/**
  * ====================================
  * BASE REPOSITORY (GENERIC) - FINAL FIXED VERSION
  * ====================================
@@ -13,7 +12,7 @@ export interface IRepository<T extends Document> {
   findById(id: string, populateOptions?: PopulateOptions | (string | PopulateOptions)[]): Promise<T | null>;
   findOne(filter: FilterQuery<T>, populateOptions?: PopulateOptions | (string | PopulateOptions)[]): Promise<T | null>;
   findMany(filter: FilterQuery<T>, options?: QueryOptions): Promise<T[]>;
-  findAll(): Promise<T[]>;
+  findAll(query?: any, sortQuery?: any, skip?: number, limit?: number): Promise<T[]>;
   create(data: Partial<T>): Promise<T>;
   createMany(data: Partial<T>[]): Promise<any[]>;
   update(id: string, data: UpdateQuery<T>): Promise<T | null>;
@@ -125,9 +124,13 @@ export class BaseRepository<T extends Document> implements IRepository<T> {
   /**
    * Find all documents
    */
-  async findAll(): Promise<T[]> {
+  async findAll(query: any = {}, sortQuery: any = {}, skip: number = 0, limit: number = 0): Promise<T[]> {
     try {
-      const result = await this.model.find().exec();
+      let q = this.model.find(query);
+      if (Object.keys(sortQuery).length > 0) q = q.sort(sortQuery);
+      if (skip > 0) q = q.skip(skip);
+      if (limit > 0) q = q.limit(limit);
+      const result = await q.exec();
       return result as T[];
     } catch (error : any) {
       throw new Error(`Error finding all documents: ${error}`);
