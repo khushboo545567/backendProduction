@@ -79,6 +79,13 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       totalAmount:  { type: Number, required: true, min: 0 },
       currency:     { type: String, default: 'INR' },
     },
+    settings: {
+      followUp: {
+        allowed:    { type: Number, default: 0 },
+        periodDays: { type: Number, default: 0 },
+      },
+      bufferTimeMinutes: { type: Number, default: 0 },
+    },
     bookings: [
       {
         menteeId:       { type: String, required: true },

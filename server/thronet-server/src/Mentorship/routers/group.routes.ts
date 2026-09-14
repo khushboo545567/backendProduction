@@ -49,7 +49,7 @@ const createGroupSessionValidator = Joi.object({
   outcomes: Joi.array().items(Joi.string()).optional(),
   paymentMethod: Joi.string().valid('razorpay', 'stripe', 'cash', 'bank_transfer', 'free').required(),
   followUp: Joi.object({
-    allowed: Joi.boolean().required(),
+    allowed: Joi.number().min(0).max(10).required(),
     periodDays: Joi.number().min(0).max(30).when('allowed', {
       is: true,
       then: Joi.required(),
@@ -178,7 +178,7 @@ router.get('/:id', groupController.getGroupSessionById);
 router.put(
   '/:id',
   AuthMiddleware.authenticate as any,
-  uploadSingle('thumbnailImage'),
+  uploadSingle('thumbnailImage', 'image', true),
   parseFormDataFields,
   validateJoi(updateGroupSessionValidator),
   groupController.updateGroupSession

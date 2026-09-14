@@ -27,7 +27,7 @@ export interface IGroupSession {
   scheduledAt: Date;
   duration: number;
   timezone: string;
-  status: 'draft' | 'open' | 'full' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'draft' | 'open' | 'full' | 'in_progress' | 'completed' | 'cancelled' | 'rescheduled';
   maxParticipants: number;
   minParticipants: number;
   currentParticipants: number;
@@ -42,7 +42,7 @@ export interface IGroupSession {
   };
   settings: {
     followUp: {
-      allowed: boolean;
+      allowed: number;
       periodDays: number;
     };
     bufferTimeMinutes: number;
@@ -185,7 +185,7 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     },
     status: {
       type: String,
-      enum: ['draft', 'open', 'full', 'in_progress', 'completed', 'cancelled'],
+      enum: ['draft', 'open', 'full', 'in_progress', 'completed', 'cancelled', 'rescheduled'],
       default: 'draft',
       index: true,
     },
@@ -224,7 +224,7 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     },
     settings: {
       followUp: {
-        allowed: { type: Boolean, default: false },
+        allowed: { type: Number, default: 0 },
         periodDays: { type: Number, default: 0, min: 0, max: 30 },
       },
       bufferTimeMinutes: { type: Number, default: 0, min: 0, max: 60 },

@@ -478,7 +478,7 @@ class GroupService {
   async updateGroupSession(
     sessionId: string,
     userId: string,
-    updates: Partial<CreateGroupSessionInput>,
+    updates: Partial<any>, // Accept fully parsed requests
     file?: any,
     authToken?: string
   ): Promise<any> {
@@ -498,28 +498,72 @@ class GroupService {
         throw new ForbiddenError('Only the host mentor can update this session');
       }
 
+      const updatePayload: any = { $set: {} };
+
       if (file) {
-        session.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, sessionId);
+        updatePayload.$set.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, sessionId);
       }
 
-      if (updates.title) session.title = updates.title;
-      if (updates.description) session.description = updates.description;
-      if (updates.topic) session.topic = updates.topic;
-      if (updates.category) session.category = updates.category;
-      if (updates.scheduledAt) session.scheduledAt = new Date(updates.scheduledAt);
-      if (updates.duration) session.duration = updates.duration;
-      if (updates.timezone) session.timezone = updates.timezone;
-      if (updates.maxParticipants) session.maxParticipants = updates.maxParticipants;
-      if (updates.minParticipants) session.minParticipants = updates.minParticipants;
-      if (updates.pricePerPerson !== undefined && session.pricing) {
-        session.pricing.pricePerPerson = updates.pricePerPerson;
+      if (updates.title) updatePayload.$set.title = updates.title;
+      if (updates.description) updatePayload.$set.description = updates.description;
+      if (updates.topic) updatePayload.$set.topic = updates.topic;
+      if (updates.category) updatePayload.$set.category = updates.category;
+      if (updates.scheduledAt) updatePayload.$set.scheduledAt = new Date(updates.scheduledAt);
+      if (updates.duration !== undefined) updatePayload.$set.duration = Number(updates.duration);
+      if (updates.timezone) updatePayload.$set.timezone = updates.timezone;
+      if (updates.maxParticipants !== undefined) updatePayload.$set.maxParticipants = Number(updates.maxParticipants);
+      if (updates.minParticipants !== undefined) updatePayload.$set.minParticipants = Number(updates.minParticipants);
+      
+      if (updates.pricePerPerson !== undefined) {
+        updatePayload.$set['pricing.pricePerPerson'] = Number(updates.pricePerPerson);
       }
-      if (updates.agenda) session.agenda = updates.agenda;
-      if (updates.outcomes) session.outcomes = updates.outcomes;
 
-      await session.save();
+      if (updates.paymentMethod) {
+        updatePayload.$set['payment.method'] = updates.paymentMethod;
+      }
+      
+      if (updates.followUp !== undefined) {
+        updatePayload.$set['settings.followUp'] = updates.followUp;
+      }
+      
+      if (updates.bufferTimeMinutes !== undefined) {
+        updatePayload.$set['settings.bufferTimeMinutes'] = Number(updates.bufferTimeMinutes);
+      }
+      
+      if (updates.status) {
+        updatePayload.$set.status = updates.status;
+      }
+
+      console.log('=== UPDATE PAYLOAD ===', JSON.stringify(updatePayload, null, 2));
+
+      // Use findOneAndUpdate to force $set on nested schemas strongly
+      const updatedSession = await GroupSession.findOneAndUpdate(
+        query,
+        updatePayload,
+        { new: true, runValidators: true }
+      );
+
+      if (!updatedSession) {
+         throw new Error("findOneAndUpdate failed to return document");
+      }
+
+      // POST-UPDATE VERIFICATION
+      const verificationFetch = await GroupSession.findOne(query).lean();
+      console.log('=== VERIFICATION FETCH (DB PROOF) ===', JSON.stringify({
+        title: verificationFetch?.title,
+        topic: verificationFetch?.topic,
+        scheduledAt: verificationFetch?.scheduledAt,
+        duration: verificationFetch?.duration,
+        minParticipants: verificationFetch?.minParticipants,
+        maxParticipants: verificationFetch?.maxParticipants,
+        status: verificationFetch?.status,
+        pricing: verificationFetch?.pricing,
+        payment: verificationFetch?.payment,
+        settings: verificationFetch?.settings,
+      }, null, 2));
+
       logger.info(`Group session updated successfully: ${session.sessionId}`);
-      return session;
+      return updatedSession;
     } catch (error: any) {
       logger.error(`Failed to update group session: ${error.message}`);
       throw error;

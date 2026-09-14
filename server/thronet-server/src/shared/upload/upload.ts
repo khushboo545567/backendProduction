@@ -247,6 +247,7 @@ export const uploadSingle = (fieldName: string = 'photo', fileType: UploadFileTy
         logger.info('📤 [UPLOAD START] Single file upload initiated', {
             fieldName,
             fileType,
+            isOptional: !required,
             url: req.url,
             method: req.method
         });

@@ -9,7 +9,7 @@ import { NextFunction, Request, Response } from 'express';
 const router = Router();
 
 const parseFormDataFields = (req: Request, res: Response, next: NextFunction): void => {
-  const fieldsToParse = ['pricing', 'followUp', 'meeting'];
+  const fieldsToParse = ['pricing', 'followUp', 'meeting', 'settings'];
   for (const field of fieldsToParse) {
     const body = req.body as Record<string, any>;
     if (body[field] && typeof body[field] === 'string') {

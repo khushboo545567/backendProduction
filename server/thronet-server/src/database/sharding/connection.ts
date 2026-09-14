@@ -1,27 +1,17 @@
 // server/thronet-server/src/database/sharding/connection.ts
 //
-// ✅ FIX: dns.setServers() override is now restricted to NON-production
-// environments. Running it unconditionally broke mongodb+srv:// SRV
-// record resolution on Railway (Linux container network doesn't allow
-// the same direct external DNS query pattern as local Windows dev),
-// which caused the primary connection to fail, fall through to the
-// (also unreachable on Railway) localhost fallback, throw, and crash
-// the process on every deploy.
+// NOTE: The dns.setServers() override has been removed. It was breaking
+// Docker's internal DNS (127.0.0.11), preventing resolution of
+// redis-node-1 and other Docker service hostnames.
+//
+// NOTE: The host.docker.internal fallback URI has been removed.
+// It was silently masking Atlas IP whitelist failures by attempting
+// a connection to a non-existent local MongoDB, resulting in both
+// errors being swallowed and a confusing ECONNREFUSED 192.168.65.254.
+// The primary Atlas URI is the only supported database for this app.
 
-import dns from 'dns';
 import mongoose, { ConnectOptions } from 'mongoose';
 import { LoggerUtil } from '@/shared/logger.util';
-
-// ⚠️ ONLY apply this DNS override in local/dev — on Railway (or any
-// Linux container production environment) this can break SRV DNS
-// resolution entirely, causing MongoDB connection to hang/fail.
-if (process.env['NODE_ENV'] !== 'production') {
-    try {
-        dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-    } catch {
-        // ignore
-    }
-}
 
 const logger = LoggerUtil;
 

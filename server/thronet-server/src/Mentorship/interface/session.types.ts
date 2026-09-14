@@ -55,6 +55,14 @@ export interface ISessionMentor extends TimeStamps {
     refundedAt?: Date;
     refundReason?: string;
   };
+  // Settings
+  settings?: {
+    followUp?: {
+      allowed: boolean;
+      periodDays: number;
+    };
+    bufferTimeMinutes?: number;
+  };
 
   // Meeting details
   meeting?: {
