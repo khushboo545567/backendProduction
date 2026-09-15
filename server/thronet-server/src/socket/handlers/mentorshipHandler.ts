@@ -1,0 +1,78 @@
+// src/socket/handlers/mentorshipHandler.ts
+
+import { Server } from 'socket.io';
+import { AuthenticatedSocket, emitToUser } from '../index';
+import { SessionMentor, Mentor } from '@/Mentorship/models';
+import notificationService, {
+  NotificationType,
+  NotificationChannel,
+} from '@/Mentorship/services/notification.service';
+import { LoggerUtil } from '@/shared/logger.util';
+
+export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket) => {
+  const userId = socket.data.userId;
+  if (!userId) return;
+
+  socket.on('mentorship:notify-join', async (data: { sessionId: string }) => {
+    try {
+      const { sessionId } = data;
+      if (!sessionId) return;
+
+      const session = await SessionMentor.findOne({ sessionId });
+      if (!session) {
+        LoggerUtil.warn('mentorship:notify-join — session not found', { sessionId });
+        return;
+      }
+
+      const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+      const mentorUserId = mentor?.userId;
+
+      // menteeId ya toh top-level field pe hai, ya bookings[] array me
+      const confirmedBooking = session.bookings?.find((b: any) =>
+        ['confirmed', 'in_progress', 'rescheduled'].includes(b.status)
+      );
+      const menteeUserId = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy;
+
+      let targetUserId: string | undefined;
+      let joinerRole: 'mentor' | 'mentee' = 'mentee';
+
+      if (userId === mentorUserId) {
+        targetUserId = menteeUserId;
+        joinerRole = 'mentor';
+      } else {
+        targetUserId = mentorUserId;
+        joinerRole = 'mentee';
+      }
+
+      if (!targetUserId) {
+        LoggerUtil.warn('mentorship:notify-join — target user not resolved', { sessionId, mentorUserId, menteeUserId });
+        return;
+      }
+
+      // 1) Real-time signal — target abhi online ho tabhi kaam karega
+      emitToUser(targetUserId, 'mentorship:peer-joined', {
+        sessionId,
+        joinerRole,
+        title: session.title,
+      });
+
+      // 2) Persistent bell notification — offline hone par bhi save rahega
+      await notificationService.sendNotification({
+        userId: targetUserId,
+        type: NotificationType.SESSION_STARTED,
+        channels: [NotificationChannel.IN_APP],
+        priority: 'high',
+        data: {
+          title: `${joinerRole === 'mentor' ? 'Mentor' : 'Mentee'} joined the session`,
+          message: `${joinerRole === 'mentor' ? 'Your mentor' : 'Your mentee'} has joined "${session.title || 'the session'}". Join now to start the call.`,
+          sessionId,
+          actionUrl: `/mentorship/session-room/${sessionId}`,
+        },
+      });
+
+      LoggerUtil.info('mentorship:notify-join handled', { sessionId, joinerRole, targetUserId });
+    } catch (err: any) {
+      LoggerUtil.error('mentorship:notify-join failed', { error: err.message });
+    }
+  });
+};
