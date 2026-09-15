@@ -64,3 +64,24 @@ export const isReschedulable = (status: BookingStatus): boolean => {
 export const isFinalStatus = (status: BookingStatus): boolean => {
   return FINAL_STATUSES.includes(status);
 };
+
+// ── Start-time gating ────────────────────────────────────────────
+// Mentor sirf is window ke andar hi Start kar sakta hai — kabhi bhi nahi.
+export const START_JOIN_BEFORE_MS = 5 * 60 * 1000;  // 5 min pehle se allowed
+export const START_LATE_LIMIT_MS = 15 * 60 * 1000;  // 15 min baad tak hi allowed
+
+export const getStartWindow = (scheduledAt: Date | string) => {
+  const start = new Date(scheduledAt).getTime();
+  return {
+    windowOpensAt: start - START_JOIN_BEFORE_MS,
+    windowClosesAt: start + START_LATE_LIMIT_MS,
+  };
+};
+
+export const isStartAllowed = (
+  scheduledAt: Date | string,
+  now: number = Date.now()
+): boolean => {
+  const { windowOpensAt, windowClosesAt } = getStartWindow(scheduledAt);
+  return now >= windowOpensAt && now <= windowClosesAt;
+};

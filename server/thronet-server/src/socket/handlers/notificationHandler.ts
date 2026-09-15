@@ -4,7 +4,7 @@ import { AuthenticatedSocket } from '../index';
 import { Notification } from '@/Mentorship/models';
 
 export const setupNotificationHandlers = (io: Server, socket: AuthenticatedSocket) => {
-    const userId = socket.data.userId || socket.userId;
+    const userId = socket.data.userId;
     if (!userId) return;
 
     
