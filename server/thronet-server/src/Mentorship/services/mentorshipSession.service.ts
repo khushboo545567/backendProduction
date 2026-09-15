@@ -889,11 +889,13 @@ class MentorshipSessionService {
           emitToUser(menteeIdToNotify, 'session:started', {
             sessionId: session.sessionId,
             bookingId: targetBooking._id?.toString(),
+            // roomId — same value as bookingId, reused as the WebRTC room
+            // name. useLiveRoom.ts on the client reads this off the socket
+            // payload (mentee side) or the URL query param (mentor side).
+            roomId: targetBooking._id?.toString(),
             title: session.title,
             startedAt: startedAtNow,
             scheduledAt: targetBooking.scheduledAt || session.scheduledAt,
-            // meetingUrl abhi model me hai (session.meeting.meetingUrl) —
-            // WebRTC/Google Meet wire hone ke baad yahan bhejenge
             meetingUrl: session.meeting?.meetingUrl || null,
           });
         } catch (emitErr: any) {
@@ -901,7 +903,10 @@ class MentorshipSessionService {
         }
       }
 
-      return updatedSession;
+      return {
+        ...(updatedSession?.toJSON ? updatedSession.toJSON() : updatedSession),
+        roomId: targetBooking._id?.toString(),
+      };
     } catch (error: any) {
       logger.error(`Failed to start session: ${error.message}`);
       throw error;

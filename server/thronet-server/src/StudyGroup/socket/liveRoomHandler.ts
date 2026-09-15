@@ -27,6 +27,7 @@ import {
 } from '../types/Socket.types';
 import GroupMember from '../models/GroupMember.model';
 import { LoggerUtil } from '@/shared/logger.util';
+import { SessionMentor, Mentor } from '@/Mentorship/models';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MAX_ROOM_SIZE = 16; // WebRTC mesh: 16 peers = 120 connections — hard limit
@@ -43,34 +44,55 @@ const roomSessions = new Map<string, RoomSession>();
 async function isMember(userId: string, groupId: string): Promise<boolean> {
   // Allow mock group ID '1' for frontend UI testing
   if (groupId === '1' || groupId === 1 as any) return true;
-  
-  // OLD: ObjectId.isValid() rejects UUID strings — our app uses UUIDs, not ObjectIds
-  // if (!mongoose.Types.ObjectId.isValid(groupId) || !mongoose.Types.ObjectId.isValid(userId)) {
-  //   LoggerUtil.warn(`Invalid ObjectId passed to isMember: userId=${userId}, groupId=${groupId}`);
-  //   return false;
-  // }
 
-  // NEW: userId and groupId are UUID strings, not MongoDB ObjectIds
   if (!userId || !groupId) {
     LoggerUtil.warn(`Missing userId or groupId in isMember check`);
     return false;
   }
 
-  // OLD: field names 'user' and 'group' don't exist on GroupMember model
-  // const member = await GroupMember.findOne({
-  //   user: userId,
-  //   group: groupId,
-  //   status: 'active',
-  // }).lean();
-
-  // NEW: correct field names matching GroupMember model schema
+  // StudyGroup room — userId/groupId are UUID strings, matched against GroupMember
   const member = await GroupMember.findOne({
     userId: userId,
     groupId: groupId,
     status: 'active',
   }).lean();
-  return !!member;
+  if (member) return true;
+
+  // Not a StudyGroup member — check if this roomId is actually a mentorship
+  // booking instead (mentor-session rooms reuse the booking's _id as roomId).
+  return await isMentorshipSessionMember(userId, groupId);
 }
+
+// ─── Helper: verify mentor/mentee membership on a mentorship session room ─────
+async function isMentorshipSessionMember(userId: string, roomId: string): Promise<boolean> {
+  try {
+    const session = await SessionMentor.findOne({ 'bookings._id': roomId }).lean();
+    if (!session) return false;
+
+    const booking = (session.bookings || []).find((b: any) => b._id.toString() === roomId);
+    if (!booking) return false;
+
+     // Only allow while the specific booking is actually in progress —
+    // blocks joining a room for a session that hasn't started or already ended.
+    // ⚠️ TS2367: this import path's booking-status type is missing 'in_progress'
+    // (and likely 'rescheduled') even though startSession() in
+    // mentorshipSession.service.ts sets exactly this value at runtime. Casting
+    // sidesteps the stale type without weakening the actual check. Send the
+    // ISessionMentor booking type (session.types.ts) to fix the type at its root.
+    if ((booking.status as string) !== 'in_progress') return false;
+
+    const menteeId = booking.menteeId || booking.bookedBy;
+    if (menteeId && userId === menteeId) return true;
+
+    const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
+    return !!mentor && mentor.userId === userId;
+  } catch (error: any) {
+    LoggerUtil.warn(`isMentorshipSessionMember check failed: ${error.message}`);
+    return false;
+  }
+}
+
+
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
 export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void => {
