@@ -221,8 +221,9 @@ class RefundService {
               );
             }
 
-            // Step 8: Send notifications (non-critical — failure does not throw)
-            await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId);
+                       // Step 8: Send notifications (non-critical — failure does not throw)
+                       await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId, input.userId);
+
 
       // Step 9: Mark notifications sent in log
       cancellationLog.mentorNotified = true;
@@ -380,7 +381,8 @@ class RefundService {
     session: any,
     refundCalculation: any,
     reason: string,
-    menteeId?: string
+    menteeId?: string,
+    cancelledByUserId?: string
   ): Promise<void> {
     try {
       logger.info('Sending refund notifications');
@@ -462,29 +464,39 @@ class RefundService {
             });
             await smsService.sendSMS({ to: mentor.phoneNumber, message: mentorSmsMessage });
           }
-    
-          // ✅ NEW: in-app notifications for both parties
-          NotificationService.sendNotification({
-            userId: mentee.userId,
-            type: NotificationType.REFUND_PROCESSED,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: refundCalculation.refundEligible ? 'Refund Processed' : 'Session Cancelled',
-              message: refundCalculation.refundEligible
-                ? `Your refund of ₹${refundCalculation.refundAmount} for "${session.sessionType}" is being processed.`
-                : `Your session "${session.sessionType}" was cancelled. Reason: ${reason}`,
-            },
-          }).catch((e) => logger.error('In-app notification failed (refund → mentee):', e));
-    
-          NotificationService.sendNotification({
-            userId: mentor.userId,
-            type: NotificationType.SESSION_CANCELLED,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Session Cancelled',
-              message: `${mentee.fullName || mentee.email} cancelled the "${session.sessionType}" session. Reason: ${reason}`,
-            },
-          }).catch((e) => logger.error('In-app notification failed (refund → mentor):', e));
+              // ✅ FIX: figure out who actually cancelled, so the notification
+          // (a) goes to the OTHER party, not back to the canceller, and
+          // (b) correctly names the person who cancelled.
+          const cancelledByMentee = cancelledByUserId === mentee.userId;
+          const cancellerName = cancelledByMentee
+            ? (mentee.fullName || mentee.email)
+            : (mentor.fullName || mentor.email);
+
+          if (cancelledByMentee) {
+            // Mentee cancelled → notify the mentor only
+            NotificationService.sendNotification({
+              userId: mentor.userId,
+              type: NotificationType.SESSION_CANCELLED,
+              channels: [NotificationChannel.IN_APP],
+              data: {
+                title: 'Session Cancelled',
+                message: `${cancellerName} cancelled the "${session.sessionType}" session. Reason: ${reason}`,
+              },
+            }).catch((e) => logger.error('In-app notification failed (refund → mentor):', e));
+          } else {
+            // Mentor cancelled → notify the mentee only
+            NotificationService.sendNotification({
+              userId: mentee.userId,
+              type: NotificationType.SESSION_CANCELLED,
+              channels: [NotificationChannel.IN_APP],
+              data: {
+                title: refundCalculation.refundEligible ? 'Session Cancelled — Refund Processing' : 'Session Cancelled',
+                message: refundCalculation.refundEligible
+                  ? `${cancellerName} cancelled your "${session.sessionType}" session. Reason: ${reason}. A refund of ₹${refundCalculation.refundAmount} is being processed.`
+                  : `${cancellerName} cancelled your "${session.sessionType}" session. Reason: ${reason}`,
+              },
+            }).catch((e) => logger.error('In-app notification failed (refund → mentee):', e));
+          }
     
           logger.info('Refund notifications sent successfully');
     } catch (error: any) {
