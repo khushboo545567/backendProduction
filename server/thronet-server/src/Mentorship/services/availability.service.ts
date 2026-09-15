@@ -57,7 +57,7 @@ class AvailabilityService {
       );
 
       if (existingAvailability) {
-        throw new ConflictError('Availability already exists for this date');
+        throw new ConflictError('You already have availability set for this date. Edit or delete the existing entry instead.');
       }
 
       // ✅ FIX: validateSlots now checks for overlaps between slots in the same day
@@ -83,6 +83,15 @@ class AvailabilityService {
       logger.info(`Availability created: ${availability.availabilityId}`);
       return availability;
     } catch (error: any) {
+      // ✅ FIX: the pre-check above can lose a race (two rapid requests, or
+      // eventual-consistency reads) — MongoDB's own unique index then rejects
+      // the insert with a raw E11000 error, which was leaking straight to the
+      // frontend as unreadable technical text. Catch that specific case and
+      // convert it to the same friendly message as the pre-check.
+      if (error?.code === 11000) {
+        logger.warn(`Duplicate availability insert caught by DB index for mentor: ${input.mentorId}`);
+        throw new ConflictError('You already have availability set for this date. Edit or delete the existing entry instead.');
+      }
       logger.error(`Failed to create availability: ${error.message}`);
       throw error;
     }

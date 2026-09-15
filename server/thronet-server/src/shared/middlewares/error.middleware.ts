@@ -27,21 +27,40 @@ const errorMiddleware = (error: CustomError, req: Request, res: Response, _next:
         path: req.path,
     });
 
-    // Audit log
-    AuditLog.logAction({
+     // Audit log
+     AuditLog.logAction({
         userId,
         action: 'UNHANDLED_ERROR',
         ipAddress,
         status: 'FAILED',
-        severity: 'CRITICAL',
-        metadata: { error: error.message, path: req.path },
+        severity: 'HIGH', // ✅ FIX: model only allows LOW | MEDIUM | HIGH — 'CRITICAL' isn't valid
+        metadata: new Map(Object.entries({ error: error.message, path: req.path })), // ✅ FIX: metadata is typed as Map, not a plain object
     }).catch((auditError: unknown) =>
         LoggerUtil.error('Audit log failed', { error: (auditError as Error).message })
     );
 
-    // Format response
-    const statusCode = error.statusCode || 500;
-    const message = error.message || 'Internal server error';
+        // Format response — never leak raw DB error text to the client
+        let statusCode = error.statusCode || 500;
+        let message = error.message || 'Internal server error';
+    
+        // MongoDB duplicate key error (E11000)
+        if ((error as any).code === 11000) {
+            statusCode = 409;
+            message = 'This entry already exists. Please edit or delete the existing one instead.';
+        }
+    
+        // Mongoose validation error
+        if (error.name === 'ValidationError') {
+            statusCode = 400;
+            message = 'Invalid data provided. Please check your input and try again.';
+        }
+    
+        // Mongoose CastError (bad ObjectId, bad date, etc.)
+        if (error.name === 'CastError') {
+            statusCode = 400;
+            message = 'Invalid identifier provided.';
+        }
+
     // res.status(statusCode).json(
         ResponseUtil.error(res, message.toString(), statusCode)
     // );
