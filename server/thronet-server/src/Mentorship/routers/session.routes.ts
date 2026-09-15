@@ -107,6 +107,17 @@ router.get('/past', sessionController.getPastSessions);
 router.get('/:id/progress', sessionController.getSessionProgress);
 
 /**
+ * @route   GET /api/v1/sessions/:id
+ * @desc    Get a single session by sessionId — mentor ya mentee dono use karte hain
+ *          (Join Session flow ke liye zaroori: room/meeting details yahin se aate hain)
+ * @access  Private
+ * ✅ FIX: controller function `getSessionById` already tha, par route kabhi
+ * register hi nahi hua tha — isliye frontend "Join Session" pe session details
+ * fetch nahi kar pa raha tha (404 aa raha hoga abhi).
+ */
+router.get('/:id', sessionController.getSessionById);
+
+/**
  * @route   POST /api/v1/sessions/:id/confirm
  * @desc    Confirm session booking (Mentor only)
  * @access  Private (Mentor)
