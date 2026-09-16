@@ -684,12 +684,18 @@ class MentorshipSessionService {
           updates.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, userId);
         }
 
-        const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage'];
+        const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage', 'scheduledAt', 'duration', 'pricing', 'followUp', 'bufferTimeMinutes'];
         const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
-
+        
         if (!isValidUpdate) {
-          throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage are allowed.');
+          throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage, scheduledAt, duration, pricing, followUp, bufferTimeMinutes are allowed.');
         }
+        
+        // scheduledAt string ho to Date me convert karo, warna Mongo save nahi karega sahi se
+        if (updates.scheduledAt) {
+          updates.scheduledAt = new Date(updates.scheduledAt);
+        }
+        
 
         const updatedSession = await SessionMentor.findOneAndUpdate(
           { sessionId },
