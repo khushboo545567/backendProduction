@@ -140,7 +140,10 @@ class AvailabilityController {
       ResponseHandler.success(res, 'Availability updated successfully', availability);
     } catch (error: any) {
       logger.error('Update availability error:', error);
-      ResponseHandler.error(res, 'Failed to update availability', 500, error);
+      // ✅ FIX: forward the REAL error message + correct status code
+      // (BadRequestError sets .statusCode) instead of always masking it as
+      // a generic 500 — matches the pattern already used in createAvailability.
+      ResponseHandler.error(res, error.message || 'Failed to update availability', error.statusCode || 500, error);
     }
   }
 
@@ -153,7 +156,11 @@ class AvailabilityController {
       ResponseHandler.success(res, 'Availability deleted successfully');
     } catch (error: any) {
       logger.error('Delete availability error:', error);
-      ResponseHandler.error(res, 'Failed to delete availability', 500, error);
+      // ✅ FIX: forward the REAL error message + correct status code instead
+      // of always masking as generic 500 — e.g. "Cannot delete availability
+      // with booked slots" (400) was being hidden behind a generic message,
+      // so the user had no idea WHY delete failed.
+      ResponseHandler.error(res, error.message || 'Failed to delete availability', error.statusCode || 500, error);
     }
   }
 
