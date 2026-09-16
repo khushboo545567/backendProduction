@@ -24,6 +24,9 @@ import { JobEventHandler, StatsService } from '@/Job-Service/models/Job.model';
 import CacheUtil from '@/shared/cache.util';
 import { validateApplyJobInput, validateCoverLetterInput, validateResumeSelectionInput, validateUpdateApplicationStatus, validateApplicationOwnership } from '../validations';
 import { SearchEventService, SearchStatsService } from '../services';
+import JobNotificationService from '../services/notification.service';
+import { NotificationType } from '../enums/NotificationType.enum';
+import { Job } from '../models/Job.model';
 
 
 // Helper for request context + timing
@@ -102,6 +105,65 @@ export const applyToJobController = withRequestContext(async (req: Request, res:
     status: application.status,
     appliedAt: application.appliedAt,
   };
+
+  try {
+    // job.createdBy = userId of the user who posted this job (present on IJob, line 215 of Job.model.ts).
+    // This is the correct recruiter field — company.ownerId does not exist on the Company schema.
+    // Decision: notify only the job creator (single recipient). If multi-admin notification is
+    // required in future, query the Company's admin collection using job.companyId.
+    const job = await Job.findById(jobId).select('createdBy title companyId').lean() as any;
+    const jobTitle = job?.title || 'a job posting';
+    const recruiterId: string | undefined = job?.createdBy;
+
+    // Fetch company name separately for display (companyId is a string UUID on the Job)
+    let companyName = 'the company';
+    if (job?.companyId) {
+      const { Company } = await import('@/company/models');
+      const company = await Company.findOne({ companyId: job.companyId }).select('companyName').lean() as any;
+      companyName = company?.companyName || companyName;
+    }
+
+    const companyId = job?.companyId || '';
+
+    // Notify Applicant
+    JobNotificationService.sendNotification({
+      userId,
+      type: NotificationType.APPLICATION_SUBMITTED,
+      priority: 'normal',
+      data: {
+        applicationId: application.applicationId,
+        jobId,
+        jobTitle,
+        companyId,
+        companyName,
+        message: 'Your application has been successfully submitted.',
+      }
+    });
+
+    // Notify Recruiter (job creator)
+    // Only fires when the job has a valid createdBy userId — no silent drop possible.
+    if (recruiterId) {
+      const candidateName = req.user?.name || req.user?.email || 'A candidate';
+      JobNotificationService.sendNotification({
+        userId: recruiterId,
+        type: NotificationType.APPLICATION_SUBMITTED,
+        priority: 'high',
+        data: {
+          applicationId: application.applicationId,
+          jobId,
+          jobTitle,
+          candidateId: userId,
+          candidateName,
+          companyName,
+          message: `${candidateName} has applied for your job posting: ${jobTitle}.`,
+        }
+      });
+    } else {
+      logger.warn('Recruiter notification skipped — job.createdBy is empty', { jobId });
+    }
+  } catch (error) {
+    logger.error('Failed to send application submitted notification', { error });
+  }
 
   // Cache for idempotency
   await CacheUtil.set(idempotencyKey, JSON.stringify(responseData), 86400);
@@ -193,6 +255,28 @@ JobEventHandler.handleJobApplication({
     status: application.status,
     updatedAt: application.updatedAt,
   };
+
+  try {
+    const job = await Job.findById(application.jobId).populate('company', 'name').lean() as any;
+    const companyName = job?.company?.name || 'the company';
+    const jobTitle = job?.title || 'the job';
+
+    JobNotificationService.sendNotification({
+      userId: application.userId, // The original applicant
+      type: NotificationType.APPLICATION_STATUS_UPDATED,
+      priority: 'high',
+      data: {
+        applicationId: application.applicationId,
+        jobId: application.jobId,
+        jobTitle,
+        companyName,
+        newStatus: value.status,
+        message: 'The status of your job application has been updated.',
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to send status update notification', { error });
+  }
 
   await CacheUtil.set(idempotencyKey, JSON.stringify(responseData), 86400);
 
