@@ -1,10 +1,10 @@
 import cron from 'node-cron';
 import logger from '@/shared/logger.util';
 import { Company, Follower, CompanyPost, Event } from '@/company/models';
-import { notificationService } from '@/Mentorship/services';
+import JobNotificationService from '@/Job-Service/services/notification.service';
+import { NotificationType } from '@/Job-Service/enums/NotificationType.enum';
 import {Job} from '@/Job-Service/models';
-import { PostStatus, EventStatus } from '@/company/interfaces';
-import { ICompanyDocument } from '@/company/interfaces';
+import { PostStatus, EventStatus, ICompanyDocument } from '@/company/interfaces';
 import { Types } from 'mongoose';
 
 /**
@@ -45,29 +45,27 @@ interface BulkNotificationOptions {
 class NotificationJob {
   private isRunning = false;
 
-  /**
-   * Send bulk notifications (wrapper method for notification service)
-   */
   private async sendBulkNotification(options: BulkNotificationOptions): Promise<void> {
     try {
-      // Since the notification service doesn't have sendBulkNotification method,
-      // we'll simulate it by sending individual notifications
-      logger.info(`📤 Sending bulk notification to ${options.userIds.length} users`, {
-        type: options.type,
-        title: options.title,
+      if (process.env.ENABLE_JOB_BULK_NOTIFICATIONS !== 'true') {
+        logger.info('Bulk notifications disabled via feature flag. Skipping send.');
+        return;
+      }
+      
+      const type = options.type as NotificationType;
+      
+      await JobNotificationService.sendIdenticalBulkNotification({
+        userIds: options.userIds,
+        type,
+        data: options.data,
+        priority: options.priority,
       });
 
-      // In a real implementation, you would batch these or use a proper notification service
-      // For now, we'll just log it as the service doesn't support bulk notifications yet
-      logger.info('Bulk notification prepared', {
+      logger.info('Bulk notification successfully dispatched', {
         userCount: options.userIds.length,
         type: options.type,
-        priority: options.priority,
-        data: options.data,
       });
-
-      // TODO: Integrate with actual push notification service (Firebase, OneSignal, etc.)
-    } catch (error : any) {
+    } catch (error: any) {
       logger.error('Error sending bulk notification', error);
       throw error;
     }
@@ -147,7 +145,7 @@ class NotificationJob {
           // Send notification
           await this.sendBulkNotification({
             userIds,
-            type: 'new_post',
+            type: NotificationType.NEW_JOB_POSTED,
             title: `${company.name} posted something new`,
             message: post.content.substring(0, 100) + '...',
             data: {
@@ -155,6 +153,7 @@ class NotificationJob {
               companyId: company._id.toString(),
               companyName: company.name,
               companySlug: company.slug,
+              message: 'A company you follow has posted a new job.'
             },
             priority: 'normal',
           });
@@ -279,7 +278,7 @@ class NotificationJob {
           // Send job recommendation
           await this.sendBulkNotification({
             userIds: uniqueUserIds,
-            type: 'job_recommendation',
+            type: NotificationType.JOB_RECOMMENDATION,
             title: `New job opportunity at ${company.name}`,
             message: `${job.title} - ${job.location}`,
             data: {
@@ -287,6 +286,9 @@ class NotificationJob {
               companyId: company._id.toString(),
               jobTitle: job.title,
               location: job.location,
+              companyName: company.name,
+              matchReason: `Because you follow companies in the ${company.industry || 'same'} industry`,
+              message: 'We found a new job that matches your profile and interests.'
             },
             priority: 'normal',
           });
