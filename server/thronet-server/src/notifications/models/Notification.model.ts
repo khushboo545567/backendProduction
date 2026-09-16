@@ -7,10 +7,10 @@ export interface INotification extends Document {
     senderId: string;          // who triggered it
     senderName: string;
     senderPhoto?: string;
-    type: 'post_created' | 'post_liked' | 'post_commented' | 'post_reposted' | 'connection_request' | 'connection_accepted' | 'mentioned' | 'new_follower' | 'profile_viewed' | 'birthday' | 'connection_birthday' | 'work_anniversary' | 'pymk_suggestion' | 'comment_liked' | 'comment_replied';
+    type: 'post_created' | 'post_liked' | 'post_commented' | 'post_reposted' | 'connection_request' | 'connection_accepted' | 'mentioned' | 'new_follower' | 'profile_viewed' | 'birthday' | 'connection_birthday' | 'work_anniversary' | 'pymk_suggestion' | 'comment_liked' | 'comment_replied' | 'application_submitted' | 'application_status_updated' | 'job_recommendation' | 'new_job_posted';
     entityId: string;         
     entityIds?: string[];
-    entityType: 'post' | 'connection' | 'comment' | 'user';
+    entityType: 'post' | 'connection' | 'comment' | 'user' | 'job';
     message: string;
     isRead: boolean;
     idempotencyKey?: string;
@@ -28,12 +28,21 @@ const NotificationSchema = new Schema<INotification, INotificationModel>(
         senderPhoto: { type: String, default: null },
         type: {
             type: String,
-            enum: ['post_created', 'post_liked', 'post_commented', 'post_reposted', 'connection_request', 'connection_accepted', 'mentioned', 'new_follower', 'profile_viewed', 'birthday', 'connection_birthday', 'work_anniversary', 'pymk_suggestion', 'comment_liked', 'comment_replied'],
+            enum: [
+                // Social notifications
+                'post_created', 'post_liked', 'post_commented', 'post_reposted',
+                'connection_request', 'connection_accepted', 'mentioned', 'new_follower',
+                'profile_viewed', 'birthday', 'connection_birthday', 'work_anniversary',
+                'pymk_suggestion', 'comment_liked', 'comment_replied',
+                // Job-Service notifications
+                'application_submitted', 'application_status_updated',
+                'job_recommendation', 'new_job_posted',
+            ],
             required: true,
         },
         entityId: { type: String, required: true },
         entityIds: { type: [String], default: [] },
-        entityType: { type: String, enum: ['post', 'connection', 'comment', 'user'], required: true },
+        entityType: { type: String, enum: ['post', 'connection', 'comment', 'user', 'job'], required: true },
         message: { type: String, required: true },
         isRead: { type: Boolean, default: false },
         idempotencyKey: { type: String, default: null },
