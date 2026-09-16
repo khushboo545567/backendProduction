@@ -304,7 +304,7 @@ class AuthMiddleware {
                     });
 
                 } catch (deviceError: any) {
-                    logger.error('Device validation failed (non-critical)', {
+                    logger.warn('Device validation failed (non-critical)', {
                         error: deviceError.message,
                         deviceId,
                         correlationId
