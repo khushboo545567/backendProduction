@@ -75,4 +75,41 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
       LoggerUtil.error('mentorship:notify-join failed', { error: err.message });
     }
   });
+
+  // ✅ NEW: live-call emoji reactions (👍 ❤️ 😂 👏 🎉) — relayed 1:1 via
+  // emitToUser, same mentor/mentee resolution as notify-join above. No new
+  // socket room needed — reuses the existing user:{userId} room convention,
+  // so it works even without touching liveRoomHandler.ts.
+  socket.on('mentorship:send-reaction', async (data: { sessionId: string; emoji: string }) => {
+    try {
+      const { sessionId, emoji } = data;
+      if (!sessionId || !emoji) return;
+
+      // Fixed allow-list — don't let the client send arbitrary strings.
+      const ALLOWED_REACTIONS = ['👍', '❤️', '😂', '👏', '🎉'];
+      if (!ALLOWED_REACTIONS.includes(emoji)) return;
+
+      const session = await SessionMentor.findOne({ sessionId });
+      if (!session) return;
+
+      const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+      const mentorUserId = mentor?.userId;
+
+      const confirmedBooking = session.bookings?.find((b: any) =>
+        ['confirmed', 'in_progress', 'rescheduled'].includes(b.status)
+      );
+      const menteeUserId = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy;
+
+      const targetUserId = userId === mentorUserId ? menteeUserId : mentorUserId;
+      if (!targetUserId) return;
+
+      emitToUser(targetUserId, 'mentorship:reaction-received', {
+        sessionId,
+        emoji,
+        fromUserId: userId,
+      });
+    } catch (err: any) {
+      LoggerUtil.error('mentorship:send-reaction failed', { error: err.message });
+    }
+  });
 };
