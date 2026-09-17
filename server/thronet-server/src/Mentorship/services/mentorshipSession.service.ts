@@ -1276,6 +1276,71 @@ class MentorshipSessionService {
       throw error;
     }
   }
+  /**
+   * ✅ NEW: Get receipt data for a completed booking — used by the
+   * "Download Receipt" button on the mentor's Bookings page.
+   * Returns plain data only (no PDF lib installed); frontend renders it.
+   */
+  async getSessionReceipt(
+    sessionId: string,
+    userId: string,
+    bookingId?: string,
+    authToken?: string
+  ): Promise<any> {
+    try {
+      const session = await this.getSessionById(sessionId, userId, authToken);
+
+      let targetBooking: any = null;
+      if (bookingId) {
+        targetBooking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
+        if (!targetBooking) throw new NotFoundError('Booking not found on this session');
+      } else {
+        targetBooking = (session.bookings || []).find(
+          (b: any) => b.status === BookingStatus.COMPLETED
+        );
+      }
+
+      if (!targetBooking || targetBooking.status !== BookingStatus.COMPLETED) {
+        throw new BadRequestError('Receipt is only available for completed bookings');
+      }
+
+      const menteeId = targetBooking.menteeId || targetBooking.bookedBy;
+      const [menteeDoc, mentorDoc] = await Promise.all([
+        menteeId ? User.findOne({ userId: menteeId }) : null,
+        Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }),
+      ]);
+
+      const menteeName =
+        menteeDoc?.fullName ||
+        `${menteeDoc?.firstName || ''} ${menteeDoc?.lastName || ''}`.trim() ||
+        menteeDoc?.email ||
+        'Student';
+
+      const mentorUser = mentorDoc?.userId ? await User.findOne({ userId: mentorDoc.userId }) : null;
+      const mentorName =
+        mentorDoc?.title ||
+        `${mentorUser?.firstName || ''} ${mentorUser?.lastName || ''}`.trim() ||
+        'Mentor';
+
+      return {
+        bookingId: targetBooking._id?.toString(),
+        sessionId: session.sessionId,
+        title: session.title,
+        menteeName,
+        mentorName,
+        scheduledAt: targetBooking.scheduledAt || session.scheduledAt,
+        slotTime: targetBooking.slotTime || null,
+        duration: session.duration,
+        status: targetBooking.status,
+        pricing: targetBooking.pricing || session.pricing,
+        payment: targetBooking.payment || session.payment,
+        completedAt: targetBooking.completion?.completedAt || null,
+      };
+    } catch (error: any) {
+      logger.error(`Failed to build session receipt: ${error.message}`);
+      throw error;
+    }
+  }
 
   /**
    * Get session statistics for a user

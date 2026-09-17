@@ -151,6 +151,14 @@ router.post(
 router.get('/:id/refund-estimate', sessionController.getRefundEstimate);
 
 /**
+ * ✅ NEW: Get receipt data for a completed booking
+ * @route   GET /api/v1/sessions/:id/receipt
+ * @query   bookingId (optional — falls back to first completed booking)
+ * @access  Private
+ */
+router.get('/:id/receipt', sessionController.getSessionReceipt);
+
+/**
  * @route   PUT /api/v1/sessions/:id
  * @desc    Update session details
  * @access  Private
