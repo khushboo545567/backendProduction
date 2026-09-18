@@ -49,7 +49,7 @@ const createGroupSessionValidator = Joi.object({
   outcomes: Joi.array().items(Joi.string()).optional(),
   paymentMethod: Joi.string().valid('razorpay', 'stripe', 'cash', 'bank_transfer', 'free').required(),
   followUp: Joi.object({
-    allowed: Joi.number().min(0).max(10).required(),
+    allowed: Joi.boolean().required(),
     periodDays: Joi.number().min(0).max(30).when('allowed', {
       is: true,
       then: Joi.required(),
