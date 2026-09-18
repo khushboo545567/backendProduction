@@ -18,7 +18,7 @@ class UserRepository extends BaseRepository<IUser> {
      * Find user by userId
      */
   async findByUserId(userId: string): Promise<IUser | null> {
-    return await this.model.findOne({ userId }).select('-password').lean();
+    return await this.model.findOne({ userId }).select('-password').lean() as unknown as IUser | null;
   }
 
   /**
@@ -221,11 +221,11 @@ class UserRepository extends BaseRepository<IUser> {
   }
 
   async findWithPagination(query: any, sort: string, skip: number, limit: number): Promise<IUser[]> {
-    return await this.model.find(query).select('-password').sort(sort).skip(skip).limit(limit).lean();
+    return await this.model.find(query).select('-password').sort(sort).skip(skip).limit(limit).lean() as unknown as IUser[];
   }
 
   async updateByUserId(userId: string, updates: any): Promise<IUser | null> {
-    return await this.model.findOneAndUpdate({ userId }, { $set: updates }, { new: true }).select('-password').lean();
+    return await this.model.findOneAndUpdate({ userId }, { $set: updates }, { new: true }).select('-password').lean() as unknown as IUser | null;
   }
 
   async getDailyGrowth(startDate: Date, endDate: Date): Promise<any[]> {

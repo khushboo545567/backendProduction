@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { SessionType } from '@/shared/constants/sessionTypes';
-import { BookingStatus } from '@/shared/constants/bookingStatus';
+import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus';
 import { ISessionMentor, PaymentStatus, PaymentMethod } from '@/Mentorship/interface/session.types';
 
 export interface SessionMentorshipDocument extends Omit<ISessionMentor, '_id'>, Document {}
@@ -79,6 +79,13 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       totalAmount:  { type: Number, required: true, min: 0 },
       currency:     { type: String, default: 'INR' },
     },
+    settings: {
+      followUp: {
+        allowed:    { type: Number, default: 0 },
+        periodDays: { type: Number, default: 0 },
+      },
+      bufferTimeMinutes: { type: Number, default: 0 },
+    },
     bookings: [
       {
         menteeId:       { type: String, required: true },
@@ -86,12 +93,13 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         bookedAt:       { type: Date, default: Date.now },
         status: {
           type: String,
-          enum: ['pending', 'confirmed', 'rescheduled', 'in_progress', 'cancelled', 'completed'],
+          enum: ['pending', 'confirmed', 'rescheduled', 'in_progress', 'cancelled', 'completed', 'no_show'],
           default: 'pending',
         },
         slotTime:       { type: String },
         scheduledAt:    { type: Date },
         availabilityId: { type: String },
+        startedAt:      { type: Date },
         payment: {
           status: { type: String },
           method: { type: String },
@@ -102,8 +110,16 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           totalAmount: { type: Number, default: 0 },
           currency:    { type: String, default: 'INR' },
         },
+        completion: {
+          completedAt:      { type: Date },
+          actualDuration:   { type: Number },
+          wasSuccessful:    { type: Boolean, default: true },
+          followUpRequired: { type: Boolean, default: false },
+          followUpNotes:    { type: String },
+        },
       },
     ],
+    
     isBooked:       { type: Boolean, default: false, index: true },
     bookedBy:       { type: String, default: null },
     bookedAt:       { type: Date, default: null },
@@ -236,6 +252,21 @@ SessionMentorSchema.methods.confirmBooking = async function () {
 };
 
 SessionMentorSchema.methods.startSession = async function () {
+  // Guard 1: sirf confirmed/rescheduled state se hi start ho sakta hai
+  if (this.status !== BookingStatus.CONFIRMED && this.status !== BookingStatus.RESCHEDULED) {
+    throw new Error(`Cannot start session from status "${this.status}"`);
+  }
+
+  // Guard 2: yahi REAL FIX hai — scheduled time window ke bahar start nahi hoga
+  if (!isStartAllowed(this.scheduledAt)) {
+    const isTooEarly = Date.now() < new Date(this.scheduledAt).getTime();
+    const err: any = new Error(
+      isTooEarly ? 'Session cannot be started yet — too early.' : 'Session start window has expired.'
+    );
+    err.code = isTooEarly ? 'TOO_EARLY' : 'WINDOW_EXPIRED';
+    throw err;
+  }
+
   this.status = BookingStatus.IN_PROGRESS;
   this.startedAt = new Date();
   if (this.bookings && this.bookings.length > 0) {

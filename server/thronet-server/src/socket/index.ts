@@ -21,6 +21,9 @@ import { LoggerUtil } from '@/shared/logger.util';
 import { handleChatEvents } from '@/StudyGroup/socket/chatHandler';
 import { liveRoomHandler } from '@/StudyGroup/socket/liveRoomHandler';
 import { handlePresenceEvents } from '@/StudyGroup/socket/presenceHandler';
+// upar baaki imports ke saath:
+import { setupMentorshipHandlers } from './handlers/mentorshipHandler';
+
 
 // ─── Single canonical type ────────────────────────────────────────────────────
 // All handlers must read userId from socket.data.userId — never socket.userId
@@ -88,6 +91,8 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
     setupConnectionHandlers(io!, socket);
     setupNotificationHandlers(io!, socket);
     setupMessageHandlers(io!, socket);
+    setupMentorshipHandlers(io!, socket); 
+    
 
     // StudyGroup-specific handlers
     handleChatEvents(io!, socket, userId);

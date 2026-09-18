@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ====================================
  * GOAL MODEL
  * ====================================
@@ -15,11 +15,13 @@ const goalSchema = new Schema<IGoal>(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
     user: {
       type: String,
       ref: 'User',
       required: [true, 'User is required'],
+      index: true,
     },
     title: {
       type: String,
@@ -87,19 +89,18 @@ const goalSchema = new Schema<IGoal>(
   {
     timestamps: true,
     toJSON: {
-  virtuals: true,
-  transform: function (_doc, ret) {
-    const r = ret as any;
-    r.id = r.goalId;
-    delete r._id;
-    delete r.__v;
-    return r;
-  },
-},
+      virtuals: true,
+      transform: function (_doc, ret: any) {
+        ret.id = ret.goalId;
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      }
+    },
     toObject: {
       virtuals: true,
-      transform: function (_doc, ret) {
-        delete (ret as any).__v;
+      transform: function (_doc, ret: any) {
+        delete ret.__v;
         return ret;
       },
     },
@@ -119,7 +120,7 @@ goalSchema.index({ tags: 1 });
 /**
  * Virtual: Progress Percentage
  */
-goalSchema.virtual('progressPercentage').get(function () {
+goalSchema.virtual('progressPercentage').get(function (this: any) {
   if (this.targetHours === 0) return 0;
   const percentage = (this.currentHours / this.targetHours) * 100;
   return Math.min(Math.round(percentage), 100);
@@ -128,7 +129,7 @@ goalSchema.virtual('progressPercentage').get(function () {
 /**
  * Virtual: Days Remaining
  */
-goalSchema.virtual('daysRemaining').get(function () {
+goalSchema.virtual('daysRemaining').get(function (this: any) {
   
   const now = new Date();
   const diff = new Date(this.endDate).getTime() - now.getTime();
@@ -138,7 +139,7 @@ goalSchema.virtual('daysRemaining').get(function () {
 /**
  * Virtual: Is Overdue
  */
-goalSchema.virtual('isOverdue').get(function () {
+goalSchema.virtual('isOverdue').get(function (this: any) {
   if (this.completed) return false;
   return new Date() > new Date(this.endDate);
 });
@@ -146,7 +147,7 @@ goalSchema.virtual('isOverdue').get(function () {
 /**
  * Pre-save middleware: Auto-complete goal if target reached
  */
-goalSchema.pre('save', function (next) {
+goalSchema.pre('save', function (this: any, next) {
   // Auto-complete if target hours reached
   if (this.currentHours >= this.targetHours && !this.completed) {
     this.completed = true;
@@ -208,7 +209,7 @@ goalSchema.statics.getUpcomingGoals = function (userId: string) {
 /**
  * Instance method: Update progress
  */
-goalSchema.methods.updateProgress = function (hoursToAdd: number) {
+goalSchema.methods.updateProgress = function (this: any, hoursToAdd: number) {
   this.currentHours += hoursToAdd;
   if (this.currentHours < 0) this.currentHours = 0;
   return this.save();

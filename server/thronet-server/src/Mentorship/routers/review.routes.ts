@@ -126,6 +126,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/v1/reviews/mentee/me
+ * @desc    Get reviews submitted by the logged-in mentee
+ * @access  Private (Mentee)
+ */
+router.get(
+  '/mentee/me',
+  AuthMiddleware.authenticate as any,
+  mentorshipReviewController.getMyReviews
+);
+
+/**
  * @route   GET /api/v1/reviews/:id
  * @desc    Get review by ID
  * @access  Public

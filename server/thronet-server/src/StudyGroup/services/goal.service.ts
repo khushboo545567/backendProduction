@@ -13,6 +13,8 @@ class GoalService {
       goalId: generateSecureId(),
       user: userId,
       ...goalData,
+      startDate: new Date(goalData.startDate),
+      endDate: new Date(goalData.endDate),
     });
     LoggerUtil.info(`Goal created: ${goal.goalId} for user for change ${userId}`);
     return goal;

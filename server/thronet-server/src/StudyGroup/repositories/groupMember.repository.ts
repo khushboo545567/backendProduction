@@ -12,7 +12,7 @@ class GroupMemberRepository {
     }
 
     async findOne(groupId: string, userId: string): Promise<IGroupMember | null> {
-        return await GroupMember.findOne({ groupId, userId }).lean();
+        return await GroupMember.findOne({ groupId, userId }).lean() as unknown as IGroupMember | null;
     }
 
     async findActiveOne(groupId: string, userId: string): Promise<IGroupMember | null> {
@@ -20,7 +20,7 @@ class GroupMemberRepository {
             groupId,
             userId,
             status: MemberStatus.ACTIVE
-        }).lean();
+        }).lean() as unknown as IGroupMember | null;
     }
 
     async findByGroupId(groupId: string): Promise<IGroupMember[]> {
@@ -29,7 +29,7 @@ class GroupMemberRepository {
         .sort({ joinedAt: 1 })
         .lean();
     logger.info('findByGroupId result:', result); // ← ADD
-    return result;
+    return result as unknown as IGroupMember[];
 }
 
     // async findByUserId(userId: string): Promise<IGroupMember[]> {
@@ -112,7 +112,7 @@ class GroupMemberRepository {
             groupId,
             role: { $in: [MemberRole.LEADER, MemberRole.ADMIN] },
             status: MemberStatus.ACTIVE,
-        }).lean();
+        }).lean() as unknown as IGroupMember[];
     }
 
     async countByUserId(userId: string): Promise<number> {

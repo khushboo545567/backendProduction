@@ -9,7 +9,7 @@ import { NextFunction, Request, Response } from 'express';
 const router = Router();
 
 const parseFormDataFields = (req: Request, res: Response, next: NextFunction): void => {
-  const fieldsToParse = ['pricing', 'followUp', 'meeting'];
+  const fieldsToParse = ['pricing', 'followUp', 'meeting', 'settings'];
   for (const field of fieldsToParse) {
     const body = req.body as Record<string, any>;
     if (body[field] && typeof body[field] === 'string') {
@@ -107,6 +107,17 @@ router.get('/past', sessionController.getPastSessions);
 router.get('/:id/progress', sessionController.getSessionProgress);
 
 /**
+ * @route   GET /api/v1/sessions/:id
+ * @desc    Get a single session by sessionId — mentor ya mentee dono use karte hain
+ *          (Join Session flow ke liye zaroori: room/meeting details yahin se aate hain)
+ * @access  Private
+ * ✅ FIX: controller function `getSessionById` already tha, par route kabhi
+ * register hi nahi hua tha — isliye frontend "Join Session" pe session details
+ * fetch nahi kar pa raha tha (404 aa raha hoga abhi).
+ */
+router.get('/:id', sessionController.getSessionById);
+
+/**
  * @route   POST /api/v1/sessions/:id/confirm
  * @desc    Confirm session booking (Mentor only)
  * @access  Private (Mentor)
@@ -138,6 +149,14 @@ router.post(
  * @access  Private
  */
 router.get('/:id/refund-estimate', sessionController.getRefundEstimate);
+
+/**
+ * ✅ NEW: Get receipt data for a completed booking
+ * @route   GET /api/v1/sessions/:id/receipt
+ * @query   bookingId (optional — falls back to first completed booking)
+ * @access  Private
+ */
+router.get('/:id/receipt', sessionController.getSessionReceipt);
 
 /**
  * @route   PUT /api/v1/sessions/:id

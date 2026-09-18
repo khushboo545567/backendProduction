@@ -44,8 +44,18 @@ class ReviewService {
         throw new Error('Review already submitted for this session');
       }
 
-      // Verify mentee owns the session
-      if (session.menteeId !== input.menteeId) {
+      // ✅ FIX: root-level session.menteeId defaults to null and is never
+      // set at booking time — the real mentee ID only lives inside the
+      // bookings[] array (see SessionMentor schema). The old check
+      // `session.menteeId !== input.menteeId` compared against that null
+      // field and rejected every mentee, even for their own sessions.
+      // Now it checks the bookings array (still falling back to the root
+      // field for any legacy data that does have it set).
+      const isOwner =
+        session.menteeId === input.menteeId ||
+        (session.bookings || []).some((b: any) => b.menteeId === input.menteeId);
+
+      if (!isOwner) {
         throw new Error('You can only review your own sessions');
       }
 
@@ -142,6 +152,19 @@ class ReviewService {
       return { reviews, total, stats };
     } catch (error: any) {
       logger.error('❌ Failed to get mentor reviews:', error);
+      throw error;
+    }
+  }
+
+    /**
+   * Get all reviews submitted by a specific mentee (for their "Reviews Given" tab)
+   */
+  async getMenteeReviews(menteeId: string): Promise<any[]> {
+    try {
+      logger.info(`📋 Fetching reviews submitted by mentee: ${menteeId}`);
+      return await reviewRepository.findByMenteeId(menteeId);
+    } catch (error: any) {
+      logger.error('❌ Failed to get mentee reviews:', error);
       throw error;
     }
   }
@@ -272,7 +295,7 @@ class ReviewService {
 
       return review;
     } catch (error: any) {
-      logger.error('❌ Failed to add mentor response:', error);
+      logger.error('❌ Failed to add response:', error);
       throw error;
     }
   }

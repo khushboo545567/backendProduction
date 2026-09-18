@@ -17,7 +17,7 @@ export class GoalRepository extends BaseRepository<IGoal> {
   // service mein Goal.findOne() use ho raha tha daily/weekly goal ke liye
   async findOne(query: any): Promise<IGoal | null> {
     try {
-      return await this.model.findOne(query).lean().exec();
+      return await this.model.findOne(query).lean().exec() as unknown as IGoal | null;
     } catch (error: any) {
       throw new Error(`Error finding goal: ${error}`);
     }
@@ -26,7 +26,7 @@ export class GoalRepository extends BaseRepository<IGoal> {
   // ADD: findByGoalId — UUID se fetch (lean)
   async findByGoalId(goalId: string): Promise<IGoal | null> {
     try {
-      return await this.model.findOne({ goalId }).lean().exec();
+      return await this.model.findOne({ goalId }).lean().exec() as unknown as IGoal | null;
     } catch (error: any) {
       throw new Error(`Error finding goal by goalId: ${error}`);
     }

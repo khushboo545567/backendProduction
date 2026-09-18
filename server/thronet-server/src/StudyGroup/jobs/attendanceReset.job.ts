@@ -152,7 +152,7 @@ const sendWeeklyAttendanceSummary = async (): Promise<void> => {
         const percentage = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
 
         await notificationService.createNotification({
-          recipient: user._id,
+          recipient: user._id.toString(),
           type: NotificationType.SYSTEM_UPDATE,
           title: '📊 Weekly Attendance Summary',
           message: `This week: ${presentDays}/${totalDays} days present (${Math.round(percentage)}%)`,
@@ -188,13 +188,13 @@ const sendMonthlyAttendanceReport = async (): Promise<void> => {
 
     for (const user of users) {
       try {
-        const attendanceData = await attendanceService.getAttendancePercentage(
-          user._id
+        const attendanceData = await attendanceService.getCurrentMonthPercentage(
+          user._id.toString()
         );
 
         if (attendanceData.totalDays > 0) {
           await notificationService.createNotification({
-            recipient: user._id,
+            recipient: user._id.toString(),
             type: NotificationType.SYSTEM_UPDATE,
             title: '📅 Monthly Attendance Report',
             message: `Last month: ${attendanceData.presentDays}/${attendanceData.totalDays} days (${attendanceData.attendancePercentage}%)`,

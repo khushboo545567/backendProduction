@@ -118,6 +118,10 @@ const MentorSchema = new Schema<MentorDocument>(
       autoAcceptBookings:     { type: Boolean, default: false },
       maxSessionsPerDay:      { type: Number, default: 5, min: 1, max: 15 },
       bufferBetweenSessions:  { type: Number, default: 15, min: 0 },
+      // ✅ NEW: Service creation ke time jo Duration mentor select karta hai,
+      // wahi yahan sync hoke future availability slots ka default duration
+      // banti hai (30/45/60 min).
+      slotDuration:           { type: Number, default: 30, min: 5, max: 180 },
     },
     socialProof: {
       linkedinUrl:    { type: String, trim: true },

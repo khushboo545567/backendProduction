@@ -4,6 +4,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ErrorResponse, HttpStatus } from '@/shared/response.util';
 import logger, { LogCategory } from '@/shared/logger.util';
 import environmentConfig from '@/config/environment/environment';
+import { AppError } from '@/shared/errors/app.error';
 /**
  * Error Handling Middleware
  * Centralized error handler for the Connection Service.
@@ -49,18 +50,30 @@ export const errorMiddleware = (err: Error | ErrorResponse, req: Request, res: R
     return next(err);
   }
 
-  // Determine status and message
-  const status = err instanceof ErrorResponse ? err.statusCode : HttpStatus.INTERNAL_SERVER_ERROR;
+    // Determine status and message — recognize both ErrorResponse and
+  // the AppError hierarchy (NotFoundError, BadRequestError, ForbiddenError,
+  // ConflictError, etc.) used across the mentorship/auth services. Without
+  // this, every expected 4xx business error fell through to 500 and got
+  // logged as a false "Unhandled error" crash.
+  const isKnownError = err instanceof ErrorResponse || err instanceof AppError;
+  const status = isKnownError
+    ? (err as ErrorResponse | AppError).statusCode
+    : HttpStatus.INTERNAL_SERVER_ERROR;
   const message = err.message || 'Internal Server Error';
   const details = process.env.NODE_ENV === 'development' ? (err.stack || err.toString()) : undefined;
 
-  // Log the error
-  logger.error('Unhandled error', {
+  // Log at a severity matching the actual failure: expected 4xx client
+  // errors (not found, bad request, forbidden) are `warn`, not `error` —
+  // only genuine 5xx / unrecognized errors are true "Unhandled error"s.
+  const logLevel = status >= 500 ? 'error' : 'warn';
+  const logLabel = status >= 500 ? 'Unhandled error' : 'Request error';
+
+  logger[logLevel](logLabel, {
     path: req.path,
     method: req.method,
     userId: req.user?.id || 'anonymous',
     error: message,
-    stack: err.stack,
+    stack: status >= 500 ? err.stack : undefined,
     details: err instanceof ErrorResponse ? err.errorDetails : undefined,
     category: LogCategory.SYSTEM,
   });

@@ -220,7 +220,7 @@ DeviceSchema.statics.validateDevice = async function (deviceId: string, fingerpr
 
         return device;
     } catch (error: any) {
-        logger.error('Device validation failed', { error: (error as Error).message, deviceId });
+        logger.warn('Device validation failed', { error: (error as Error).message, deviceId });
         throw error;
     }
 };

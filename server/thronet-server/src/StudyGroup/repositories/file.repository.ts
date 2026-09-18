@@ -19,7 +19,7 @@ export class FileRepository extends BaseRepository<IFile> {
   // ADD: findByFileId — external UUID se fetch
   async findByFileId(fileId: string): Promise<IFile | null> {
     try {
-      return await this.model.findOne({ fileId, isDeleted: false }).lean().exec();
+      return await this.model.findOne({ fileId, isDeleted: false }).lean().exec() as unknown as IFile | null;
     } catch (error: any) {
       throw new Error(`Error finding file by fileId: ${error}`);
     }

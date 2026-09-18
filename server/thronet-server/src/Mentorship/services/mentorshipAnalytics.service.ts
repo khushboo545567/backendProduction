@@ -26,6 +26,9 @@ class MentorshipAnalyticsService {
         SessionMentor.aggregate([
           { $match: { mentorId, ...dateFilter } },
           {
+            $unwind: { path: '$bookings', preserveNullAndEmptyArrays: false }
+          },
+          {
             $group: {
               _id: null,
               totalSessions: { $sum: 1 },
@@ -54,9 +57,9 @@ class MentorshipAnalyticsService {
       ]);
 
       const stats = sessionStats[0] || {
-        totalSessions: 0,
-        completedSessions: 0,
-        cancelledSessions: 0,
+        totalBookings: 0,
+        completedBookings: 0,
+        cancelledBookings: 0,
         totalEarnings: 0,
         averageSessionPrice: 0,
       };
@@ -76,11 +79,11 @@ class MentorshipAnalyticsService {
           status: mentor.status,
         },
         sessions: {
-          total: stats.totalSessions,
-          completed: stats.completedSessions,
-          cancelled: stats.cancelledSessions,
-          completionRate: stats.totalSessions > 0
-            ? Math.round((stats.completedSessions / stats.totalSessions) * 100)
+          total: stats.totalBookings,
+          completed: stats.completedBookings,
+          cancelled: stats.cancelledBookings,
+          completionRate: stats.totalBookings > 0
+            ? Math.round((stats.completedBookings / stats.totalBookings) * 100)
             : 0,
           byType: sessionTypeBreakdown,
         },

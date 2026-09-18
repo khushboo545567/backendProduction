@@ -235,8 +235,14 @@ class MentorService {
             updates.pricing = mergedPricing;
           }
 
+            // ✅ FIX: pehle sirf validate hota tha, merge karke wapas assign nahi hota tha
+      // (pricing ki tarah) — isliye partial availability update (jaise sirf
+      // { slotDuration }) poora availability object overwrite kar deta tha aur
+      // daysAvailable/preferredHours jaisi existing fields wipe ho jaati thi.
       if (updates.availability) {
-        this.validateAvailability({ ...mentor.availability, ...updates.availability });
+        const mergedAvailability = { ...mentor.availability, ...updates.availability };
+        this.validateAvailability(mergedAvailability);
+        updates.availability = mergedAvailability;
       }
 
       const updatedMentor = await mentorRepository.updateByMentorId(mentorId, updates);

@@ -12,7 +12,7 @@ import { GroupVisibility } from '../enums/GroupVisibility.enum';
 import mongoose from 'mongoose';
 import { logger } from '@/shared/logger.util';
 
-class GroupRepository extends BaseRepository<IGroup> {
+export class GroupRepository extends BaseRepository<IGroup> {
   constructor() {
     super(Group);
   }
@@ -98,12 +98,12 @@ class GroupRepository extends BaseRepository<IGroup> {
   /**
    * Increment member count
    */
-  async incrementMemberCount(groupId: string): Promise<IGroup | null> {
+  async incrementMemberCount(groupId: string, amount: number = 1): Promise<IGroup | null> {
     try {
       return await this.model
-        .findByIdAndUpdate(
-          groupId,
-          { $inc: { currentMemberCount: 1 } },
+        .findOneAndUpdate(
+          { groupId, isActive: true },
+          { $inc: { currentMemberCount: amount } },
           { new: true }
         )
         .exec();
@@ -118,8 +118,8 @@ class GroupRepository extends BaseRepository<IGroup> {
   async decrementMemberCount(groupId: string): Promise<IGroup | null> {
     try {
       return await this.model
-        .findByIdAndUpdate(
-          groupId,
+        .findOneAndUpdate(
+          { groupId, isActive: true, currentMemberCount: { $gt: 0 } },
           { $inc: { currentMemberCount: -1 } },
           { new: true }
         )
@@ -214,7 +214,7 @@ class GroupRepository extends BaseRepository<IGroup> {
   async findByGroupId(groupId: string): Promise<IGroup | null> {
         logger.info("inside repository")
 
-    return await this.model.findOne({ groupId, isActive: true }).lean();
+    return await this.model.findOne({ groupId, isActive: true }).lean() as unknown as IGroup | null;
   }
 
   async create(data: any, session?: mongoose.ClientSession): Promise<IGroup> {
@@ -232,22 +232,22 @@ class GroupRepository extends BaseRepository<IGroup> {
     return group.toObject();
   }
 
-  async softDeleteById(groupId: string): Promise<boolean> {
+  async softDeleteById(groupId: string, session?: mongoose.ClientSession): Promise<boolean> {
     const group = await this.model.findOne({ groupId, isActive: true });
     if (!group) return false;
     group.isActive = false;
-    await group.save();
+    await group.save({ session });
     return true;
   }
 
-  async findAll(query: any, sortQuery: any, skip: number, limit: number): Promise<IGroup[]> {
-    return await this.model
+  async findAll(query: any = {}, sortQuery: any = {}, skip: number = 0, limit: number = 0): Promise<IGroup[]> {
+    let q = this.model
       .find(query)
-      // .populate('leaderId', 'name email avatar')  // was: 'leader'
-      .sort(sortQuery)
-      .skip(skip)
-      .limit(limit)
-      // .lean();
+      .populate('leader', 'firstName lastName'); // Uncomment and use 'leader' virtual once added
+    if (Object.keys(sortQuery).length > 0) q = q.sort(sortQuery);
+    if (skip > 0) q = q.skip(skip);
+    if (limit > 0) q = q.limit(limit);
+    return await q.lean() as unknown as IGroup[];
   }
 
   async count(query: any): Promise<number> {
@@ -281,7 +281,7 @@ class GroupRepository extends BaseRepository<IGroup> {
     return await this.model
       .findOne({ groupId, isActive: true })
       .select('groupId title reports messageReports')
-      .lean();
+      .lean() as unknown as IGroup | null;
   }
 
   async getPendingReportsCount(): Promise<number> {

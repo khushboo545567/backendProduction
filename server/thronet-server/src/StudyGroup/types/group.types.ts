@@ -49,6 +49,7 @@ minAttendancePercent?: number;
  */
 export interface GroupResponse {
   _id: string;
+  id?: string;
   groupId:string;
   title: string;
   description?: string;
@@ -67,6 +68,7 @@ export interface GroupResponse {
   updatedAt: Date;
   memberRole?: MemberRole;
   isMember?: boolean;
+  isCreator?: boolean;
   // ADD same 3 fields
 cameraRequired: boolean;
 attendanceRequired: boolean;

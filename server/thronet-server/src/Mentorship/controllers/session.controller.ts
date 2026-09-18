@@ -334,11 +334,17 @@ class SessionController {
         return;
       }
 
+      const { bookingId } = req.body;
       const authToken = getAuthToken(req) || undefined;
-      const session = await mentorshipSessionService.startSession(id, userId, authToken);
+      const session = await mentorshipSessionService.startSession(id, userId, authToken, bookingId);
       ResponseHandler.success(res, 'Session started successfully', session);
     } catch (error: any) {
       logger.error('Failed to start session:', error);
+      // Time-window errors -> 409, not generic 500
+      if (error.code === 'TOO_EARLY' || error.code === 'WINDOW_EXPIRED') {
+        ResponseHandler.badRequest(res, error.message);
+        return;
+      }
       next(error);
     }
   }
@@ -355,15 +361,15 @@ class SessionController {
         ResponseHandler.unauthorized(res);
         return;
       }
-
       const authToken = getAuthToken(req) || undefined;
-      const { actualDuration, wasSuccessful, followUpRequired, followUpNotes } = req.body;
+      const { actualDuration, wasSuccessful, followUpRequired, followUpNotes, bookingId } = req.body;
 
       const session = await mentorshipSessionService.completeSession(
         id,
         userId,
         { actualDuration, wasSuccessful, followUpRequired, followUpNotes },
-        authToken
+        authToken,
+        bookingId
       );
       ResponseHandler.success(res, 'Session completed successfully', session);
     } catch (error: any) {
@@ -592,11 +598,41 @@ class SessionController {
     }
   }
 
-  /**
+   /**
+   * @route   GET /api/v1/sessions/:id/receipt
+   * @desc    Get receipt data for a completed booking (mentor's Bookings page)
+   * @access  Private
+   */
+   async getSessionReceipt(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const { bookingId } = req.query;
+      const authToken = getAuthToken(req) || undefined;
+
+      const receipt = await mentorshipSessionService.getSessionReceipt(
+        id,
+        userId,
+        bookingId as string | undefined,
+        authToken
+      );
+      ResponseHandler.success(res, 'Receipt data retrieved successfully', receipt);
+    } catch (error: any) {
+      logger.error('Failed to fetch session receipt:', error);
+      next(error);
+    }
+  }
+
+   /**
    * @route   GET /api/v1/mentorship/sessions/stats
    * @access  Private
    */
-  async getSessionStats(req: Request, res: Response, next: NextFunction): Promise<void> {
+   async getSessionStats(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.user?.id;
       if (!userId) {

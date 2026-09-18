@@ -178,7 +178,7 @@ router.get('/:id', groupController.getGroupSessionById);
 router.put(
   '/:id',
   AuthMiddleware.authenticate as any,
-  uploadSingle('thumbnailImage'),
+  uploadSingle('thumbnailImage', 'image', true),
   parseFormDataFields,
   validateJoi(updateGroupSessionValidator),
   groupController.updateGroupSession

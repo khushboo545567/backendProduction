@@ -166,7 +166,7 @@ export class RankingRepository extends BaseRepository<IRanking> {
         },
       }));
       if (bulkOps.length > 0) {
-        await this.model.bulkWrite(bulkOps);
+        await this.model.bulkWrite(bulkOps as any);
       }
     } catch (error: any) {
       throw new Error(`Error bulk updating ranks: ${error}`);
@@ -183,14 +183,14 @@ export class RankingRepository extends BaseRepository<IRanking> {
   }
 
   // All ranked documents — recalculation ke liye
-  async findAllRankedByScore(filter: any = {}): Promise<{ _id: string }[]> {
+  async findAllRankedByScore(filter: any = {}): Promise<{ _id: string; userId?: string }[]> {
     try {
       return await this.model
         .find({ rankScore: { $gt: 0 }, ...filter })
         .sort({ rankScore: -1 })
-        .select('_id')
+        .select('_id userId')
         .lean()
-        .exec() as unknown as { _id: string }[];
+        .exec() as unknown as { _id: string; userId?: string }[];
     } catch (error: any) {
       throw new Error(`Error finding ranked documents: ${error}`);
     }

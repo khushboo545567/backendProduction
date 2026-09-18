@@ -6,6 +6,7 @@ import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 
 
 class AvailabilityController {
+  
   async createAvailability(req: Request, res: Response): Promise<void> {
     try {
       const { mentorId, date, slots, timezone, isRecurring, dayOfWeek } = req.body;
@@ -22,9 +23,13 @@ class AvailabilityController {
       ResponseHandler.created(res, 'Availability created successfully', availability);
     } catch (error: any) {
       logger.error('Create availability error:', error);
-      ResponseHandler.error(res, 'Failed to create availability', 500, error);
+      // ✅ FIX: forward the REAL error message + correct status code
+      // (NotFoundError/BadRequestError/ConflictError all set .statusCode)
+      // instead of always masking it as a generic 500.
+      ResponseHandler.error(res, error.message || 'Failed to create availability', error.statusCode || 500, error);
     }
   }
+  
 
   async bulkCreateAvailability(req: Request, res: Response): Promise<void> {
     try {
@@ -135,7 +140,10 @@ class AvailabilityController {
       ResponseHandler.success(res, 'Availability updated successfully', availability);
     } catch (error: any) {
       logger.error('Update availability error:', error);
-      ResponseHandler.error(res, 'Failed to update availability', 500, error);
+      // ✅ FIX: forward the REAL error message + correct status code
+      // (BadRequestError sets .statusCode) instead of always masking it as
+      // a generic 500 — matches the pattern already used in createAvailability.
+      ResponseHandler.error(res, error.message || 'Failed to update availability', error.statusCode || 500, error);
     }
   }
 
@@ -148,7 +156,11 @@ class AvailabilityController {
       ResponseHandler.success(res, 'Availability deleted successfully');
     } catch (error: any) {
       logger.error('Delete availability error:', error);
-      ResponseHandler.error(res, 'Failed to delete availability', 500, error);
+      // ✅ FIX: forward the REAL error message + correct status code instead
+      // of always masking as generic 500 — e.g. "Cannot delete availability
+      // with booked slots" (400) was being hidden behind a generic message,
+      // so the user had no idea WHY delete failed.
+      ResponseHandler.error(res, error.message || 'Failed to delete availability', error.statusCode || 500, error);
     }
   }
 

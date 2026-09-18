@@ -80,7 +80,7 @@ const getTodayProgress = async (userId: any): Promise<{
 
         if (progress.goalHours > 0) {
           await notificationService.createNotification({
-            recipient: user._id,
+            recipient: user._id.toString(),
             type: NotificationType.GOAL_REMINDER,
             title: '🌅 Good Morning! Start Your Study Session',
             message: `Today's goal: ${progress.goalHours} hours. Let's make it happen!`,
@@ -128,7 +128,7 @@ const getTodayProgress = async (userId: any): Promise<{
 
           if (remaining > 0) {
             await notificationService.createNotification({
-              recipient: user._id,
+              recipient: user._id.toString(),
               type: NotificationType.GOAL_REMINDER,
               title: '🎯 Evening Reminder: Complete Your Goal',
               message: `You have ${remaining.toFixed(1)} hours remaining to reach today's goal!`,
@@ -144,7 +144,7 @@ const getTodayProgress = async (userId: any): Promise<{
             sent++;
           } else if (progress.percentage >= 100) {
             await notificationService.createNotification({
-              recipient: user._id,
+              recipient: user._id.toString(),
               type: NotificationType.GOAL_ACHIEVED,
               title: '🎉 Goal Completed!',
               message: `Awesome! You've completed today's ${progress.goalHours}-hour study goal!`,
@@ -213,7 +213,7 @@ const getTodayProgress = async (userId: any): Promise<{
             : 0;
 
           await notificationService.createNotification({
-            recipient: user._id,
+            recipient: user._id.toString(),
             type: NotificationType.GOAL_REMINDER,
             title: '📊 Weekly Goal Summary',
             message: `This week: ${totalHours.toFixed(1)}/${goal.targetHours} hours (${Math.round(percentage)}%)`,

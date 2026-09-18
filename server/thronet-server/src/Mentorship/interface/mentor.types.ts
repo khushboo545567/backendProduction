@@ -94,6 +94,8 @@ export interface IMentor extends TimeStamps, SoftDelete {
     autoAcceptBookings?: boolean;
     maxSessionsPerDay?: number;
     bufferBetweenSessions?: number;
+    // ✅ NEW: Service Duration se sync hone wala default slot-duration
+    slotDuration?: number;
   };
   socialProof: {
     linkedinUrl: string;

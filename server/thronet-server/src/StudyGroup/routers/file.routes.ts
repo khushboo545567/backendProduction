@@ -8,7 +8,7 @@ import express from 'express';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { isMember } from '../middleware/groupAccess.middleware';
 import { uploadSingle, validateUploadedFile } from '@/shared/upload/upload';
-import  fileController from '../controllers/file.controller';
+import  {fileController} from '../controllers';
 
 const router = express.Router();
 
@@ -21,7 +21,7 @@ router.post(
   '/:groupId/upload',
   AuthMiddleware.authenticate as any,
   isMember,
-  uploadSingle,
+  uploadSingle('file') as any,
   validateUploadedFile as any,
   fileController.uploadFile
 );
