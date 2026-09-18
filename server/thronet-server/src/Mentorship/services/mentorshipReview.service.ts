@@ -156,6 +156,19 @@ class ReviewService {
     }
   }
 
+    /**
+   * Get all reviews submitted by a specific mentee (for their "Reviews Given" tab)
+   */
+  async getMenteeReviews(menteeId: string): Promise<any[]> {
+    try {
+      logger.info(`📋 Fetching reviews submitted by mentee: ${menteeId}`);
+      return await reviewRepository.findByMenteeId(menteeId);
+    } catch (error: any) {
+      logger.error('❌ Failed to get mentee reviews:', error);
+      throw error;
+    }
+  }
+
   /**
    * Get review by ID
    */

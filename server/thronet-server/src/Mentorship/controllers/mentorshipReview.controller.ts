@@ -300,6 +300,31 @@ class MentorshipReviewController {
       }
     }
   }
+
+    /**
+   * Get reviews submitted by the logged-in mentee
+   * GET /api/v1/reviews/mentee/me
+   */
+  async getMyReviews(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      logger.info(`📋 Fetching reviews submitted by mentee: ${userId}`);
+
+      const reviews = await mentorshipReviewService.getMenteeReviews(userId);
+
+      ResponseHandler.success(res, 'Your reviews retrieved successfully', reviews);
+    } catch (error: any) {
+      logger.error('❌ Failed to fetch mentee reviews:', error);
+      if (!res.headersSent) {
+        ResponseHandler.error(res, error.message || 'Failed to fetch your reviews', 500);
+      }
+    }
+  }
 }
 
 export default new MentorshipReviewController();

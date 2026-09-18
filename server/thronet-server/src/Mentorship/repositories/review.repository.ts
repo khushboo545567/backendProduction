@@ -178,6 +178,12 @@ class ReviewRepository {
         return await MentorshipReview.getAverageRating(mentorId);
     }
 
+        async findByMenteeId(menteeId: string): Promise<any[]> {
+        return await MentorshipReview.find({ menteeId, isDeleted: false })
+            .sort({ createdAt: -1 })
+            .lean();
+    }
+
     // ✅ Repository mein atomic fix add karo
     async incrementHelpfulAtomic(reviewId: string): Promise<any> {
         return await MentorshipReview.findOneAndUpdate(
