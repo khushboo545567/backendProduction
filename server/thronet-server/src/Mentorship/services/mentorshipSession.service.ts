@@ -892,7 +892,7 @@ class MentorshipSessionService {
         // se alag. Student ka dashboard bina refresh ke "Upcoming" se
         // "In Progress" flip ho jayega, aur Join button turant enable hoga.
         try {
-          emitToUser(menteeIdToNotify, 'session:started', {
+          const payload = {
             sessionId: session.sessionId,
             bookingId: targetBooking._id?.toString(),
             // roomId — same value as bookingId, reused as the WebRTC room
@@ -903,7 +903,14 @@ class MentorshipSessionService {
             startedAt: startedAtNow,
             scheduledAt: targetBooking.scheduledAt || session.scheduledAt,
             meetingUrl: session.meeting?.meetingUrl || null,
-          });
+          };
+          // ✅ FIX: frontend socket.events.ts constant is
+          // 'mentorship:session:started' but backend was only emitting
+          // 'session:started' — two different event names, so any listener
+          // using the constant never fired. Emitting both until frontend
+          // listener is confirmed/unified onto one name.
+          emitToUser(menteeIdToNotify, 'session:started', payload);
+          emitToUser(menteeIdToNotify, 'mentorship:session:started', payload);
         } catch (emitErr: any) {
           logger.error('Socket emit failed (session:started):', emitErr);
         }
