@@ -62,6 +62,36 @@ class QueryService {
     return Promise.all(queries.map((q) => this.enrichWithMentee(q)));
   }
 
+  private async enrichWithMentor(query: any): Promise<any> {
+    const plain = query.toObject ? query.toObject() : query;
+    try {
+      const mentor = await mentorRepository.findByMentorId(plain.mentorId);
+      if (!mentor) {
+        return { ...plain, mentor: null };
+      }
+
+      const mentorUser = await User.findByUserId(mentor.userId);
+      const firstName = (mentorUser as any)?.firstName ?? '';
+      const lastName = (mentorUser as any)?.lastName ?? '';
+
+      return {
+        ...plain,
+        mentor: {
+          firstName,
+          lastName,
+          profilePhotoId: (mentorUser as any)?.profilePhotoId ?? mentor.profilePic ?? null,
+        },
+      };
+    } catch (err: any) {
+      logger.error('Failed to enrich query with mentor info:', err);
+      return { ...plain, mentor: null };
+    }
+  }
+
+  private async enrichListWithMentor(queries: any[]): Promise<any[]> {
+    return Promise.all(queries.map((q) => this.enrichWithMentor(q)));
+  }
+
   /**
    * Submit a new query
    */
@@ -203,7 +233,9 @@ class QueryService {
         queryRepository.count(query),
       ]);
 
-      const enrichedQueries = await this.enrichListWithMentee(queries);
+      const enrichedQueries = role === 'mentor'
+        ? await this.enrichListWithMentee(queries)
+        : await this.enrichListWithMentor(queries);
 
       return {
         queries: enrichedQueries,
