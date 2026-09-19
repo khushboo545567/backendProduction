@@ -10,6 +10,7 @@ import {
   removeFromWaitlist,
   getWaitlistStats,
 } from '../controllers';
+import { approveWaitlistEntry } from '../controllers/waitlist.controller';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { body, param, query, validationResult } from 'express-validator';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
@@ -63,10 +64,12 @@ router.post(
       .withMessage('Timezone is required')
       .isString()
       .withMessage('Invalid timezone'),
-    body('notes')
+      body('notes')
       .optional()
       .isString()
       .withMessage('Notes must be a string'),
+    body('serviceId').optional().isString().withMessage('Invalid service ID'),
+    body('serviceTitle').optional().isString().withMessage('Invalid service title'),
   ],
   handleValidationErrors,
   joinWaitlist
@@ -130,11 +133,13 @@ router.put(
   AuthMiddleware.authenticate as any,
   [
     param('waitlistId')
-      .isUUID()
-      .withMessage('Invalid waitlist ID'),
-    body('sessionId')
-      .isUUID()
-      .withMessage('Invalid session ID'),
+    .notEmpty()
+    .isString()
+    .withMessage('Invalid waitlist ID'),
+  body('sessionId')
+    .notEmpty()
+    .isString()
+    .withMessage('Invalid session ID'),
   ],
   handleValidationErrors,
   markAsBooked
@@ -146,9 +151,10 @@ router.delete(
   AuthMiddleware.authenticate as any,
   [
     param('waitlistId')
-      .isUUID()
-      .withMessage('Invalid waitlist ID'),
-    body('reason')
+    .notEmpty()
+    .isString()
+    .withMessage('Invalid waitlist ID'),
+  body('reason')
       .optional()
       .isString()
       .withMessage('Reason must be a string'),
@@ -170,6 +176,15 @@ router.get(
   ],
   handleValidationErrors,
   getWaitlistStats
+);
+
+// Mentor approves one waiting entry
+router.post(
+  '/:waitlistId/approve',
+  AuthMiddleware.authenticate as any,
+  [param('waitlistId').notEmpty().isString().withMessage('Invalid waitlist ID')],
+  handleValidationErrors,
+  approveWaitlistEntry
 );
 
 export default router;

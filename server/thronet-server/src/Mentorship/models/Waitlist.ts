@@ -19,12 +19,16 @@ export interface IWaitlist extends Document {
   _id: mongoose.Types.ObjectId;
   waitlistId: string; // Unique identifier for waitlist entry
 
-  // User & Mentor
-  userId: string;
-  mentorId: string;
+   // User & Mentor
+   userId: string;
+   mentorId: string;
+ 
+   // Which service card (SessionMentor.sessionId) the user is waiting for
+   serviceId?: string;
+   serviceTitle?: string;
 
   // Preferences
-  preferredDates: Date[];
+  preferredDates: Date[]; 
   preferredTimeSlots: string[]; // ['09:00-12:00', '14:00-18:00']
   sessionType: string;
   timezone: string;
@@ -100,6 +104,14 @@ const WaitlistSchema = new Schema<IWaitlist>(
       type: String,
       required: [true, 'Session type is required'],
     },
+    serviceId: {
+      type: String,
+      index: true,
+    },
+    serviceTitle: {
+      type: String,
+      trim: true,
+    },
     timezone: {
       type: String,
       required: [true, 'Timezone is required'],
@@ -160,6 +172,8 @@ const WaitlistSchema = new Schema<IWaitlist>(
  */
 WaitlistSchema.index({ mentorId: 1, status: 1, position: 1 });
 WaitlistSchema.index({ userId: 1, mentorId: 1, status: 1 });
+WaitlistSchema.index({ mentorId: 1, serviceId: 1, status: 1, priority: -1, position: 1 });
+
 WaitlistSchema.index({ status: 1, priority: -1, position: 1 });
 WaitlistSchema.index({ expiresAt: 1, status: 1 });
 WaitlistSchema.index({ bookingWindowExpiresAt: 1, status: 1 });
@@ -364,7 +378,9 @@ WaitlistSchema.statics.reorderPositions = async function (mentorId: string) {
       update: { $set: { position: i + 1 } }
     }
   }));
-  await Waitlist.bulkWrite(bulkOps);
+  if (bulkOps.length > 0) {
+    await Waitlist.bulkWrite(bulkOps);
+  }
 };
 
 /**

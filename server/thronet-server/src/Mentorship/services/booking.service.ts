@@ -50,7 +50,7 @@ class BookingService {
     const lockValue = `${input.menteeId}-${Date.now()}`;
 
     const redisClient = await getRedisClient();
-    const acquired = await redisClient.set(lockKey, lockValue, 'NX', 'EX', 60);;
+    const acquired = await redisClient.set(lockKey, lockValue, 'EX', 60, 'NX');
     if (!acquired) {
       throw new ConflictError(
         'This slot is currently being booked by another user. Please try again in a moment.'

@@ -11,6 +11,8 @@ import waitlistRepository from '../repositories/waitlist.repository';
 interface JoinWaitlistInput {
   userId: string;
   mentorId: string;
+  serviceId?: string;
+  serviceTitle?: string;
   preferredDates: Date[];
   preferredTimeSlots: string[];
   sessionType: string;
@@ -26,85 +28,154 @@ interface WaitlistPosition {
 }
 
 class WaitlistService {
-  /**
-   * Join waitlist for a mentor.
-   *
-   * ✅ FIX: Position assignment uses atomic $inc to prevent race condition.
-   * Old approach: read last position, then +1, then save — two users could
-   * get the same position number if they joined simultaneously.
-   *
-   * New approach: findOneAndUpdate with $inc on a separate counter document,
-   * or use a dedicated atomic counter. Here we use $inc on the mentor's
-   * waitlist counter field which is thread-safe.
-   */
-  async joinWaitlist(input: JoinWaitlistInput, authToken?: string): Promise<IWaitlist> {
+  // ───────────────────────── helpers ─────────────────────────
+
+  /** Frontend may send Mentor.mentorId or Mentor.userId — accept both. */
+  private async resolveMentor(idOrUserId: string): Promise<any | null> {
+    return Mentor.findOne({ $or: [{ mentorId: idOrUserId }, { userId: idOrUserId }] });
+  }
+
+  /** Throws unless requester is the mentor who owns this waitlist. */
+  private async assertMentorOwner(mentorIdOrUserId: string, requesterUserId?: string): Promise<any> {
+    const mentor = await this.resolveMentor(mentorIdOrUserId);
+    if (!mentor) throw new NotFoundError('Mentor not found');
+    if (requesterUserId && mentor.userId !== requesterUserId) {
+      throw new BadRequestError('Not authorized to manage this waitlist');
+    }
+    return mentor;
+  }
+
+  private async safeUser(userId?: string): Promise<any | null> {
+    if (!userId) return null;
+    try {
+      return await User.findByUserId(userId);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Real position in queue (per service if serviceId exists). Only meaningful for ACTIVE entries. */
+  private async computeQueuePosition(entry: any): Promise<number> {
+    const filter: any = { mentorId: entry.mentorId, status: WaitlistStatus.ACTIVE };
+    if (entry.serviceId) filter.serviceId = entry.serviceId;
+
+    const ahead = await Waitlist.countDocuments({
+      ...filter,
+      $or: [
+        { priority: { $gt: entry.priority } },
+        { priority: entry.priority, position: { $lt: entry.position } },
+      ],
+    });
+    return ahead + 1;
+  }
+
+  private async sendSlotAvailableNotification(entry: any, mentor: any): Promise<void> {
+    try {
+      const [user, mentorUser] = await Promise.all([
+        this.safeUser(entry.userId),
+        this.safeUser(mentor?.userId),
+      ]);
+      if (!user) return;
+
+      const mentorName = mentorUser?.fullName || mentorUser?.email || 'your mentor';
+      const what = entry.serviceTitle || entry.sessionType;
+
+      await emailService.sendEmail({
+        to: user.email,
+        subject: '🎉 Slot Available — Book Now!',
+        html: `
+          <h2>Great news! A slot is now available</h2>
+          <p>Hi ${user.fullName || user.email},</p>
+          <p>A slot has opened up with <strong>${mentorName}</strong> for <strong>${what}</strong>.</p>
+          <p><strong>You have 48 hours to book.</strong> After that it goes to the next person in line.</p>
+        `,
+      });
+
+      if (user.phoneNumber) {
+        await smsService.sendSMS({
+          to: user.phoneNumber,
+          message: `🎉 Slot available with ${mentorName} (${what})! Book within 48h.`,
+        });
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to send waitlist notification: ${error.message}`);
+    }
+  }
+
+  // ───────────────────────── user side ─────────────────────────
+
+  async joinWaitlist(input: JoinWaitlistInput, _authToken?: string): Promise<any> {
     try {
       logger.info(`📋 User ${input.userId} joining waitlist for mentor ${input.mentorId}`);
 
-      const mentor = await Mentor.findOne({ userId: input.mentorId });
-      if (!mentor) {
-        throw new NotFoundError('Mentor not found');
+      const mentor = await this.resolveMentor(input.mentorId);
+      if (!mentor) throw new NotFoundError('Mentor not found');
+      if (mentor.userId === input.userId) {
+        throw new BadRequestError('You cannot join your own waitlist');
       }
 
-      // Check if user already in active waitlist for this mentor
-      const existingEntry = await Waitlist.findOne({
+      // Canonical key stored on the waitlist entry
+      const mentorKey: string = mentor.mentorId || mentor.userId;
+
+      const existing = await Waitlist.findOne({
         userId: input.userId,
-        mentorId: input.mentorId,
+        mentorId: mentorKey,
+        ...(input.serviceId ? { serviceId: input.serviceId } : {}),
         status: { $in: [WaitlistStatus.ACTIVE, WaitlistStatus.NOTIFIED] },
       });
-
-      if (existingEntry) {
-        throw new ConflictError('You are already in the waitlist for this mentor');
+      if (existing) {
+        throw new ConflictError(
+          input.serviceId
+            ? 'You are already on the waitlist for this service'
+            : 'You are already on the waitlist for this mentor'
+        );
       }
 
-      // ✅ FIX: Atomic position increment — prevents two users getting same position
-      // Uses MongoDB's $inc which is an atomic operation.
-      // If the mentor has no waitlistCounter field yet, $inc initializes it to 1.
-      const updatedMentor = await Mentor.findOneAndUpdate(
-        { userId: input.mentorId },
+      // Atomic counter → no duplicate positions on simultaneous joins
+      const updatedMentor: any = await Mentor.findOneAndUpdate(
+        { _id: mentor._id },
         { $inc: { waitlistCounter: 1 } },
         { new: true }
       );
       const position = updatedMentor?.waitlistCounter || 1;
 
-      // Expiry: 7 days from now
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
 
       const waitlistEntry = new Waitlist({
-        waitlistId:         generateSecureId(),
-        userId:             input.userId,
-        mentorId:           input.mentorId,
-        preferredDates:     input.preferredDates,
+        waitlistId: generateSecureId(),
+        userId: input.userId,
+        mentorId: mentorKey,
+        serviceId: input.serviceId,
+        serviceTitle: input.serviceTitle,
+        preferredDates: input.preferredDates,
         preferredTimeSlots: input.preferredTimeSlots,
-        sessionType:        input.sessionType,
-        timezone:           input.timezone,
+        sessionType: input.sessionType,
+        timezone: input.timezone,
         position,
-        status:             WaitlistStatus.ACTIVE,
-        priority:           0,
-        notes:              input.notes,
+        status: WaitlistStatus.ACTIVE,
+        priority: 0,
+        notes: input.notes,
         expiresAt,
       });
-
       await waitlistEntry.save();
 
       // Confirmation email (non-critical)
       try {
         const [user, mentorUser] = await Promise.all([
-          User.findByUserId(input.userId),
-          User.findByUserId(input.mentorId),
+          this.safeUser(input.userId),
+          this.safeUser(mentor.userId),
         ]);
-
-        if (user && mentorUser) {
+        if (user) {
           await emailService.sendEmail({
-            to:      user.email,
+            to: user.email,
             subject: '✅ Added to Waitlist',
             html: `
               <h2>You've been added to the waitlist!</h2>
               <p>Hi ${user.fullName || user.email},</p>
-              <p>You've been added to the waitlist for <strong>${mentorUser.fullName || mentorUser.email}</strong>.</p>
-              <p><strong>Your position:</strong> #${position}</p>
-              <p>We'll notify you when a slot becomes available.</p>
+              <p>You're on the waitlist for <strong>${input.serviceTitle || input.sessionType}</strong>
+                 with <strong>${mentorUser?.fullName || mentorUser?.email || 'your mentor'}</strong>.</p>
+              <p>We'll notify you as soon as a slot opens up.</p>
             `,
           });
         }
@@ -112,29 +183,26 @@ class WaitlistService {
         logger.warn(`Failed to send waitlist confirmation email: ${error.message}`);
       }
 
-      logger.info(`✅ Waitlist entry created at position ${position}: ${waitlistEntry._id}`);
-      return waitlistEntry;
+      const queuePosition = await this.computeQueuePosition(waitlistEntry);
+      logger.info(`✅ Waitlist entry created (#${queuePosition}): ${waitlistEntry.waitlistId}`);
+
+      return { ...waitlistEntry.toJSON(), queuePosition };
     } catch (error: any) {
       logger.error(`Failed to join waitlist: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * Get user's position in waitlist
-   */
   async getUserPosition(userId: string, mentorId: string): Promise<WaitlistPosition | null> {
     try {
       const result = await (Waitlist as any).getUserPosition(userId, mentorId);
       if (!result) return null;
-
       const totalInLine = await waitlistRepository.countActive(mentorId);
-
       return {
-        position:          result.position,
+        position: result.position,
         totalInLine,
         estimatedWaitTime: this.estimateWaitTime(result.position),
-        waitlistEntry:     result.waitlistEntry,
+        waitlistEntry: result.waitlistEntry,
       };
     } catch (error: any) {
       logger.error(`Failed to get user waitlist position: ${error.message}`);
@@ -142,100 +210,35 @@ class WaitlistService {
     }
   }
 
-  /**
-   * Get all waitlist entries for a mentor
-   */
-  async getMentorWaitlist(mentorId: string, status?: WaitlistStatus): Promise<IWaitlist[]> {
+  /** "My Waitlist": entries + mentor name + real position. */
+  async getUserWaitlists(userId: string): Promise<any[]> {
     try {
-      return await waitlistRepository.findByMentorId(mentorId, status);
-    } catch (error: any) {
-      logger.error(`Failed to get mentor waitlist: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Get all waitlist entries for a user
-   */
-  async getUserWaitlists(userId: string): Promise<IWaitlist[]> {
-    try {
-      return await waitlistRepository.findByUserId(userId);
+      const entries = await waitlistRepository.findByUserId(userId);
+      return await Promise.all(
+        entries.map(async (entry: any) => {
+          const mentor = await this.resolveMentor(entry.mentorId);
+          const mentorUser = await this.safeUser(mentor?.userId);
+          return {
+            ...entry,
+            mentorName: mentorUser?.fullName || mentorUser?.email || 'Mentor',
+            queuePosition:
+              entry.status === WaitlistStatus.ACTIVE ? await this.computeQueuePosition(entry) : null,
+          };
+        })
+      );
     } catch (error: any) {
       logger.error(`Failed to get user waitlists: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * Notify next person in waitlist — called when a session slot opens
-   */
-  async notifyNextInLine(mentorId: string, authToken?: string): Promise<IWaitlist | null> {
-    try {
-      logger.info(`🔔 Notifying next waitlist person for mentor: ${mentorId}`);
-
-      const nextEntry = await (Waitlist as any).getNextInLine(mentorId);
-      if (!nextEntry) {
-        logger.info('No one in waitlist');
-        return null;
-      }
-
-      await nextEntry.notify();
-
-      try {
-        const [user, mentor] = await Promise.all([
-          User.findByUserId(nextEntry.userId),
-          User.findByUserId(mentorId),
-        ]);
-
-        if (user && mentor) {
-          await emailService.sendEmail({
-            to:      user.email,
-            subject: '🎉 Slot Available — Book Now!',
-            html: `
-              <h2>Great news! A slot is now available</h2>
-              <p>Hi ${user.fullName || user.email},</p>
-              <p>A slot has opened up with <strong>${mentor.fullName || mentor.email}</strong>!</p>
-              <p><strong>You have 48 hours to book.</strong></p>
-              <p>Session Type: ${nextEntry.sessionType}</p>
-              <p>Book now before the slot is gone!</p>
-            `,
-          });
-
-          if (user.phoneNumber) {
-            await smsService.sendSMS({
-              to:      user.phoneNumber,
-              message: `🎉 Slot available with ${mentor.fullName || mentor.email}! Book within 48h. Session: ${nextEntry.sessionType}`,
-            });
-          }
-        }
-      } catch (error: any) {
-        logger.warn(`Failed to send waitlist notification: ${error.message}`);
-      }
-
-      logger.info(`✅ Notified user: ${nextEntry.userId}`);
-      return nextEntry;
-    } catch (error: any) {
-      logger.error(`Failed to notify waitlist: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Mark waitlist entry as booked after user books a session
-   */
-  async markAsBooked(
-    waitlistId: string,
-    sessionId: string,
-    userId: string
-  ): Promise<IWaitlist> {
+  async markAsBooked(waitlistId: string, sessionId: string, userId: string): Promise<IWaitlist> {
     try {
       const entry = await waitlistRepository.findByWaitlistId(waitlistId);
       if (!entry) throw new NotFoundError('Waitlist entry not found');
-
       if (entry.userId !== userId) {
         throw new BadRequestError('Not authorized to modify this waitlist entry');
       }
-
       await entry.markAsBooked(sessionId);
       logger.info(`✅ Waitlist entry marked as booked: ${waitlistId}`);
       return entry;
@@ -245,22 +248,27 @@ class WaitlistService {
     }
   }
 
-  /**
-   * Remove user from waitlist
-   */
-  async removeFromWaitlist(waitlistId: string, userId: string, reason: string): Promise<void> {
+  /** Works for both: the user leaving, or the mentor removing someone. */
+  async removeFromWaitlist(waitlistId: string, requesterUserId: string, reason: string): Promise<void> {
     try {
       const entry = await waitlistRepository.findByWaitlistId(waitlistId);
       if (!entry) throw new NotFoundError('Waitlist entry not found');
 
-      if (entry.userId !== userId) {
-        throw new BadRequestError('Not authorized to remove this entry');
+      if (entry.userId !== requesterUserId) {
+        await this.assertMentorOwner(entry.mentorId, requesterUserId); // throws if not the mentor
       }
 
-      await entry.cancel(reason);
+      const wasNotified = entry.status === WaitlistStatus.NOTIFIED;
 
-      // Reorder remaining positions after removal
+      await entry.cancel(reason);
       await (Waitlist as any).reorderPositions(entry.mentorId);
+
+      // A person who was offered the slot declined → offer it to the next one
+      if (wasNotified) {
+        await this.notifyNextInLine(entry.mentorId, undefined, { serviceId: entry.serviceId }).catch(
+          (e: any) => logger.warn(`Cascade notify failed: ${e.message}`)
+        );
+      }
 
       logger.info(`✅ Removed from waitlist: ${waitlistId}`);
     } catch (error: any) {
@@ -269,41 +277,136 @@ class WaitlistService {
     }
   }
 
-  /**
-   * Expire old waitlist entries — called by cron job
-   */
-  async expireOldEntries(): Promise<{ expiredByDate: number; expiredByWindow: number }> {
+  // ───────────────────────── mentor side ─────────────────────────
+
+  async getMentorWaitlist(
+    mentorId: string,
+    status?: WaitlistStatus,
+    requesterUserId?: string
+  ): Promise<any[]> {
     try {
-      const result = await (Waitlist as any).expireOldEntries();
-      logger.info(`⏰ Expired ${result.expiredByDate + result.expiredByWindow} waitlist entries`);
-      return result;
+      const mentor = await this.assertMentorOwner(mentorId, requesterUserId);
+      const entries = await waitlistRepository.findByMentorId(mentor.mentorId || mentor.userId, status);
+
+      const userCache = new Map<string, Promise<any>>();
+      return await Promise.all(
+        entries.map(async (entry: any) => {
+          if (!userCache.has(entry.userId)) userCache.set(entry.userId, this.safeUser(entry.userId));
+          const u = await userCache.get(entry.userId);
+          return {
+            ...entry,
+            menteeName: u?.fullName || u?.email || 'Student',
+            queuePosition:
+              entry.status === WaitlistStatus.ACTIVE ? await this.computeQueuePosition(entry) : null,
+          };
+        })
+      );
     } catch (error: any) {
-      logger.error(`Failed to expire waitlist entries: ${error.message}`);
+      logger.error(`Failed to get mentor waitlist: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * Get waitlist statistics for a mentor
-   */
-  async getWaitlistStats(mentorId: string): Promise<any> {
+  /** Notify the next ACTIVE person (optionally only for one service). */
+  async notifyNextInLine(
+    mentorId: string,
+    _authToken?: string,
+    opts?: { requesterUserId?: string; serviceId?: string }
+  ): Promise<IWaitlist | null> {
     try {
-      return await waitlistRepository.getStats(mentorId);
+      const mentor = await this.assertMentorOwner(mentorId, opts?.requesterUserId);
+      const mentorKey = mentor.mentorId || mentor.userId;
+
+      const next: any = await Waitlist.findOne({
+        mentorId: mentorKey,
+        status: WaitlistStatus.ACTIVE,
+        expiresAt: { $gt: new Date() },
+        ...(opts?.serviceId ? { serviceId: opts.serviceId } : {}),
+      }).sort({ priority: -1, position: 1 });
+
+      if (!next) {
+        logger.info('No one in waitlist');
+        return null;
+      }
+
+      await next.notify();
+      await this.sendSlotAvailableNotification(next, mentor);
+
+      logger.info(`✅ Notified user: ${next.userId}`);
+      return next;
+    } catch (error: any) {
+      logger.error(`Failed to notify waitlist: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /** Mentor approves one specific waiting entry (status → notified, 48h window). */
+  async approveEntry(waitlistId: string, requesterUserId: string): Promise<IWaitlist> {
+    try {
+      const entry = await waitlistRepository.findByWaitlistId(waitlistId);
+      if (!entry) throw new NotFoundError('Waitlist entry not found');
+
+      const mentor = await this.assertMentorOwner(entry.mentorId, requesterUserId);
+      if (entry.status !== WaitlistStatus.ACTIVE) {
+        throw new BadRequestError('Only waiting entries can be approved');
+      }
+
+      await entry.notify();
+      await this.sendSlotAvailableNotification(entry, mentor);
+      return entry;
+    } catch (error: any) {
+      logger.error(`Failed to approve waitlist entry: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async getWaitlistStats(mentorId: string, requesterUserId?: string): Promise<any> {
+    try {
+      const mentor = await this.assertMentorOwner(mentorId, requesterUserId);
+      return await waitlistRepository.getStats(mentor.mentorId || mentor.userId);
     } catch (error: any) {
       logger.error(`Failed to get waitlist stats: ${error.message}`);
       throw error;
     }
   }
 
+  // ───────────────────────── cron ─────────────────────────
+
   /**
-   * Estimate wait time based on queue position.
-   * Rough heuristic: ~1 week per position.
+   * Called by cron. Lapsed NOTIFIED entries (48h window over) are expired
+   * AND the next person in line is offered the slot.
    */
+  async expireOldEntries(): Promise<{ expiredByDate: number; expiredByWindow: number }> {
+    try {
+      const lapsed: any[] = await Waitlist.find({
+        status: WaitlistStatus.NOTIFIED,
+        bookingWindowExpiresAt: { $lt: new Date() },
+      });
+
+      for (const entry of lapsed) {
+        await entry.markAsExpired();
+        await this.notifyNextInLine(entry.mentorId, undefined, { serviceId: entry.serviceId }).catch(
+          (e: any) => logger.warn(`Cascade notify failed: ${e.message}`)
+        );
+      }
+
+      const result = await (Waitlist as any).expireOldEntries();
+      const summary = {
+        expiredByDate: result.expiredByDate,
+        expiredByWindow: result.expiredByWindow + lapsed.length,
+      };
+      logger.info(`⏰ Expired ${summary.expiredByDate + summary.expiredByWindow} waitlist entries`);
+      return summary;
+    } catch (error: any) {
+      logger.error(`Failed to expire waitlist entries: ${error.message}`);
+      throw error;
+    }
+  }
+
   private estimateWaitTime(position: number): string {
     const weeks = Math.ceil(position * 1);
-
     if (weeks === 1) return '1 week';
-    if (weeks < 4)  return `${weeks} weeks`;
+    if (weeks < 4) return `${weeks} weeks`;
     if (weeks === 4) return '1 month';
     return `${Math.ceil(weeks / 4)} months`;
   }

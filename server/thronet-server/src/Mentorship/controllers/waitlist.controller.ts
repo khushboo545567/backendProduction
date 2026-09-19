@@ -25,6 +25,8 @@ export const joinWaitlist = async (
 
     const {
       mentorId,
+      serviceId,
+      serviceTitle,
       preferredDates,
       preferredTimeSlots,
       sessionType,
@@ -36,6 +38,8 @@ export const joinWaitlist = async (
       {
         userId,
         mentorId,
+        serviceId,
+        serviceTitle,
         preferredDates,
         preferredTimeSlots,
         sessionType,
@@ -123,12 +127,19 @@ export const getMentorWaitlist = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    const userId = req.user?.id;
     const { mentorId } = req.params;
     const { status } = req.query;
 
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
     const waitlist = await waitlistService.getMentorWaitlist(
       mentorId,
-      status as WaitlistStatus
+      status as WaitlistStatus | undefined,
+      userId
     );
 
     ResponseHandler.success(res, 'Mentor waitlist retrieved successfully', waitlist);
@@ -149,10 +160,20 @@ export const notifyNextInLine = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    const userId = req.user?.id;
     const { mentorId } = req.params;
+    const { serviceId } = req.body || {};
     const authToken = req.headers.authorization?.split(' ')[1];
 
-    const notifiedEntry = await waitlistService.notifyNextInLine(mentorId, authToken);
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const notifiedEntry = await waitlistService.notifyNextInLine(mentorId, authToken, {
+      requesterUserId: userId,
+      serviceId,
+    });
 
     if (!notifiedEntry) {
       ResponseHandler.notFound(res, 'No one in waitlist to notify');
@@ -235,9 +256,15 @@ export const getWaitlistStats = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    const userId = req.user?.id;
     const { mentorId } = req.params;
 
-    const stats = await waitlistService.getWaitlistStats(mentorId);
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const stats = await waitlistService.getWaitlistStats(mentorId, userId); 
 
     ResponseHandler.success(res, 'Waitlist statistics retrieved successfully', stats);
   } catch(error : any) {
@@ -245,3 +272,31 @@ export const getWaitlistStats = async (
     next(error);
   }
 };
+
+/**
+ * @desc    Mentor approves a waiting entry (user gets 48h to book)
+ * @route   POST /api/waitlist/:waitlistId/approve
+ * @access  Private (Mentor)
+ */
+export const approveWaitlistEntry = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const { waitlistId } = req.params;
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const entry = await waitlistService.approveEntry(waitlistId, userId);
+    ResponseHandler.success(res, 'Waitlist entry approved. The user has been notified.', entry);
+  } catch (error: any) {
+    logger.error('Error approving waitlist entry:', error);
+    next(error);
+  }
+};
+
