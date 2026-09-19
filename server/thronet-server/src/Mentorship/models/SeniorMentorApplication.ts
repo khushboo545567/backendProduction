@@ -22,7 +22,7 @@ interface ISeniorMentorApplicationModel extends Model<SeniorMentorApplicationDoc
 
 const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument>(
   {
-    applicationId: {
+    seniorMentorId: {
       type: String,
       required: true,
       unique: true,
@@ -38,6 +38,11 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
       type: String,
       required: [true, 'User ID is required'],
       index: true,
+    },
+    mentorRole: {
+      type: String,
+      enum: ['senior_mentor', 'alumni'],
+      required: [true, 'Mentor role is required'],
     },
 
     // ── 1. Profile ────────────────────────────────────────────────
@@ -221,7 +226,7 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
     toJSON: {
       virtuals: true,
       transform: (_doc, ret) => {
-        ret.id = ret.applicationId;
+        ret.id = ret.seniorMentorId;
         delete (ret as any)._id;
         delete (ret as any).__v;
         return ret;

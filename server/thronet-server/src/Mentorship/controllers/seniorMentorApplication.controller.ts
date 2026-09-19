@@ -35,6 +35,7 @@ class SeniorMentorApplicationController {
 
       const input: CreateSeniorMentorApplicationInput = {
         userId: req.user!.id,
+        mentorRole: req.body.mentorRole,
         fullName: req.body.fullName,
         college: req.body.college,
         degree: req.body.degree,
@@ -67,7 +68,7 @@ class SeniorMentorApplicationController {
 
       const application = await seniorMentorApplicationService.apply(input);
 
-      logger.info(`Senior Mentor application created: ${application.applicationId}`);
+      logger.info(`Senior Mentor application created: ${application.seniorMentorId}`);
       ResponseHandler.created(
         res,
         'Application submitted successfully. Our team will review it shortly.',
@@ -107,7 +108,7 @@ class SeniorMentorApplicationController {
       });
 
       const application = await seniorMentorApplicationService.update(
-        existing.applicationId,
+        existing.seniorMentorId,
         req.user!.id,
         updates
       );
@@ -126,11 +127,46 @@ class SeniorMentorApplicationController {
   async withdrawMyApplication(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const existing = await seniorMentorApplicationService.getByUserId(req.user!.id);
-      await seniorMentorApplicationService.withdraw(existing.applicationId, req.user!.id);
+      await seniorMentorApplicationService.withdraw(existing.seniorMentorId, req.user!.id);
 
       ResponseHandler.success(res, 'Application withdrawn successfully');
     } catch (error: any) {
       logger.error('Error withdrawing senior mentor application:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/v1/mentorship/senior-mentor-applications/:id/profile
+   * @access  Private
+   */
+  async getProfile(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { userId } = req.params;
+      logger.info(`Entering getProfile for User ID: ${userId}`);
+      
+      const application = await seniorMentorApplicationService.getByUserId(userId);
+      
+      if (!application) {
+        res.status(404).json({ success: false, message: 'Application profile not found' });
+        return;
+      }
+
+      // Re-enable ownership check against req.user.id
+      if (String(application.userId) !== String(req.user!.id)) {
+        logger.warn(`403 Forbidden: DB userId (${application.userId}) !== req.user.id (${req.user?.id})`);
+        res.status(403).json({
+          success: false,
+          message: 'Forbidden: You do not have permission to view this application profile.',
+        });
+        return;
+      }
+
+
+      logger.info(`Proceeding to return app completely`);
+      ResponseHandler.success(res, 'Application profile fetched successfully', application);
+    } catch (error: any) {
+      logger.error('Error fetching senior mentor application profile:', error);
       next(error);
     }
   }
@@ -141,7 +177,7 @@ class SeniorMentorApplicationController {
    */
   async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const application = await seniorMentorApplicationService.getByApplicationId(req.params.id);
+      const application = await seniorMentorApplicationService.getBySeniorMentorId(req.params.id);
       ResponseHandler.success(res, 'Application fetched successfully', application);
     } catch (error: any) {
       logger.error('Error fetching senior mentor application:', error);

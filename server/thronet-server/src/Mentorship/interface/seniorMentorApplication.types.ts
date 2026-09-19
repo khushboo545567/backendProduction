@@ -3,6 +3,8 @@ import { TimeStamps, SoftDelete } from './common.types';
 import { Domain } from '../../shared/constants/domains';
 import { ExperienceLevel } from './mentor.types';
 
+export type MentorRole = 'senior_mentor' | 'alumni';
+
 /**
  * Overall verification/review status of a "Become Senior Mentor" application.
  */
@@ -29,8 +31,9 @@ export enum MentorshipHelpArea {
 
 export interface ISeniorMentorApplication extends TimeStamps, SoftDelete {
   _id: string;
-  applicationId: string;
+  seniorMentorId: string;
   userId: string; // Reference to User Service — set from auth token, never from body
+  mentorRole: MentorRole;
 
   // ── 1. Profile ─────────────────────────────────────────────────
   fullName: string;
@@ -80,6 +83,7 @@ export interface ISeniorMentorApplication extends TimeStamps, SoftDelete {
 
 export interface CreateSeniorMentorApplicationInput {
   userId: string;
+  mentorRole: MentorRole;
   fullName: string;
   college: string;
   degree: string;
@@ -111,6 +115,7 @@ export interface CreateSeniorMentorApplicationInput {
 }
 
 export interface UpdateSeniorMentorApplicationInput {
+  mentorRole?: MentorRole;
   fullName?: string;
   college?: string;
   degree?: string;

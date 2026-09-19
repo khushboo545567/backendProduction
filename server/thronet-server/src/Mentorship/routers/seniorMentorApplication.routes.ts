@@ -95,6 +95,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/v1/mentorship/senior-mentor-applications/user/:userId/profile
+ * @desc    Get a single application profile by User ID (owner only)
+ * @access  Private
+ */
+router.get(
+  '/user/:userId/profile',
+  AuthMiddleware.authenticate as any,
+  seniorMentorApplicationController.getProfile as any
+);
+
+/**
  * @route   GET /api/v1/mentorship/senior-mentor-applications/:id
  * @desc    Get a single application by ID
  * @access  Private (Admin)

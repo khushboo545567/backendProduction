@@ -59,6 +59,7 @@ class SeniorMentorApplicationService {
 
       const application = await seniorMentorApplicationRepository.create({
         userId: input.userId,
+        mentorRole: input.mentorRole,
         fullName: input.fullName,
         profilePhoto: profilePhoto.url,
         profilePhotoKey: profilePhoto.key,
@@ -94,7 +95,7 @@ class SeniorMentorApplicationService {
         isActive: true,
       });
 
-      logger.info(`📝 Senior Mentor application submitted: ${application.applicationId}`);
+      logger.info(`📝 Senior Mentor application submitted: ${application.seniorMentorId}`);
       return application;
     } catch (error: any) {
       logger.error(`Failed to submit senior mentor application: ${error.message}`);
@@ -102,8 +103,8 @@ class SeniorMentorApplicationService {
     }
   }
 
-  async getByApplicationId(applicationId: string): Promise<any> {
-    const application = await seniorMentorApplicationRepository.findByApplicationId(applicationId);
+  async getBySeniorMentorId(seniorMentorId: string): Promise<any> {
+    const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
       throw new NotFoundError('Application not found');
     }
@@ -128,11 +129,11 @@ class SeniorMentorApplicationService {
    * under review, or rejected — a verified application is locked.
    */
   async update(
-    applicationId: string,
+    seniorMentorId: string,
     userId: string,
     updates: UpdateSeniorMentorApplicationInput
   ): Promise<any> {
-    const application = await seniorMentorApplicationRepository.findByApplicationId(applicationId);
+    const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
       throw new NotFoundError('Application not found');
     }
@@ -148,17 +149,17 @@ class SeniorMentorApplicationService {
       if (cleanUpdates[key] === undefined) delete cleanUpdates[key];
     });
 
-    const updated = await seniorMentorApplicationRepository.updateByApplicationId(
-      applicationId,
+    const updated = await seniorMentorApplicationRepository.updateBySeniorMentorId(
+      seniorMentorId,
       cleanUpdates
     );
 
-    logger.info(`✏️ Senior Mentor application updated: ${applicationId}`);
+    logger.info(`✏️ Senior Mentor application updated: ${seniorMentorId}`);
     return updated;
   }
 
-  async withdraw(applicationId: string, userId: string): Promise<void> {
-    const application = await seniorMentorApplicationRepository.findByApplicationId(applicationId);
+  async withdraw(seniorMentorId: string, userId: string): Promise<void> {
+    const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
       throw new NotFoundError('Application not found');
     }
@@ -166,8 +167,8 @@ class SeniorMentorApplicationService {
       throw new ForbiddenError('You can only withdraw your own application');
     }
 
-    await seniorMentorApplicationRepository.softDeleteByApplicationId(applicationId);
-    logger.info(`🗑️ Senior Mentor application withdrawn: ${applicationId}`);
+    await seniorMentorApplicationRepository.softDeleteBySeniorMentorId(seniorMentorId);
+    logger.info(`🗑️ Senior Mentor application withdrawn: ${seniorMentorId}`);
   }
 
   async list(
@@ -190,8 +191,8 @@ class SeniorMentorApplicationService {
    * is a separate, deliberate step (see mentor.service.createMentor) so
    * that admins can review pricing/availability before the mentor goes live.
    */
-  async approve(applicationId: string, adminUserId: string): Promise<any> {
-    const application = await seniorMentorApplicationRepository.findByApplicationId(applicationId);
+  async approve(seniorMentorId: string, adminUserId: string): Promise<any> {
+    const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
       throw new NotFoundError('Application not found');
     }
@@ -199,40 +200,40 @@ class SeniorMentorApplicationService {
       throw new BadRequestError('Application is already verified');
     }
 
-    const updated = await seniorMentorApplicationRepository.updateByApplicationId(applicationId, {
+    const updated = await seniorMentorApplicationRepository.updateBySeniorMentorId(seniorMentorId, {
       verificationStatus: ApplicationStatus.VERIFIED,
       verifiedAt: new Date(),
       verifiedBy: adminUserId,
       rejectionReason: undefined,
     });
 
-    logger.info(`✅ Senior Mentor application approved: ${applicationId} by ${adminUserId}`);
+    logger.info(`✅ Senior Mentor application approved: ${seniorMentorId} by ${adminUserId}`);
     return updated;
   }
 
-  async reject(applicationId: string, adminUserId: string, reason: string): Promise<any> {
+  async reject(seniorMentorId: string, adminUserId: string, reason: string): Promise<any> {
     if (!reason || !reason.trim()) {
       throw new BadRequestError('Rejection reason is required');
     }
 
-    const application = await seniorMentorApplicationRepository.findByApplicationId(applicationId);
+    const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
       throw new NotFoundError('Application not found');
     }
 
-    const updated = await seniorMentorApplicationRepository.updateByApplicationId(applicationId, {
+    const updated = await seniorMentorApplicationRepository.updateBySeniorMentorId(seniorMentorId, {
       verificationStatus: ApplicationStatus.REJECTED,
       rejectionReason: reason,
       verifiedAt: undefined,
       verifiedBy: adminUserId,
     });
 
-    logger.info(`❌ Senior Mentor application rejected: ${applicationId} by ${adminUserId}`);
+    logger.info(`❌ Senior Mentor application rejected: ${seniorMentorId} by ${adminUserId}`);
     return updated;
   }
 
-  async markUnderReview(applicationId: string, adminUserId: string): Promise<any> {
-    const application = await seniorMentorApplicationRepository.findByApplicationId(applicationId);
+  async markUnderReview(seniorMentorId: string, adminUserId: string): Promise<any> {
+    const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
       throw new NotFoundError('Application not found');
     }
@@ -240,11 +241,11 @@ class SeniorMentorApplicationService {
       throw new BadRequestError('Only pending applications can be moved to under review');
     }
 
-    const updated = await seniorMentorApplicationRepository.updateByApplicationId(applicationId, {
+    const updated = await seniorMentorApplicationRepository.updateBySeniorMentorId(seniorMentorId, {
       verificationStatus: ApplicationStatus.UNDER_REVIEW,
     });
 
-    logger.info(`👀 Senior Mentor application marked under review: ${applicationId} by ${adminUserId}`);
+    logger.info(`👀 Senior Mentor application marked under review: ${seniorMentorId} by ${adminUserId}`);
     return updated;
   }
 }

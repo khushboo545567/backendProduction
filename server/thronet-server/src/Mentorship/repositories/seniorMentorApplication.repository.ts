@@ -3,9 +3,9 @@ import SeniorMentorApplication from '../models/SeniorMentorApplication';
 import { ApplicationFilters } from '../interface/seniorMentorApplication.types';
 
 class SeniorMentorApplicationRepository {
-  async findByApplicationId(applicationId: string): Promise<any | null> {
+  async findBySeniorMentorId(seniorMentorId: string): Promise<any | null> {
     return await SeniorMentorApplication.findOne({
-      applicationId,
+      seniorMentorId,
       isDeleted: false,
     }).lean();
   }
@@ -20,9 +20,9 @@ class SeniorMentorApplicationRepository {
     return application.toObject();
   }
 
-  async updateByApplicationId(applicationId: string, updates: any): Promise<any | null> {
+  async updateBySeniorMentorId(seniorMentorId: string, updates: any): Promise<any | null> {
     const application = await SeniorMentorApplication.findOneAndUpdate(
-      { applicationId, isDeleted: false },
+      { seniorMentorId, isDeleted: false },
       { $set: updates },
       { new: true, runValidators: true }
     );
@@ -30,9 +30,9 @@ class SeniorMentorApplicationRepository {
     return application.toObject();
   }
 
-  async softDeleteByApplicationId(applicationId: string): Promise<boolean> {
+  async softDeleteBySeniorMentorId(seniorMentorId: string): Promise<boolean> {
     const application = await SeniorMentorApplication.findOne({
-      applicationId,
+      seniorMentorId,
       isDeleted: false,
     });
     if (!application) return false;

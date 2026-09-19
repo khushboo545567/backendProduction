@@ -27,6 +27,12 @@ class SeniorMentorApplicationValidator {
 
   static apply() {
     return [
+      body('mentorRole')
+        .notEmpty()
+        .withMessage('Mentor role is required')
+        .isIn(['senior_mentor', 'alumni'])
+        .withMessage('Invalid mentor role'),
+
       body('fullName')
         .trim()
         .notEmpty()
@@ -150,6 +156,10 @@ class SeniorMentorApplicationValidator {
 
   static update() {
     return [
+      body('mentorRole')
+        .optional()
+        .isIn(['senior_mentor', 'alumni'])
+        .withMessage('Invalid mentor role'),
       body('fullName').optional().trim().isLength({ min: 2, max: 100 }),
       body('college').optional().trim().isLength({ max: 200 }),
       body('degree').optional().trim().isLength({ max: 100 }),
