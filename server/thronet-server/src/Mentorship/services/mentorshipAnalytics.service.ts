@@ -1,7 +1,9 @@
+// File: thronet-server/src/Mentorship/services/mentorshipAnalytics.service.ts
 import { Mentor, SessionMentor, MentorshipReview, PackageCredit } from "../models";
 import { BookingStatus } from "@/shared/constants/bookingStatus";
 import { logger } from "@/shared/logger.util";
 import MentorshipAnalytics from '@/Mentorship/models/mentorshipAnalytics';
+
 class MentorshipAnalyticsService {
   /**
    * Get comprehensive mentor statistics
@@ -121,8 +123,18 @@ class MentorshipAnalyticsService {
       const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const fourMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+      const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
 
-      const [baseStats, viewsThisMonthAgg, viewsLastMonthAgg, viewsAllTimeAgg, durationAgg, monthlyEarnings] = await Promise.all([
+      const [
+        baseStats,
+        viewsThisMonthAgg,
+        viewsLastMonthAgg,
+        viewsAllTimeAgg,
+        durationAgg,
+        monthlyEarnings,
+        cancellationAgg,
+        ratingTrendAgg,
+      ] = await Promise.all([
         this.getMentorStats(mentorId),
 
         // ✅ mentor-domain views, tracked via MentorshipAnalytics (recordEvent called from mentor.controller.ts on profile GET)
@@ -152,6 +164,34 @@ class MentorshipAnalyticsService {
           { $sort: { _id: -1 } },
           { $limit: 4 },
         ]),
+
+        // ✅ NEW: cancellation / no-show rate (all-time, mirrors completionRate calc)
+        // NOTE: if BookingStatus has no 'no_show' member, this $cond will just
+        // never match and noShow will stay 0 — safe no-op, doesn't break anything.
+        SessionMentor.aggregate([
+          { $match: { mentorId } },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              cancelled: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
+              noShow: { $sum: { $cond: [{ $eq: ['$status', 'no_show'] }, 1, 0] } },
+            },
+          },
+        ]),
+
+        // ✅ NEW: rating trend — monthly avg rating, last 6 months
+        MentorshipReview.aggregate([
+          { $match: { mentorId, isDeleted: false, isPublic: true, createdAt: { $gte: sixMonthsAgo } } },
+          {
+            $group: {
+              _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+              avgRating: { $avg: '$rating' },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]),
       ]);
 
       const viewsNow = viewsThisMonthAgg?.totalViews || 0;
@@ -160,9 +200,21 @@ class MentorshipAnalyticsService {
         ? Math.round(((viewsNow - viewsPrev) / viewsPrev) * 100)
         : viewsNow > 0 ? 100 : 0;
 
+      const cancellation = cancellationAgg[0] || { total: 0, cancelled: 0, noShow: 0 };
+      const cancellationRate = cancellation.total > 0
+        ? Math.round((cancellation.cancelled / cancellation.total) * 100)
+        : 0;
+
+      // Conversion: profile views (all-time) → total bookings
+      const totalBookingsAllTime = baseStats.sessions.total || 0;
+      const totalViewsAllTime = viewsAllTimeAgg?.totalViews || 0;
+      const viewToBookingRate = totalViewsAllTime > 0
+        ? Math.round((totalBookingsAllTime / totalViewsAllTime) * 100)
+        : 0;
+
       return {
         profileViews: {
-          value: viewsAllTimeAgg?.totalViews || 0,
+          value: totalViewsAllTime,
           valueThisMonth: viewsNow,
           changePercent: viewsChangePct,
           trend: viewsChangePct >= 0 ? 'up' : 'down',
@@ -174,14 +226,33 @@ class MentorshipAnalyticsService {
         avgSessionDuration: {
           value: Math.round(durationAgg[0]?.avgDuration || 0),
         },
+        // ✅ NEW
+        cancellationRate: {
+          value: cancellationRate,
+          cancelled: cancellation.cancelled,
+          noShow: cancellation.noShow,
+          total: cancellation.total,
+        },
+        // ✅ NEW
+        conversion: {
+          views: totalViewsAllTime,
+          bookings: totalBookingsAllTime,
+          rate: viewToBookingRate,
+        },
         popularServices: baseStats.sessions.byType.map((s: any) => ({
           sessionType: s._id,
           bookings: s.count,
-          revenue: s.revenue,
+          revenue: s.revenue, // was already computed by getMentorStats, now actually returned to frontend
         })),
         monthlyEarnings: monthlyEarnings.map((m: any) => ({
           month: m._id,
           amount: m.amount,
+        })),
+        // ✅ NEW
+        ratingTrend: ratingTrendAgg.map((r: any) => ({
+          month: r._id,
+          avgRating: Math.round((r.avgRating || 0) * 10) / 10,
+          count: r.count,
         })),
         reviews: baseStats.reviews,
       };
