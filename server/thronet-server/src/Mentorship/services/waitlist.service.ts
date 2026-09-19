@@ -1,6 +1,7 @@
 import emailService from './email.service';
 import smsService from './sms.service';
 import { logger } from '@/shared/logger.util';
+import notificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { Mentor, Waitlist } from '../models';
 import { User } from '@/auth/models';
 import { BadRequestError, ConflictError, NotFoundError } from '@/shared/errors/app.error';
@@ -159,6 +160,27 @@ class WaitlistService {
         expiresAt,
       });
       await waitlistEntry.save();
+
+      // ✅ NEW: Notify the mentor that someone joined their waitlist
+      try {
+        const student = await this.safeUser(input.userId);
+        await notificationService.sendNotification({
+          userId: mentor.userId,
+          type: NotificationType.WAITLIST_JOINED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'New Waitlist Join',
+            message: `${student?.fullName || student?.email || 'A student'} joined the waitlist for ${input.serviceTitle || input.sessionType}`,
+            menteeName: student?.fullName || student?.email,
+            serviceTitle: input.serviceTitle,
+            sessionType: input.sessionType,
+            waitlistId: waitlistEntry.waitlistId,
+          },
+          priority: 'normal',
+        });
+      } catch (error: any) {
+        logger.warn(`Failed to notify mentor of new waitlist join: ${error.message}`);
+      }
 
       // Confirmation email (non-critical)
       try {
