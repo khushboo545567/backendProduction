@@ -419,6 +419,29 @@ class PackageService {
     }
   }
 
+   /**
+   * ✅ FIX: Hard-delete a package. Only allowed if no sessions have been
+   * used yet — agar credits already consume ho chuke hain to delete karna
+   * data-integrity break karega (usePackageCredit history reference karta hai).
+   * Booked/used package ke liye cancelPackage use karo, delete sirf unused
+   * ya cancelled/expired package ke liye.
+   */
+   async deletePackage(packageId: string, userId: string): Promise<void> {
+    const packageData = await this.getPackageById(packageId, userId);
+
+    if (packageData.usedSessions > 0 && packageData.status === PackageStatus.ACTIVE) {
+      throw new BadRequestError('Cannot delete a package with used sessions. Cancel it instead.');
+    }
+
+    // Unused credits ko bhi saath me clean karo
+    await PackageCredit.deleteMany({ packageId: packageData.packageId });
+
+    const deleted = await packageRepository.deleteByPackageId(packageId);
+    if (!deleted) {
+      throw new NotFoundError('Package not found');
+    }
+  }
+
   /**
    * Get package pricing info
    */

@@ -11,6 +11,7 @@ import {
   getAvailableCredits,
   cancelPackage,
 } from '../controllers';
+import { deletePackage } from '../controllers/package.controller';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { validate } from '@/shared/middlewares/validation.middleware';
 import { body, param, query } from 'express-validator';
@@ -120,6 +121,16 @@ router.put(
     body('reason').notEmpty().withMessage('Cancellation reason is required'),
   ]),
   cancelPackage
+);
+
+// ✅ FIX: naya hard-delete route — pehle ye route exist hi nahi karta tha
+router.delete(
+  '/:packageId',
+  AuthMiddleware.authenticate as any,
+  validate([
+    param('packageId').isUUID().withMessage('Invalid package ID'),
+  ]),
+  deletePackage
 );
 
 export default router;

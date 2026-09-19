@@ -116,7 +116,13 @@ const AvailabilitySchema = new Schema<AvailabilityDocument>(
 );
 
 // ── Compound Indexes ─────────────────────────────────────────────
-AvailabilitySchema.index({ mentorId: 1, date: 1 }, { unique: true });
+// ✅ FIX: partial index — sirf non-deleted documents ke beech uniqueness
+// enforce karta hai, taaki ek soft-deleted (ya hard-deleted) record kabhi
+// bhi future insert ko block na kare.
+AvailabilitySchema.index(
+  { mentorId: 1, date: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);
 AvailabilitySchema.index({ availabilityId: 1, isDeleted: 1 });
 AvailabilitySchema.index({ mentorId: 1, date: 1, 'slots.isBooked': 1 });
 AvailabilitySchema.index({ date: 1, mentorId: 1 });

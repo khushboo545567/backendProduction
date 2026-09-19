@@ -278,3 +278,31 @@ export const cancelPackage = async (
     next(error);
   }
 };
+
+/**
+ * @desc    Delete a package permanently
+ * @route   DELETE /api/packages/:packageId
+ * @access  Private
+ */
+export const deletePackage = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { packageId } = req.params;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    await packageService.deletePackage(packageId, userId);
+
+    ResponseHandler.success(res, 'Package deleted successfully', null);
+  } catch (error: any) {
+    logger.error('Error deleting package:', error);
+    next(error);
+  }
+};

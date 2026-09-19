@@ -38,6 +38,14 @@ class PackageRepository {
     return result.modifiedCount || 0;
   }
 
+  // ✅ FIX: pehle koi delete method hi nahi tha — cancelPackage sirf status
+  // change karta tha, document DB me hamesha rehta tha. Ab hard delete
+  // ke liye actual deleteOne call.
+  async deleteByPackageId(packageId: string): Promise<boolean> {
+    const result = await Package.deleteOne({ packageId });
+    return result.deletedCount > 0;
+  }
+
   // repository mein add karo
 async useSessionAtomic(packageId: string): Promise<any | null> {
   return await Package.findOneAndUpdate(

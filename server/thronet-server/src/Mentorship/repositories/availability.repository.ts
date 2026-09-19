@@ -65,24 +65,25 @@ class AvailabilityRepository {
         await availability.save();
         return availability.toObject();
     }
-
     /**
-     * Soft delete by availabilityId (UUID)
+     * Hard delete by availabilityId (UUID)
+     * ✅ FIX: pehle ye sirf isDeleted=true flag set karta tha (soft delete),
+     * document DB mein hamesha ke liye pada rehta tha. {mentorId, date}
+     * wala unique index isDeleted ko dekhta hi nahi, isliye delete karne
+     * ke baad us date ke liye dobara kabhi bhi naya availability create
+     * nahi ho pata tha — E11000 duplicate-key error aata tha jo service
+     * mein silently "You already have availability set for this date"
+     * bankar dikhta tha, jabki table mein wo date khaali dikhti thi.
+     * Ab delete document ko sach me collection se hata deta hai, isliye
+     * date turant reusable ho jaati hai.
      */
     async softDeleteByAvailabilityId(availabilityId: string): Promise<boolean> {
-        const availability = await Availability.findOne({
+        const result = await Availability.deleteOne({
             availabilityId,
             isDeleted: false
         });
-
-        if (!availability) return false;
-
-        availability.isDeleted = true;
-        availability.deletedAt = new Date();
-        await availability.save();
-        return true;
+        return result.deletedCount > 0;
     }
-
     /**
  * Find all availability (no user filter)
  */
