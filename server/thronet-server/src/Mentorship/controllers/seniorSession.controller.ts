@@ -1,7 +1,7 @@
 import { Response } from 'express';
-import { AuthRequest } from '../middlewares/auth.middleware';
+import { AuthRequest } from '@/shared/middlewares/auth.middleware';
 import SeniorSessionService from '../services/seniorSession.service';
-import { ResponseHandler } from '../../utils/responseHandler';
+import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 
 class SeniorSessionController {
   /**
@@ -10,7 +10,7 @@ class SeniorSessionController {
    */
   async createSession(req: AuthRequest, res: Response) {
     try {
-      const userId = req.user.id;
+      const userId = req.user!.id;
 
       const session = await SeniorSessionService.createSession(
         userId,
@@ -19,11 +19,11 @@ class SeniorSessionController {
 
       return ResponseHandler.success(
         res,
-        session,
-        'Senior session created successfully'
+        'Senior session created successfully',
+        session
       );
     } catch (error) {
-      return ResponseHandler.error(res, error);
+      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
     }
   }
 
@@ -33,17 +33,17 @@ class SeniorSessionController {
    */
   async getMySessions(req: AuthRequest, res: Response) {
     try {
-      const userId = req.user.id;
+      const userId = req.user!.id;
 
       const sessions = await SeniorSessionService.getMySessions(userId);
 
       return ResponseHandler.success(
         res,
-        sessions,
-        'Senior sessions retrieved successfully'
+        'Senior sessions retrieved successfully',
+        sessions
       );
     } catch (error) {
-      return ResponseHandler.error(res, error);
+      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
     }
   }
 
@@ -53,7 +53,7 @@ class SeniorSessionController {
    */
   async getSessionById(req: AuthRequest, res: Response) {
     try {
-      const userId = req.user.id;
+      const userId = req.user!.id;
       const { sessionId } = req.params;
 
       const session = await SeniorSessionService.getSessionById(
@@ -63,11 +63,11 @@ class SeniorSessionController {
 
       return ResponseHandler.success(
         res,
-        session,
-        'Senior session retrieved successfully'
+        'Senior session retrieved successfully',
+        session
       );
     } catch (error) {
-      return ResponseHandler.error(res, error);
+      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
     }
   }
 
@@ -77,7 +77,7 @@ class SeniorSessionController {
    */
   async updateSession(req: AuthRequest, res: Response) {
     try {
-      const userId = req.user.id;
+      const userId = req.user!.id;
       const { sessionId } = req.params;
 
       const session = await SeniorSessionService.updateSession(
@@ -88,11 +88,11 @@ class SeniorSessionController {
 
       return ResponseHandler.success(
         res,
-        session,
-        'Senior session updated successfully'
+        'Senior session updated successfully',
+        session
       );
     } catch (error) {
-      return ResponseHandler.error(res, error);
+      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
     }
   }
 
@@ -102,7 +102,7 @@ class SeniorSessionController {
    */
   async cancelSession(req: AuthRequest, res: Response) {
     try {
-      const userId = req.user.id;
+      const userId = req.user!.id;
       const { sessionId } = req.params;
 
       const session = await SeniorSessionService.cancelSession(
@@ -112,11 +112,11 @@ class SeniorSessionController {
 
       return ResponseHandler.success(
         res,
-        session,
-        'Senior session cancelled successfully'
+        'Senior session cancelled successfully',
+        session
       );
     } catch (error) {
-      return ResponseHandler.error(res, error);
+      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
     }
   }
 }

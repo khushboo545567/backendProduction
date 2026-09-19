@@ -13,6 +13,8 @@ export enum SeniorSessionType {
  */
 export enum SeniorSessionStatus {
   ALL = 'all',
+  DRAFT = 'draft',
+  PENDING = 'pending',
   UPCOMING = 'upcoming',
   IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',
@@ -87,3 +89,18 @@ export interface SeniorSessionDocument
     Document {
   sessionId: string;
 }
+
+/**
+ * Input for creating a new senior session
+ */
+export interface CreateSeniorSessionInput
+  extends Omit<ISeniorSession, 'sessionId' | 'mentorId' | 'bookings' | 'status'> {
+  status?: SeniorSessionStatus | string;
+}
+
+/**
+ * Input for updating an existing senior session
+ */
+export type UpdateSeniorSessionInput = Partial<
+  Omit<ISeniorSession, 'sessionId' | 'mentorId' | 'bookings'>
+>;

@@ -361,12 +361,12 @@ export class AIService {
         updateOne: {
           filter: {
             userId,
-            mentorId: match.mentorId,
+            mentorId: new mongoose.Types.ObjectId(match.mentorId),
           },
           update: {
             $set: {
               userId,
-              mentorId: match.mentorId,
+              mentorId: new mongoose.Types.ObjectId(match.mentorId),
               overallScore: match.overallScore,
               factors: match.factors,
               explanation: match.explanation,

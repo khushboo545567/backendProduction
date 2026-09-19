@@ -1,21 +1,19 @@
 import { v4 as uuidv4 } from 'uuid';
 
-import SeniorSessionRepository from '../repositories/seniorSession.repository';
+import seniorSessionRepository from '../repositories/seniorSession.repository';
 import { ISeniorSession, CreateSeniorSessionInput, UpdateSeniorSessionInput } from '../interface/seniorSession.types';
 
 import SeniorMentorApplicationService from './seniorMentorApplication.service';
 
-import { ForbiddenError, NotFoundError } from '../../errors';
+import { ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
 
 // If your project uses different error imports,
 // replace the above imports with your existing error classes.
 
 class SeniorSessionService {
-  private repository: SeniorSessionRepository;
+  private repository = seniorSessionRepository;
 
-  constructor() {
-    this.repository = new SeniorSessionRepository();
-  }
+  constructor() {}
 
   /**
    * Verify that the user is an active Senior Mentor.
@@ -73,9 +71,9 @@ class SeniorSessionService {
       bookedBy: null,
       bookedAt: null,
       status: payload.status ?? 'pending',
-    };
+    } as unknown as ISeniorSession;
 
-    return this.repository.create(sessionData);
+    return this.repository.create(sessionData) as unknown as ISeniorSession;
   }
 
   /**
@@ -86,7 +84,7 @@ class SeniorSessionService {
   ): Promise<ISeniorSession[]> {
     await this.ensureSeniorMentor(userId);
 
-    return this.repository.findByMentorId(userId);
+    return this.repository.findByMentorId(userId) as unknown as ISeniorSession[];
   }
 
   /**
@@ -114,7 +112,7 @@ class SeniorSessionService {
       );
     }
 
-    return session;
+    return session as unknown as ISeniorSession;
   }
 
   /**
@@ -160,7 +158,7 @@ class SeniorSessionService {
       sessionId,
       userId,
       allowedUpdates
-    );
+    ) as unknown as ISeniorSession;
   }
 
   /**
@@ -197,10 +195,10 @@ class SeniorSessionService {
       );
     }
 
-    return this.repository.cancelBySessionIdAndMentorId(
+    return this.repository.cancelSession(
       sessionId,
       userId
-    );
+    ) as unknown as ISeniorSession;
   }
 }
 

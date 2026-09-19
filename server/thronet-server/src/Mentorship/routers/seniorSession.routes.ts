@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import SeniorSessionController from '../controllers/seniorSession.controller';
-import AuthMiddleware from '../middlewares/auth.middleware';
+import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 
 import {
   createSeniorSessionValidator,

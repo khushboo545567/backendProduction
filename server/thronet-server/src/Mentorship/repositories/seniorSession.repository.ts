@@ -27,7 +27,7 @@ class SeniorSessionRepository {
   ): Promise<SeniorSessionDocument | null> {
     return await SeniorSession.findOne({
       sessionId,
-    }).lean();
+    }).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -49,7 +49,7 @@ class SeniorSessionRepository {
 
     return await SeniorSession.find(filter)
       .sort({ scheduledAt: 1 })
-      .lean();
+      .lean<SeniorSessionDocument[]>();
   }
 
   /**
@@ -64,7 +64,7 @@ class SeniorSessionRepository {
     return await SeniorSession.findOne({
       sessionId,
       mentorId,
-    }).lean();
+    }).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -83,7 +83,7 @@ class SeniorSessionRepository {
         new: true,
         runValidators: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -109,7 +109,7 @@ class SeniorSessionRepository {
         new: true,
         runValidators: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -132,7 +132,7 @@ class SeniorSessionRepository {
         new: true,
         runValidators: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -157,7 +157,7 @@ class SeniorSessionRepository {
         new: true,
         runValidators: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -179,7 +179,7 @@ class SeniorSessionRepository {
           },
         },
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
 
     return session?.bookings?.[0] ?? null;
   }
@@ -210,7 +210,7 @@ class SeniorSessionRepository {
         new: true,
         runValidators: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -238,7 +238,7 @@ class SeniorSessionRepository {
       {
         new: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -264,7 +264,7 @@ class SeniorSessionRepository {
         new: true,
         runValidators: true,
       }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
   }
 
   /**
@@ -276,7 +276,7 @@ class SeniorSessionRepository {
     const session = await SeniorSession.findOne(
       { sessionId },
       { bookings: 1 }
-    ).lean();
+    ).lean<SeniorSessionDocument>();
 
     return session?.bookings?.length ?? 0;
   }

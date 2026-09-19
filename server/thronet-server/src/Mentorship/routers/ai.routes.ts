@@ -1,6 +1,6 @@
 // src/routes/ai.routes.ts
 import { Router } from 'express';
-import {aiController} from '../controllers';
+import aiController from '../controllers/ai.controller';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { rateLimitSearch } from '@/Mentorship/middlewares/rateLimit.middleware';
 
