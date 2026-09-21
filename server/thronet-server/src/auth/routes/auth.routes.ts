@@ -24,6 +24,7 @@ import { User } from '../models';
 import passport from '@/config/oauth/passport.config';
 import { csrfProtection } from '@/config/security/csrf.config';
 import { updateDateOfBirth } from '../controllers/dob.controller';
+import { googleVerifyController, googleRegisterController } from '../controllers/googleAuth.controller';
 
 
 const router = express.Router();
@@ -801,7 +802,44 @@ router.post(
 );
 
 router.patch('/date-of-birth', AuthMiddleware.authenticate as any, updateDateOfBirth);
-// ==================== GOOGLE OAUTH ROUTES ====================
+
+// ==================== GOOGLE OAUTH & NATIVE VERIFY ROUTES ====================
+
+/**
+ * @route POST /api/v1/auth/google/verify
+ * @desc Verify Google ID Token for React Native / Mobile Apps
+ * @access Public
+ */
+router.post(
+    '/google/verify',
+    sanitizeInput,
+    rateLimitMiddleware(),
+    googleVerifyController
+);
+
+/**
+ * @route POST /api/v1/auth/google/register
+ * @desc Register new user using Google ID token and onboarding info
+ * @access Public
+ */
+router.post(
+    '/google/register',
+    sanitizeInput,
+    rateLimitMiddleware(),
+    googleRegisterController
+);
+
+/**
+ * @route POST /api/v1/auth/google/native
+ * @desc Alias for Google ID token verify
+ * @access Public
+ */
+router.post(
+    '/google/native',
+    sanitizeInput,
+    rateLimitMiddleware(),
+    googleVerifyController
+);
 
 router.get('/csrf-token', csrfProtection, (req: Request, res: Response) => {
     res.json({ csrfToken: req.csrfToken() });
