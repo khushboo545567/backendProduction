@@ -1,6 +1,5 @@
 import { logger } from "@/shared/logger.util";
 import { NotFoundError, BadRequestError, ForbiddenError } from "@/shared/errors/app.error";
-import { User } from "@/auth/models";
 import { GroupSession } from "../models";
 import { generateSecureId } from "@/shared/security";
 import groupRepository from "../repositories/group.repository";
@@ -139,12 +138,23 @@ class GroupService {
 
   /**
    * Get group session by ID
+   *
+   * ✅ FIX: previously used `groupRepository.findBySessionId()`, which returns
+   * a lean/plain object. Every action method below (join/leave/start/complete/
+   * cancel/addFeedback) calls Mongoose schema instance methods on the result
+   * of this function (session.addParticipant, session.startSession, etc.).
+   * Those methods don't exist on a plain lean object — calling them threw an
+   * uncaught TypeError, which is exactly what surfaced to the client as the
+   * generic "Internal server error". Fetching a real Mongoose document here
+   * (same pattern already used in updateGroupSession/deleteGroupSession)
+   * fixes all of those call sites at once.
    */
   async getGroupSessionById(sessionId: string, _authToken?: string): Promise<any> {
     try {
+      const isObjectId = mongoose.isValidObjectId(sessionId);
+      const query = isObjectId ? { $or: [{ _id: sessionId }, { sessionId }] } : { sessionId };
 
-      // ✅ REPLACE WITH
-      const session = await groupRepository.findBySessionId(sessionId);
+      const session = await GroupSession.findOne(query);
       if (!session) {
         throw new NotFoundError('Group session not found');
       }
@@ -191,16 +201,6 @@ class GroupService {
 
       const skip = (page - 1) * limit;
 
-      // const [sessions, total] = await Promise.all([
-      //   GroupSession.find(query)
-      //     .sort({ scheduledAt: 1 })
-      //     .skip(skip)
-      //     .limit(limit)
-      //     .lean(),
-      //   GroupSession.countDocuments(query),
-      // ]);
-
-      // ✅ REPLACE WITH
       const [sessions, total] = await Promise.all([
         groupRepository.findAll(query, skip, limit),
         groupRepository.count(query),
@@ -236,15 +236,7 @@ class GroupService {
         query.mentorId = mentorId;
       }
 
-      // const sessions = await GroupSession.find(query)
-      //   .sort({ scheduledAt: 1 })
-      //   .limit(limit)
-      //   .lean();
-
-      // ✅ REPLACE WITH
       return await groupRepository.findUpcoming(query, limit);
-
-      // return sessions;
     } catch (error: any) {
       logger.error(`Failed to fetch upcoming group sessions:${error}`);
       throw error;
@@ -253,6 +245,13 @@ class GroupService {
 
   /**
    * Join a group session
+   *
+   * ✅ FIX: removed `User.findByUserId(menteeId)`. This route is already
+   * behind `AuthMiddleware.authenticate`, so `menteeId` is a verified user
+   * from the JWT — re-checking existence via a method (`findByUserId`) that
+   * may not even exist as a static on the `@/auth/models` User model was a
+   * second, redundant point of failure throwing the same kind of uncaught
+   * TypeError -> generic 500.
    */
   async joinGroupSession(
     sessionId: string,
@@ -262,9 +261,6 @@ class GroupService {
   ): Promise<any> {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
-
-      // Verify mentee exists
-      await User.findByUserId(menteeId);
 
       // Check if session is open
       if (session.status !== 'open') {
@@ -342,8 +338,6 @@ class GroupService {
       throw error;
     }
   }
-
-  // NOTE: updateGroupSession is implemented below with full file upload + partial update support.
 
   /**
    * Start group session (mentor only)
@@ -513,7 +507,7 @@ class GroupService {
       if (updates.timezone) updatePayload.$set.timezone = updates.timezone;
       if (updates.maxParticipants !== undefined) updatePayload.$set.maxParticipants = Number(updates.maxParticipants);
       if (updates.minParticipants !== undefined) updatePayload.$set.minParticipants = Number(updates.minParticipants);
-      
+
       if (updates.pricePerPerson !== undefined) {
         updatePayload.$set['pricing.pricePerPerson'] = Number(updates.pricePerPerson);
       }
@@ -521,20 +515,18 @@ class GroupService {
       if (updates.paymentMethod) {
         updatePayload.$set['payment.method'] = updates.paymentMethod;
       }
-      
+
       if (updates.followUp !== undefined) {
         updatePayload.$set['settings.followUp'] = updates.followUp;
       }
-      
+
       if (updates.bufferTimeMinutes !== undefined) {
         updatePayload.$set['settings.bufferTimeMinutes'] = Number(updates.bufferTimeMinutes);
       }
-      
+
       if (updates.status) {
         updatePayload.$set.status = updates.status;
       }
-
-      console.log('=== UPDATE PAYLOAD ===', JSON.stringify(updatePayload, null, 2));
 
       // Use findOneAndUpdate to force $set on nested schemas strongly
       const updatedSession = await GroupSession.findOneAndUpdate(
@@ -544,23 +536,8 @@ class GroupService {
       );
 
       if (!updatedSession) {
-         throw new Error("findOneAndUpdate failed to return document");
+        throw new Error("findOneAndUpdate failed to return document");
       }
-
-      // POST-UPDATE VERIFICATION
-      const verificationFetch = await GroupSession.findOne(query).lean();
-      console.log('=== VERIFICATION FETCH (DB PROOF) ===', JSON.stringify({
-        title: verificationFetch?.title,
-        topic: verificationFetch?.topic,
-        scheduledAt: verificationFetch?.scheduledAt,
-        duration: verificationFetch?.duration,
-        minParticipants: verificationFetch?.minParticipants,
-        maxParticipants: verificationFetch?.maxParticipants,
-        status: verificationFetch?.status,
-        pricing: verificationFetch?.pricing,
-        payment: verificationFetch?.payment,
-        settings: verificationFetch?.settings,
-      }, null, 2));
 
       logger.info(`Group session updated successfully: ${session.sessionId}`);
       return updatedSession;
@@ -570,12 +547,12 @@ class GroupService {
     }
   }
 
-   /**
+  /**
    * Delete a group session (mentor only).
    * Only allowed when there are no registered participants —
    * mentor must cancel/remove participants first otherwise.
    */
-   async deleteGroupSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
+  async deleteGroupSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
 
