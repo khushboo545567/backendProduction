@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import sessionService from './mentorshipSession.service';
 import videoService from './video.service';
 import emailService from './email.service';
@@ -9,8 +10,8 @@ import TimezoneUtils from '@/Mentorship/utils/timezone';
 import { SessionType } from '@/shared/constants/sessionTypes';
 import { logger } from '@/shared/logger.util';
 import { User, UserProfile } from '@/shared/models/index.models';
-import { SessionMentor } from '../models';
-import { ConflictError } from '@/shared/errors/app.error';
+import { SessionMentor, Mentor } from '../models';
+import { ConflictError, NotFoundError, BadRequestError, ForbiddenError } from '@/shared/errors/app.error';
 import { getRedisClient } from '@/services/redis.service';
 import waitlistCron from '@/jobs/waitlistCron';
 // ✅ NEW: in-app notification wiring
@@ -245,9 +246,13 @@ class BookingService {
     try {
       logger.info(`❌ Cancelling booking: ${sessionId}`);
 
-      const session = await SessionMentor.findOne({ sessionId });
+      const session = await SessionMentor.findOne(
+        mongoose.Types.ObjectId.isValid(sessionId)
+          ? { $or: [{ sessionId }, { _id: sessionId }] }
+          : { sessionId }
+      );
       if (!session) {
-        throw new Error('Session not found');
+        throw new NotFoundError('Session');
       }
 
       // ✅ FIX: pass bookingId through so refundService validates/updates
@@ -273,9 +278,10 @@ class BookingService {
       }
 
       const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
+      const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
       const [mentee, mentor] = await Promise.all([
         actualMenteeId ? User.findByUserId(actualMenteeId) : null,
-        User.findByUserId(session.mentorId),
+        mentorDoc?.userId ? User.findByUserId(mentorDoc.userId) : Promise.resolve(null),
       ]);
 
       if (!mentee || !mentor) {
@@ -314,8 +320,10 @@ class BookingService {
 
       logger.info(`✅ Booking cancelled successfully: ${sessionId}`);
 
+      const updatedSession = await SessionMentor.findById(session._id);
+
       return {
-        session,
+        session: updatedSession || session,
         refundAmount: refundResult.refundAmount,
         refundEligible: refundResult.refundEligible,
       };
@@ -356,9 +364,10 @@ class BookingService {
       );
 
       const actualMenteeId = updatedSession.menteeId || (updatedSession.bookings && updatedSession.bookings[0]?.menteeId);
+      const mentorDoc = await Mentor.findOne({ mentorId: updatedSession.mentorId, isDeleted: false });
       const [mentee, mentor] = await Promise.all([
         actualMenteeId ? User.findByUserId(actualMenteeId) : null,
-        User.findByUserId(updatedSession.mentorId),
+        mentorDoc?.userId ? User.findByUserId(mentorDoc.userId) : Promise.resolve(null),
       ]);
 
       if (!mentee || !mentor) {
@@ -430,9 +439,10 @@ class BookingService {
       if (!session) return;
 
       const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
+      const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
       const [mentee, mentor] = await Promise.all([
         actualMenteeId ? User.findByUserId(actualMenteeId) : null,
-        User.findByUserId(session.mentorId),
+        mentorDoc?.userId ? User.findByUserId(mentorDoc.userId) : Promise.resolve(null),
       ]);
 
       if (!mentee || !mentor) {
@@ -490,15 +500,16 @@ class BookingService {
       const session = await sessionService.getSessionById(sessionId, undefined, authToken);
 
       const actualMenteeId = session.menteeId || (session.bookings && session.bookings[0]?.menteeId);
+      const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
       const [menteeUser, mentorUser, menteeProfile, mentorProfile] = await Promise.all([
         actualMenteeId ? User.findByUserId(actualMenteeId) : null,
-        User.findByUserId(session.mentorId),
+        mentorDoc?.userId ? User.findByUserId(mentorDoc.userId) : Promise.resolve(null),
         actualMenteeId ? UserProfile.findByUserIdCached(actualMenteeId) : null,
-        UserProfile.findByUserIdCached(session.mentorId),
+        mentorDoc?.userId ? UserProfile.findByUserIdCached(mentorDoc.userId) : Promise.resolve(null),
       ]);
 
       if (!menteeUser || !mentorUser) {
-        throw new Error('User not found');
+        throw new NotFoundError('User');
       }
 
       return {
