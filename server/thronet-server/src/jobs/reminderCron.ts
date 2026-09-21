@@ -1,7 +1,8 @@
 ﻿console.log('TRACE_START reminderCron.ts');
 // src/jobs/reminderCron.ts
 import cron from 'node-cron';
-import { SessionMentor } from '@/Mentorship/models';
+import { SessionMentor, Mentor } from '@/Mentorship/models';
+import { emitToUser } from '@/socket';
 import { User } from '@/auth/models';
 import { BookingStatus } from '../shared/constants/bookingStatus';
 import { logger } from '@/shared/logger.util';
@@ -17,6 +18,14 @@ class ReminderCron {
    * Initialize cron jobs
    */
   static init(): void {
+    // ✅ NEW: har minute — 15 min / 5 min "starting soon" reminders
+    cron.schedule('* * * * *', async () => {
+      try {
+        await this.sendStartingSoonReminders();
+      } catch (error: any) {
+        logger.error('Error in starting-soon reminder cron:', error);
+      }
+    });
     // Run every 15 minutes
     cron.schedule('*/15 * * * *', async () => {
       try {
@@ -290,7 +299,106 @@ class ReminderCron {
   /**
    * Manual trigger for testing
    */
-  static async triggerManually(): Promise<void> {
+
+
+    /**
+   * ✅ NEW: "Session starting soon" reminders.
+   * - Booking ke apne scheduledAt pe based (template ke pe nahi)
+   * - Mentor userId Mentor doc se (mentorId != userId)
+   * - Atomic claim => multiple instances pe bhi duplicate nahi
+   */
+    private static async sendStartingSoonReminders(): Promise<void> {
+      const now = new Date();
+      const liveStatuses = [BookingStatus.CONFIRMED, BookingStatus.RESCHEDULED];
+      // Non-overlapping windows: session 3 min door ho to sirf m5 jayega, dono nahi
+      const windows = [
+        { key: 'm15', fromMin: 5, toMin: 15, label: '15 minutes' },
+        { key: 'm5', fromMin: 0, toMin: 5, label: '5 minutes' },
+      ];
+  
+      for (const w of windows) {
+        const from = new Date(now.getTime() + w.fromMin * 60 * 1000);
+        const to = new Date(now.getTime() + w.toMin * 60 * 1000);
+        const flagPath = `reminders.${w.key}`;
+  
+        const sessions = await SessionMentor.find({
+          bookings: {
+            $elemMatch: {
+              status: { $in: liveStatuses },
+              scheduledAt: { $gt: from, $lte: to },
+              [flagPath]: { $ne: true },
+            },
+          },
+        } as any);
+  
+        for (const session of sessions) {
+          const mentorDoc: any = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+          const mentorUser: any = mentorDoc?.userId ? await User.findByUserId(mentorDoc.userId) : null;
+          const mentorName = mentorUser?.fullName || mentorUser?.email || mentorDoc?.title || 'your mentor';
+  
+          for (const booking of ((session.bookings ?? []) as any[])) {
+            if (!liveStatuses.includes(booking.status)) continue;
+            const startAt = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
+            if (!startAt || startAt <= from || startAt > to) continue;
+            if (booking.reminders?.[w.key]) continue;
+  
+            // Atomic claim — jo pehle claim kare wahi bhejega
+            const claim = await SessionMentor.updateOne(
+              {
+                sessionId: session.sessionId,
+                bookings: { $elemMatch: { _id: booking._id, [flagPath]: { $ne: true } } },
+              } as any,
+              { $set: { [`bookings.$.${flagPath}`]: true } } as any
+            );
+            if (claim.modifiedCount === 0) continue;
+  
+            const menteeId: string | undefined = booking.menteeId || booking.bookedBy;
+            const menteeUser: any = menteeId ? await User.findByUserId(menteeId) : null;
+            const menteeName = menteeUser?.fullName || menteeUser?.email || 'your mentee';
+  
+            const bookingId = String(booking._id);
+            const minutesLeft = Math.max(1, Math.round((startAt.getTime() - now.getTime()) / 60000));
+            const base = {
+              sessionId: session.sessionId,
+              bookingId,
+              roomId: bookingId,
+              title: session.title,
+              scheduledAt: startAt.toISOString(),
+              minutesLeft,
+            };
+  
+            const notify = (targetUserId: string, otherName: string, isMentee: boolean) => {
+              NotificationService.sendNotification({
+                userId: targetUserId,
+                type: NotificationType.SESSION_REMINDER,
+                channels: [NotificationChannel.IN_APP],
+                priority: 'high',
+                data: {
+                  ...base,
+                  title: `Session starts in ${w.label}`,
+                  message: `Your session "${session.title}" with ${otherName} starts in ${w.label}.${
+                    isMentee ? ' Be ready to join!' : ' Start it when you are ready.'
+                  }`,
+                },
+              }).catch((e) => logger.error(`In-app reminder failed (${w.key}):`, e));
+  
+              try {
+                emitToUser(targetUserId, 'session:reminder', { ...base, mentorName, menteeName });
+              } catch (e: any) {
+                logger.warn(`session:reminder emit failed: ${e?.message}`);
+              }
+            };
+  
+            if (menteeId) notify(menteeId, mentorName, true);
+            if (mentorDoc?.userId) notify(mentorDoc.userId, menteeName, false);
+  
+            logger.info(`⏰ ${w.key} reminder sent: session ${session.sessionId} / booking ${bookingId}`);
+          }
+        }
+      }
+    }
+  
+    static async triggerManually(): Promise<void> {
     logger.info('ðŸ”” Manually triggering reminder cron job');
     await this.send24HourReminders();
     await this.send1HourReminders();

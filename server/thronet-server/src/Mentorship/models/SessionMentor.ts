@@ -99,6 +99,11 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         slotTime:       { type: String },
         scheduledAt:    { type: Date },
         availabilityId: { type: String },
+        // ✅ NEW: reminder dedupe flags
+        reminders: {
+          m15: { type: Boolean, default: false },
+          m5:  { type: Boolean, default: false },
+        },
         startedAt:      { type: Date },
         payment: {
           status: { type: String },

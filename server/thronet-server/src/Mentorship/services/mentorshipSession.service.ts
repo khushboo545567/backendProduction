@@ -1018,7 +1018,27 @@ class MentorshipSessionService {
         });
   
         logger.info(`Booking completed: ${sessionId} / ${targetBooking._id}`);
-  
+
+        // ✅ NEW: realtime "session ended" — mentor + mentee dono ko
+        try {
+          const endedPayload = {
+            sessionId: session.sessionId,
+            bookingId: targetBooking._id?.toString(),
+            roomId: targetBooking._id?.toString(),
+            endedAt: now.toISOString(),
+            endedBy: userId,
+            status: BookingStatus.COMPLETED,
+            actualDuration,
+          };
+          const endedMenteeId = targetBooking.menteeId || targetBooking.bookedBy;
+          emitToUser(userId, 'session:ended', endedPayload);
+          if (endedMenteeId) emitToUser(endedMenteeId, 'session:ended', endedPayload);
+        } catch (emitErr: any) {
+          logger.error('Socket emit failed (session:ended):', emitErr);
+        }
+        
+        
+        
         const menteeIdToNotify = targetBooking.menteeId || targetBooking.bookedBy;
         if (menteeIdToNotify) {
           NotificationService.sendNotification({

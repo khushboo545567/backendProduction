@@ -253,21 +253,28 @@ class NotificationService {
         urgent: 'urgent',
       };
 
-      await Notification.create({
-        notificationId,
-        userId: input.userId,
-        type: input.type,
-        category: 'system',
-        title,
-        message,
-        data: input.data,
-        priority: priorityMap[input.priority || 'normal'] || 'medium',
-        channels: { inApp: true, email: false, sms: false, push: false },
-        status: { sent: true, read: false, clicked: false, sentAt: new Date() },
-      });
+      let dbSaved = false;
+      try {
+        await Notification.create({
+          notificationId,
+          userId: input.userId,
+          type: input.type,
+          category: 'system',
+          title,
+          message,
+          data: input.data,
+          priority: priorityMap[input.priority || 'normal'] || 'medium',
+          channels: { inApp: true, email: false, sms: false, push: false },
+          status: { sent: true, read: false, clicked: false, sentAt: new Date() },
+        });
+        dbSaved = true;
+      } catch (dbErr: any) {
+        logger.error('Notification DB save failed (will still attempt realtime push):', dbErr.message);
+      }
 
-      // ✅ NEW: realtime push so mentor/mentee badge + list update instantly,
-      // same event name/shape the global notification service already uses
+      // ✅ Realtime push now runs INDEPENDENTLY of the DB save above —
+      // mentee still gets the live socket event even if the DB write fails,
+      // instead of both being silently blocked by one shared try/catch.
       try {
         emitToUser(input.userId, 'notification:new', {
           notificationId,
@@ -281,7 +288,7 @@ class NotificationService {
         logger.warn('Socket emit failed for mentorship notification:', socketErr.message);
       }
 
-      return true;
+      return dbSaved;
     } catch (error: any) {
       logger.error('In-app notification failed:', error);
       return false;

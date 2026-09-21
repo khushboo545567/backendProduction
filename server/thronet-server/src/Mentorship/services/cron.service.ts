@@ -90,7 +90,10 @@ class CronService {
   /**
    * Send session reminders
    */
+
   private async sendSessionReminders(): Promise<void> {
+    logger.info('sendSessionReminders disabled — reminderCron.ts handles reminders');
+    return;
     const now = new Date();
     const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
 
@@ -229,6 +232,9 @@ class CronService {
    * Update session status
    */
   private async updateSessionStatus(): Promise<void> {
+    logger.info('updateSessionStatus disabled — sessions complete only via completeSession()');
+    return;
+    
     const now = new Date();
 
     // Mark past sessions as completed

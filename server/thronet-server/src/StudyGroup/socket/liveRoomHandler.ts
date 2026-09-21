@@ -232,6 +232,35 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
     });
   });
 
+  // ── Disconnect cleanup ─────────────────────────────────────────────────────
+  // socket.io removes the socket from all rooms automatically on disconnect,
+  // but it does NOT emit 'leave-live-room' for us — so without this, other
+  // peers never learn this user actually left (stale UI/session state).
+  socket.on('disconnect', async () => {
+    try {
+      const rooms = Array.from(socket.rooms || []).filter((r) =>
+        r.startsWith('live-room:')
+      );
+      for (const room of rooms) {
+        const roomId = room.replace('live-room:', '');
+        const remainingSockets = await io.in(room).fetchSockets();
+        // fetchSockets() runs after socket.io's internal room cleanup,
+        // so this socket is already excluded from the count.
+        if (remainingSockets.length === 0) {
+          roomSessions.delete(roomId);
+          LoggerUtil.info(`Cleared study session for empty room ${roomId} (disconnect)`);
+        }
+        socket.to(room).emit('user-left-room', {
+          userId,
+          userName,
+          timestamp: new Date(),
+        });
+      }
+    } catch (error: any) {
+      LoggerUtil.error('Error handling disconnect cleanup', { error: error.message, userId });
+    }
+  });
+
   // ── Get participants ───────────────────────────────────────────────────────
   socket.on('get-room-participants', async (data: GetRoomParticipantsPayload) => {
     try {
