@@ -1,3 +1,4 @@
+// src/Mentorship/models/GroupSession.model.ts
 import mongoose, { Schema, Document } from 'mongoose';
 import { PaymentMethod } from '@/Mentorship/interface/session.types';
 
@@ -41,8 +42,12 @@ export interface IGroupSession {
     method: string;
   };
   settings: {
+    // ✅ FIX: was `Number` in the schema below while the Joi validator (group.routes.ts)
+    // and every caller treat this as a real boolean ("allowed: true/false"). Mongoose was
+    // silently coercing true/false -> 1/0, which is harmless in JS truthy checks but breaks
+    // strict equality checks (`=== true`) anywhere you compare it later (e.g. cron/refund jobs).
     followUp: {
-      allowed: number;
+      allowed: boolean;
       periodDays: number;
     };
     bufferTimeMinutes: number;
@@ -105,7 +110,6 @@ export interface GroupSessionDocument extends Omit<IGroupSession, '_id'>, Docume
 
 const ParticipantSchema = new Schema<IParticipant>(
   {
-    // ADD after opening of GroupSessionSchema fields
     menteeId: { type: String, required: true },
     registeredAt: { type: Date, default: Date.now },
     paymentStatus: {
@@ -224,7 +228,8 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     },
     settings: {
       followUp: {
-        allowed: { type: Number, default: 0 },
+        // ✅ FIX: Number -> Boolean (matches Joi validator + interface intent)
+        allowed: { type: Boolean, default: false },
         periodDays: { type: Number, default: 0, min: 0, max: 30 },
       },
       bufferTimeMinutes: { type: Number, default: 0, min: 0, max: 60 },
@@ -273,7 +278,6 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
   },
   {
     timestamps: true,
-    // ✅ Replace with
     toJSON: {
       virtuals: true,
       transform: function (_doc, ret) {
@@ -288,7 +292,6 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
 );
 
 // Indexes
-// ADD
 GroupSessionSchema.index({ 'participants.menteeId': 1 });
 GroupSessionSchema.index({ scheduledAt: 1, status: 1 });
 GroupSessionSchema.index({ mentorId: 1, status: 1 });

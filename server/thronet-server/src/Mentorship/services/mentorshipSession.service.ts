@@ -8,28 +8,8 @@ import { computeEndTime, toMinutes, toTimeString } from '@/Mentorship/utils/slot
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
 import { TrustScoreEvents } from '../events/trustScore.events';
-// ✅ NEW: in-app notification wiring
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { emitToUser } from '@/socket';
-/**
- * ============================================================
- * TEMP FIX SUMMARY
- * ------------------------------------------------------------
- * Purpose:
- * Minimal compatibility fixes for the mentorship booking flow.
- *
- * Changes:
- * - Fixed booking lifecycle compatibility.
- * - Fixed mentee session retrieval using bookings[].
- * - Preserved existing API contracts.
- * - No database/schema changes.
- *
- * Notes:
- * These are temporary compatibility fixes only.
- * A future architecture refactor should separate reusable
- * service templates from actual booked session instances.
- * ============================================================
- */
 import { User } from '@/shared/models/index.models';
 import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus';
 import sessionRepository from '../repositories/session.repository';
@@ -84,9 +64,6 @@ class MentorshipSessionService {
     });
   }
 
-  /**
-   * Create a new session
-   */
   async createSession(input: CreateSessionInput, authToken?: string): Promise<any> {
     try {
       logger.info(`Creating session: ${input.sessionType}`);
@@ -97,10 +74,6 @@ class MentorshipSessionService {
       const user = await User.findOne({ userId: input.menteeId, 'flags.isDeleted': false });
       if (!user) throw new NotFoundError('MENTEE_NOT_FOUND');
 
-      // ✅ FIX: Prevent duplicate booking — same mentor + same mentee + exact
-      // scheduled time. Redis lock in bookingService only guards concurrent
-      // double-clicks within its 60s window; this DB-level check guarantees
-      // no duplicate session gets created even on delayed/retried requests.
       const existingSession = await SessionMentor.findOne({
         mentorId: input.mentorId,
         menteeId: input.menteeId,
@@ -156,9 +129,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Create a mentor-side session template (mentor posts an open slot)
-   */
   async createMentorSession(mentorUserId: string, input: any, file?: any): Promise<any> {
     try {
       logger.info(`Creating mentor session template by: ${mentorUserId}`);
@@ -203,9 +173,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get all sessions for a mentor (no filter)
-   */
   async getMentorAssignedSessions(mentorId: string): Promise<any[]> {
     try {
       logger.info(`Fetching assigned sessions for mentor: ${mentorId}`);
@@ -294,7 +261,9 @@ class MentorshipSessionService {
    */
   async bookSession(input: any, authToken?: string): Promise<any> {
     try {
-      console.log('>>> [SERVICE] bookSession started with input:', JSON.stringify(input, null, 2));
+      // ✅ FIX: removed debug console.log that dumped the full `input`
+      // object (including payment/pricing details) to server logs in
+      // production. Use logger.info with a trimmed line instead.
       logger.info(`Booking session: ${input.sessionId} by mentee: ${input.menteeId}`);
 
       let query: any = { sessionId: input.sessionId };
@@ -321,14 +290,6 @@ class MentorshipSessionService {
         throw new BadRequestError('Session does not belong to this mentor');
       }
 
-      // ✅ REAL FIX for double booking: atomic slot lock.
-      // Old code did findOne() → check isBooked in JS → save() later — two
-      // near-simultaneous requests could both pass the check before either
-      // save() landed. findOneAndUpdate() is a single atomic DB op: if two
-      // requests race, Mongo serializes them and only the FIRST one's filter
-      // (isBooked: false) matches — the second gets `null` back and fails cleanly.
-          // ✅ NEW: mentee sirf START time chunta hai. END time hum service ke
-      // duration (template ka session.duration) se khud nikalte hain.
       const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
       const [rawStart, rawEnd] = String(input.slotTime).split(' - ').map((t: string) => t.trim());
       if (!rawStart || !timeRegex.test(rawStart)) {
@@ -342,7 +303,6 @@ class MentorshipSessionService {
         throw new BadRequestError('Invalid slot time');
       }
 
-      // ✅ NEW: atomic range booking (bada stored slot ho to todta hai)
       const bookedRange = await availabilityService.bookRange(
         input.availabilityId,
         input.mentorId,
@@ -354,12 +314,6 @@ class MentorshipSessionService {
         throw new BadRequestError('This time slot is no longer available. Please pick another slot.');
       }
 
-      // ✅ REAL FIX for double booking: atomic duplicate-booking guard.
-      // Replaces the old "check-then-push" pattern. The $not/$elemMatch in
-      // the filter means: only push if NO active (non-cancelled) booking for
-      // this mentee already exists on this session. Mongo evaluates the
-      // filter and the write together — no window for two requests to both
-      // "see" zero bookings and both push.
       const updatedSession = await SessionMentor.findOneAndUpdate(
         {
           sessionId: session.sessionId,
@@ -401,21 +355,14 @@ class MentorshipSessionService {
       );
 
       if (!updatedSession) {
-        // Booking didn't happen (duplicate/cancelled/not-found) — release the
-        // slot lock we took above so it doesn't stay stuck as booked.
         await availabilityService.releaseRange(input.availabilityId, slotStart, slotEnd);
         throw new BadRequestError('You have already booked this session for this date and time.');
       }
 
       session = updatedSession;
 
-      
-
       logger.info(`✅ Booking added: ${session.sessionId} for mentee: ${input.menteeId}`);
 
-           // ✅ FIX: was NotificationType.BOOKING_CONFIRMED — wrong, that type is
-      // meant for the mentee-facing "your booking is confirmed" message.
-      // Mentor here needs the distinct "new request" type.
       try {
         const [mentorDoc, menteeDoc] = await Promise.all([
           Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }),
@@ -439,42 +386,34 @@ class MentorshipSessionService {
             },
           }).catch((e) => logger.error('Notification failed (bookSession → mentor):', e));
         }
-        
 
+        NotificationService.sendNotification({
+          userId: input.menteeId,
+          type: NotificationType.BOOKING_CONFIRMED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Booking Request Sent',
+            message: `Your booking request for "${session.title}" has been sent to the mentor.`,
+          },
+        }).catch((e) => logger.error('Notification failed (bookSession → mentee):', e));
 
-               // ✅ NEW: confirm to the mentee that their booking request was sent
-               NotificationService.sendNotification({
-                userId: input.menteeId,
-                type: NotificationType.BOOKING_CONFIRMED,
-                channels: [NotificationChannel.IN_APP],
-                data: {
-                  title: 'Booking Request Sent',
-                  message: `Your booking request for "${session.title}" has been sent to the mentor.`,
-                },
-              }).catch((e) => logger.error('Notification failed (bookSession → mentee):', e));
-      
-              // ✅ NEW: payment-success notification to the mentee.
-              // Skip for FREE bookings — nothing was actually paid.
-              if (input.paymentMethod !== PaymentMethod.FREE) {
-                NotificationService.sendNotification({
-                  userId: input.menteeId,
-                  type: NotificationType.PAYMENT_SUCCESS,
-                  channels: [NotificationChannel.IN_APP],
-                  data: {
-                    title: 'Payment Successful',
-                    message: `Your payment of ₹${input.pricing.totalAmount} for "${session.title}" was successful.`,
-                    amount: input.pricing.totalAmount,
-                    transactionId: session.sessionId,
-                  },
-                }).catch((e) => logger.error('Notification failed (bookSession → payment):', e));
-              }
-            } catch (notifErr: any) {
-              logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
-            }
+        if (input.paymentMethod !== PaymentMethod.FREE) {
+          NotificationService.sendNotification({
+            userId: input.menteeId,
+            type: NotificationType.PAYMENT_SUCCESS,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Payment Successful',
+              message: `Your payment of ₹${input.pricing.totalAmount} for "${session.title}" was successful.`,
+              amount: input.pricing.totalAmount,
+              transactionId: session.sessionId,
+            },
+          }).catch((e) => logger.error('Notification failed (bookSession → payment):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
+      }
 
-            
-          // ✅ FIX: session.bookings is optional in the type — use safe access
-      // instead of direct indexing (pre-existing TS18048 build error).
       const bookings = session.bookings ?? [];
       const myBooking = bookings[bookings.length - 1];
       return {
@@ -487,15 +426,12 @@ class MentorshipSessionService {
         totalBookings: bookings.length,
       };
     } catch (error: any) {
-      console.log('>>> [SERVICE] ERROR in bookSession:', error);
+      // ✅ FIX: removed debug console.log dump of the raw error object
       logger.error(`Failed to book session: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * Get session progress summary for a user
-   */
   async getSessionProgress(sessionId: string, userId: string): Promise<any> {
     try {
       const sessions = (await SessionMentor.find({
@@ -522,9 +458,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get session by sessionId.
-   */
   async getSessionById(
     sessionId: string,
     userId?: string,
@@ -553,9 +486,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get all sessions for a user with pagination and filters.
-   */
   async getAllSessions(
     userId: string,
     role: 'mentor' | 'mentee',
@@ -594,9 +524,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get ALL sessions (admin use) — no user filter
-   */
   async getAllSessionsFromDB(page: number = 1, limit: number = 10): Promise<any> {
     try {
       logger.info('Fetching all sessions from database');
@@ -610,9 +537,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get upcoming sessions for a user
-   */
   async getUpcomingSessions(
     userId: string,
     role: 'mentor' | 'mentee',
@@ -641,9 +565,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get past sessions for a user
-   */
   async getPastSessions(
     userId: string,
     role: 'mentor' | 'mentee',
@@ -672,56 +593,48 @@ class MentorshipSessionService {
     }
   }
 
-    /**
-   * Update session
-   */
-    async updateSession(
-      sessionId: string,
-      userId: string,
-      updates: Partial<any>,
-      authToken?: string,
-      file?: any
-    ): Promise<any> {
-      try {
-        await this.getSessionById(sessionId, userId, authToken);
+  async updateSession(
+    sessionId: string,
+    userId: string,
+    updates: Partial<any>,
+    authToken?: string,
+    file?: any
+  ): Promise<any> {
+    try {
+      await this.getSessionById(sessionId, userId, authToken);
 
-        if (file) {
-          updates.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, userId);
-        }
-
-        const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage', 'scheduledAt', 'duration', 'pricing', 'followUp', 'bufferTimeMinutes'];
-        const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
-        
-        if (!isValidUpdate) {
-          throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage, scheduledAt, duration, pricing, followUp, bufferTimeMinutes are allowed.');
-        }
-        
-        // scheduledAt string ho to Date me convert karo, warna Mongo save nahi karega sahi se
-        if (updates.scheduledAt) {
-          updates.scheduledAt = new Date(updates.scheduledAt);
-        }
-        
-
-        const updatedSession = await SessionMentor.findOneAndUpdate(
-          { sessionId },
-          { $set: updates },
-          { new: true, runValidators: false }
-        );
-
-        if (!updatedSession) {
-          throw new NotFoundError('Session not found after update');
-        }
-
-        return updatedSession;
-      } catch (error: any) {
-        logger.error(`Failed to update session: ${error.message}`);
-        throw error;
+      if (file) {
+        updates.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, userId);
       }
-    }
 
-  /**
-   * Delete a session (mentor only).
-   */
+      const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage', 'scheduledAt', 'duration', 'pricing', 'followUp', 'bufferTimeMinutes'];
+      const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
+
+      if (!isValidUpdate) {
+        throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage, scheduledAt, duration, pricing, followUp, bufferTimeMinutes are allowed.');
+      }
+
+      if (updates.scheduledAt) {
+        updates.scheduledAt = new Date(updates.scheduledAt);
+      }
+
+      const updatedSession = await SessionMentor.findOneAndUpdate(
+        { sessionId },
+        { $set: updates },
+        { new: true, runValidators: false }
+      );
+
+      if (!updatedSession) {
+        throw new NotFoundError('Session not found after update');
+      }
+
+      return updatedSession;
+    } catch (error: any) {
+      logger.error(`Failed to update session: ${error.message}`);
+      throw error;
+    }
+  }
+
   async deleteSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
     try {
       const session = await this.getSessionById(sessionId, userId, authToken);
@@ -746,9 +659,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Confirm a booking on a session (mentor only)
-   */
   async confirmSession(
     sessionId: string,
     userId: string,
@@ -788,7 +698,6 @@ class MentorshipSessionService {
 
       logger.info(`Session confirmed: ${sessionId}, bookedBy/bookingId: ${bookingId}`);
 
-      // ✅ NEW: notify the mentee that the mentor confirmed their booking
       const menteeIdToNotify = booking.menteeId || booking.bookedBy;
       if (menteeIdToNotify) {
         NotificationService.sendNotification({
@@ -809,9 +718,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Start session (mentor only).
-   */
   async startSession(
     sessionId: string,
     userId: string,
@@ -828,10 +734,6 @@ class MentorshipSessionService {
         throw new ForbiddenError('Only the mentor of this session can start it');
       }
 
-      // ── Resolve the SPECIFIC booking being started ──────────────────
-      // A session template can have multiple bookings; starting one must
-      // never flip the others. bookingId is now required going forward,
-      // but we fall back to "the only confirmed booking" for old callers.
       let targetBooking: any = null;
       if (bookingId) {
         targetBooking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
@@ -850,9 +752,6 @@ class MentorshipSessionService {
         throw new BadRequestError('Booking must be confirmed before starting');
       }
 
-      // ── REAL TIME-WINDOW FIX ─────────────────────────────────────────
-      // Yahi check hai jo abhi missing tha: booking ke apne scheduledAt ke
-      // against, na ki template ke scheduledAt ke against.
       const bookingScheduledAt = targetBooking.scheduledAt || session.scheduledAt;
       if (!isStartAllowed(bookingScheduledAt)) {
         const isTooEarly = Date.now() < new Date(bookingScheduledAt).getTime();
@@ -863,20 +762,18 @@ class MentorshipSessionService {
         throw err;
       }
 
-            // Update ONLY the target booking, not the whole session blindly
-            const startedAtNow = new Date();
-            await SessionMentor.updateOne(
-              { sessionId, 'bookings._id': targetBooking._id },
-              {
-                $set: {
-                  'bookings.$.status': BookingStatus.IN_PROGRESS,
-                  'bookings.$.startedAt': startedAtNow,
-                  status: BookingStatus.IN_PROGRESS,
-                  startedAt: startedAtNow,
-                },
-              }
-            );
-
+      const startedAtNow = new Date();
+      await SessionMentor.updateOne(
+        { sessionId, 'bookings._id': targetBooking._id },
+        {
+          $set: {
+            'bookings.$.status': BookingStatus.IN_PROGRESS,
+            'bookings.$.startedAt': startedAtNow,
+            status: BookingStatus.IN_PROGRESS,
+            startedAt: startedAtNow,
+          },
+        }
+      );
 
       const updatedSession = await SessionMentor.findOne({ sessionId });
       logger.info(`Session started: ${sessionId}, booking: ${targetBooking._id}`);
@@ -893,27 +790,16 @@ class MentorshipSessionService {
           },
         }).catch((e) => logger.error('Notification failed (startSession):', e));
 
-        // Dedicated real-time event — UI state change hai, notification-badge
-        // se alag. Student ka dashboard bina refresh ke "Upcoming" se
-        // "In Progress" flip ho jayega, aur Join button turant enable hoga.
         try {
           const payload = {
             sessionId: session.sessionId,
             bookingId: targetBooking._id?.toString(),
-            // roomId — same value as bookingId, reused as the WebRTC room
-            // name. useLiveRoom.ts on the client reads this off the socket
-            // payload (mentee side) or the URL query param (mentor side).
             roomId: targetBooking._id?.toString(),
             title: session.title,
             startedAt: startedAtNow,
             scheduledAt: targetBooking.scheduledAt || session.scheduledAt,
             meetingUrl: session.meeting?.meetingUrl || null,
           };
-          // ✅ FIX: frontend socket.events.ts constant is
-          // 'mentorship:session:started' but backend was only emitting
-          // 'session:started' — two different event names, so any listener
-          // using the constant never fired. Emitting both until frontend
-          // listener is confirmed/unified onto one name.
           emitToUser(menteeIdToNotify, 'session:started', payload);
           emitToUser(menteeIdToNotify, 'mentorship:session:started', payload);
         } catch (emitErr: any) {
@@ -931,140 +817,123 @@ class MentorshipSessionService {
     }
   }
 
+  async completeSession(
+    sessionId: string,
+    userId: string,
+    completionData: {
+      actualDuration?: number;
+      wasSuccessful?: boolean;
+      followUpRequired?: boolean;
+      followUpNotes?: string;
+    },
+    authToken?: string,
+    bookingId?: string
+  ): Promise<any> {
+    try {
+      const session = await this.getSessionById(sessionId, userId, authToken);
 
-
-
-    /**
-   * Complete session (mentor only). Per-booking — only the targeted
-   * booking is marked completed. The parent session flips to COMPLETED
-   * only once every booking on it is in a final state (completed/cancelled),
-   * so other students' in-progress/confirmed bookings are never touched.
-   */
-    async completeSession(
-      sessionId: string,
-      userId: string,
-      completionData: {
-        actualDuration?: number;
-        wasSuccessful?: boolean;
-        followUpRequired?: boolean;
-        followUpNotes?: string;
-      },
-      authToken?: string,
-      bookingId?: string
-    ): Promise<any> {
-      try {
-        const session = await this.getSessionById(sessionId, userId, authToken);
-  
-        const mentor = await Mentor.findOne({ userId, isDeleted: false });
-        if (!mentor || session.mentorId !== mentor.mentorId) {
-          throw new ForbiddenError('Only the mentor of this session can complete it');
-        }
-  
-        // ── Resolve the SPECIFIC booking being completed ─────────────────
-        let targetBooking: any = null;
-        if (bookingId) {
-          targetBooking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
-          if (!targetBooking) throw new NotFoundError('Booking not found on this session');
-        } else {
-          const inProgress = (session.bookings || []).filter(
-            (b: any) => b.status === BookingStatus.IN_PROGRESS
-          );
-          if (inProgress.length > 1) {
-            throw new BadRequestError('Multiple in-progress bookings found — bookingId is required');
-          }
-          targetBooking = inProgress[0] || null;
-        }
-  
-        if (!targetBooking || targetBooking.status !== BookingStatus.IN_PROGRESS) {
-          throw new BadRequestError('Booking must be in progress before it can be completed');
-        }
-  
-        const now = new Date();
-        const actualDuration =
-          completionData.actualDuration ??
-          (targetBooking.startedAt
-            ? Math.round((now.getTime() - new Date(targetBooking.startedAt).getTime()) / 60000)
-            : session.duration);
-  
-        // Update ONLY the target booking
-        await SessionMentor.updateOne(
-          { sessionId, 'bookings._id': targetBooking._id },
-          {
-            $set: {
-              'bookings.$.status': BookingStatus.COMPLETED,
-              'bookings.$.completion': {
-                completedAt: now,
-                actualDuration,
-                wasSuccessful: completionData.wasSuccessful ?? true,
-                followUpRequired: completionData.followUpRequired ?? false,
-                followUpNotes: completionData.followUpNotes,
-              },
-            },
-          }
-        );
-  
-        let updatedSession = await SessionMentor.findOne({ sessionId });
-  
-        // Parent session only flips to COMPLETED once every booking is final
-        const allBookingsFinal = (updatedSession?.bookings || []).every((b: any) =>
-          [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW].includes(b.status)
-        );
-        if (allBookingsFinal && updatedSession && updatedSession.status !== BookingStatus.COMPLETED) {
-          updatedSession.status = BookingStatus.COMPLETED;
-          updatedSession.endedAt = now;
-          await updatedSession.save();
-        }
-  
-        TrustScoreEvents.emit('SessionCompleted', {
-          mentorId: session.mentorId,
-          sessionId,
-          bookingId: targetBooking._id,
-          timestamp: now,
-        });
-  
-        logger.info(`Booking completed: ${sessionId} / ${targetBooking._id}`);
-
-        // ✅ NEW: realtime "session ended" — mentor + mentee dono ko
-        try {
-          const endedPayload = {
-            sessionId: session.sessionId,
-            bookingId: targetBooking._id?.toString(),
-            roomId: targetBooking._id?.toString(),
-            endedAt: now.toISOString(),
-            endedBy: userId,
-            status: BookingStatus.COMPLETED,
-            actualDuration,
-          };
-          const endedMenteeId = targetBooking.menteeId || targetBooking.bookedBy;
-          emitToUser(userId, 'session:ended', endedPayload);
-          if (endedMenteeId) emitToUser(endedMenteeId, 'session:ended', endedPayload);
-        } catch (emitErr: any) {
-          logger.error('Socket emit failed (session:ended):', emitErr);
-        }
-        
-        
-        
-        const menteeIdToNotify = targetBooking.menteeId || targetBooking.bookedBy;
-        if (menteeIdToNotify) {
-          NotificationService.sendNotification({
-            userId: menteeIdToNotify,
-            type: NotificationType.SESSION_COMPLETED,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Session Completed',
-              message: `Your session "${session.title}" is complete. Please leave a review!`,
-            },
-          }).catch((e) => logger.error('Notification failed (completeSession):', e));
-        }
-  
-        return updatedSession;
-      } catch (error: any) {
-        logger.error(`Failed to complete session: ${error.message}`);
-        throw error;
+      const mentor = await Mentor.findOne({ userId, isDeleted: false });
+      if (!mentor || session.mentorId !== mentor.mentorId) {
+        throw new ForbiddenError('Only the mentor of this session can complete it');
       }
+
+      let targetBooking: any = null;
+      if (bookingId) {
+        targetBooking = session.bookings?.find((b: any) => b._id?.toString() === bookingId);
+        if (!targetBooking) throw new NotFoundError('Booking not found on this session');
+      } else {
+        const inProgress = (session.bookings || []).filter(
+          (b: any) => b.status === BookingStatus.IN_PROGRESS
+        );
+        if (inProgress.length > 1) {
+          throw new BadRequestError('Multiple in-progress bookings found — bookingId is required');
+        }
+        targetBooking = inProgress[0] || null;
+      }
+
+      if (!targetBooking || targetBooking.status !== BookingStatus.IN_PROGRESS) {
+        throw new BadRequestError('Booking must be in progress before it can be completed');
+      }
+
+      const now = new Date();
+      const actualDuration =
+        completionData.actualDuration ??
+        (targetBooking.startedAt
+          ? Math.round((now.getTime() - new Date(targetBooking.startedAt).getTime()) / 60000)
+          : session.duration);
+
+      await SessionMentor.updateOne(
+        { sessionId, 'bookings._id': targetBooking._id },
+        {
+          $set: {
+            'bookings.$.status': BookingStatus.COMPLETED,
+            'bookings.$.completion': {
+              completedAt: now,
+              actualDuration,
+              wasSuccessful: completionData.wasSuccessful ?? true,
+              followUpRequired: completionData.followUpRequired ?? false,
+              followUpNotes: completionData.followUpNotes,
+            },
+          },
+        }
+      );
+
+      let updatedSession = await SessionMentor.findOne({ sessionId });
+
+      const allBookingsFinal = (updatedSession?.bookings || []).every((b: any) =>
+        [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW].includes(b.status)
+      );
+      if (allBookingsFinal && updatedSession && updatedSession.status !== BookingStatus.COMPLETED) {
+        updatedSession.status = BookingStatus.COMPLETED;
+        updatedSession.endedAt = now;
+        await updatedSession.save();
+      }
+
+      TrustScoreEvents.emit('SessionCompleted', {
+        mentorId: session.mentorId,
+        sessionId,
+        bookingId: targetBooking._id,
+        timestamp: now,
+      });
+
+      logger.info(`Booking completed: ${sessionId} / ${targetBooking._id}`);
+
+      try {
+        const endedPayload = {
+          sessionId: session.sessionId,
+          bookingId: targetBooking._id?.toString(),
+          roomId: targetBooking._id?.toString(),
+          endedAt: now.toISOString(),
+          endedBy: userId,
+          status: BookingStatus.COMPLETED,
+          actualDuration,
+        };
+        const endedMenteeId = targetBooking.menteeId || targetBooking.bookedBy;
+        emitToUser(userId, 'session:ended', endedPayload);
+        if (endedMenteeId) emitToUser(endedMenteeId, 'session:ended', endedPayload);
+      } catch (emitErr: any) {
+        logger.error('Socket emit failed (session:ended):', emitErr);
+      }
+
+      const menteeIdToNotify = targetBooking.menteeId || targetBooking.bookedBy;
+      if (menteeIdToNotify) {
+        NotificationService.sendNotification({
+          userId: menteeIdToNotify,
+          type: NotificationType.SESSION_COMPLETED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Session Completed',
+            message: `Your session "${session.title}" is complete. Please leave a review!`,
+          },
+        }).catch((e) => logger.error('Notification failed (completeSession):', e));
+      }
+
+      return updatedSession;
+    } catch (error: any) {
+      logger.error(`Failed to complete session: ${error.message}`);
+      throw error;
     }
-
-
+  }
 
   /**
    * Cancel session
@@ -1088,7 +957,13 @@ class MentorshipSessionService {
         throw new BadRequestError('Booking not found');
       }
 
-      const hoursDiff    = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
+      // ✅ FIX: was `session.scheduledAt` (the template's original time) —
+      // inconsistent with startSession/rescheduleSession, which both key
+      // off the SPECIFIC booking's own scheduledAt. If a booking had been
+      // rescheduled, refund-eligibility here was being computed against the
+      // stale template date instead of the mentee's actual new slot time.
+      const bookingScheduledAt = booking.scheduledAt || session.scheduledAt;
+      const hoursDiff = (bookingScheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
       const refundEligible = hoursDiff >= 24;
 
       const updateData: any = {
@@ -1120,7 +995,6 @@ class MentorshipSessionService {
 
       logger.info(`Session cancelled: ${sessionId}`);
 
-      // ✅ NEW: notify whichever side did NOT cancel
       try {
         const cancellingMenteeId = booking.menteeId || booking.bookedBy;
         const isCancelledByMentee = userId === cancellingMenteeId;
@@ -1155,9 +1029,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Reschedule session
-   */
   async rescheduleSession(
     sessionId: string,
     userId: string,
@@ -1210,7 +1081,6 @@ class MentorshipSessionService {
       );
       logger.info(`Session rescheduled: ${sessionId}`);
 
-      // ✅ NEW: notify whichever side did NOT initiate the reschedule
       try {
         const menteeId = booking.menteeId || booking.bookedBy;
         const isRescheduledByMentee = userId === menteeId;
@@ -1247,9 +1117,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Add review to completed session
-   */
   async addReview(
     sessionId: string,
     userId: string,
@@ -1270,19 +1137,15 @@ class MentorshipSessionService {
       await session.addReview(rating, review, reviewerType);
       logger.info(`Review added to session: ${sessionId}`);
 
-      // ✅ NEW: notify the reviewed party
       try {
         let reviewedUserId: string | null = null;
 
         if (reviewerType === 'mentor') {
-          // mentor reviewed → notify mentee
           const confirmedBooking = session.bookings?.find((b: any) =>
             b.status === BookingStatus.COMPLETED || b.status === BookingStatus.CONFIRMED
           );
           reviewedUserId = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy || null;
         } else {
-          // mentee reviewed → notify mentor (fetch mentor's userId via session.mentorId,
-          // since `mentor` above is null here — it was looked up by the reviewer's own userId)
           const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
           reviewedUserId = mentorDoc?.userId || null;
         }
@@ -1308,11 +1171,7 @@ class MentorshipSessionService {
       throw error;
     }
   }
-  /**
-   * ✅ NEW: Get receipt data for a completed booking — used by the
-   * "Download Receipt" button on the mentor's Bookings page.
-   * Returns plain data only (no PDF lib installed); frontend renders it.
-   */
+
   async getSessionReceipt(
     sessionId: string,
     userId: string,
@@ -1374,9 +1233,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Get session statistics for a user
-   */
   async getSessionStats(
     userId: string,
     role: 'mentor' | 'mentee',
@@ -1421,9 +1277,6 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Map session type to pricing field key
-   */
   private mapSessionTypeToPrice(sessionType: SessionType): string {
     const mapping: Record<SessionType, string> = {
       [SessionType.QUICK_CALL]:      'quickCall',

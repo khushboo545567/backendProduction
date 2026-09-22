@@ -253,4 +253,15 @@ router.post(
   groupController.addFeedback
 );
 
+/**
+ * @route   GET /api/v1/group-sessions/mentor/participants
+ * @desc    Group-session participants for the logged-in mentor — powers Booking dashboard
+ * @access  Private (Mentor)
+ */
+router.get(
+  '/mentor/participants',
+  AuthMiddleware.authenticate as any,
+  groupController.getMentorGroupParticipants
+);
+
 export default router;

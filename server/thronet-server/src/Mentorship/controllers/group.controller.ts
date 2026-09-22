@@ -336,6 +336,27 @@ class GroupController {
         next(error);
       }
     }
+      /**
+   * @route   GET /api/v1/mentorship/group-sessions/mentor/participants
+   * @desc    All group-session participants across the mentor's sessions,
+   *          shaped like 1:1 booking rows — powers the Booking dashboard.
+   * @access  Private (Mentor)
+   */
+  async getMentorGroupParticipants(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const rows = await groupService.getGroupSessionParticipantsForMentor(userId);
+      ResponseHandler.success(res, 'Group session participants retrieved successfully', rows);
+    } catch (error: any) {
+      logger.error('Failed to fetch mentor group session participants:', error);
+      next(error);
+    }
+  }
 }
 
 export default new GroupController();

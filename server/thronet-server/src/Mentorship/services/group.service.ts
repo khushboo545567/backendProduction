@@ -1,3 +1,4 @@
+// src/Mentorship/services/group.service.ts
 import { logger } from "@/shared/logger.util";
 import { NotFoundError, BadRequestError, ForbiddenError } from "@/shared/errors/app.error";
 import { GroupSession } from "../models";
@@ -7,8 +8,6 @@ import mentorRepository from "../repositories/mentor.repository";
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 import mongoose from 'mongoose';
 import { TrustScoreEvents } from '../events/trustScore.events';
-// ✅ NEW: in-app notification wiring — same pattern booking.service.ts already
-// uses for 1:1 bookings (sendNotification wrapped in .catch(), non-blocking).
 import { User } from '@/shared/models/index.models';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 
@@ -60,8 +59,40 @@ class GroupService {
   }
 
   /**
-   * Create a new group session
+   * Fire-and-forget notifier for every registered participant of a session.
+   * Used on start/cancel/complete so mentees are not left in the dark —
+   * previously only the mentor ever got notified (on join). Never throws.
    */
+  private async notifyParticipants(
+    session: any,
+    type: NotificationType,
+    title: string,
+    message: string
+  ): Promise<void> {
+    try {
+      const menteeIds: string[] = (session.participants || [])
+        .filter((p: any) => p.attendanceStatus !== 'cancelled')
+        .map((p: any) => p.menteeId);
+
+      if (menteeIds.length === 0) return;
+
+      await Promise.all(
+        menteeIds.map((menteeId) =>
+          NotificationService.sendNotification({
+            userId: menteeId,
+            type,
+            channels: [NotificationChannel.IN_APP],
+            data: { title, message },
+          }).catch((err: any) => {
+            logger.error(`Notification failed for participant ${menteeId}:`, err);
+          })
+        )
+      );
+    } catch (err: any) {
+      logger.error('notifyParticipants failed:', err);
+    }
+  }
+
   async createGroupSession(
     input: CreateGroupSessionInput,
     file?: any,
@@ -70,18 +101,14 @@ class GroupService {
     try {
       logger.info(`Creating group session for mentor ${input.mentorId}`);
 
-      // ✅ userId se pehle mentor dhundo
-      const mentor = await mentorRepository.findByUserId(input.mentorId); // input.mentorId actually userId hai
+      const mentor = await mentorRepository.findByUserId(input.mentorId);
       if (!mentor) {
         throw new NotFoundError('Mentor profile not found for this user');
       }
 
-      // Validate scheduled time
       const scheduledDate = new Date(input.scheduledAt);
       if (scheduledDate <= new Date()) {
-        throw new BadRequestError(
-          'Scheduled time must be in the future'
-        );
+        throw new BadRequestError('Scheduled time must be in the future');
       }
 
       let thumbnailUrl: string | undefined = undefined;
@@ -89,7 +116,6 @@ class GroupService {
         thumbnailUrl = await this.uploadImageToCloudinary(file.buffer, input.mentorId);
       }
 
-      // Create group session
       const session = new GroupSession({
         sessionId: generateSecureId(),
         mentorId: mentor.mentorId,
@@ -140,19 +166,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Get group session by ID
-   *
-   * ✅ FIX: previously used `groupRepository.findBySessionId()`, which returns
-   * a lean/plain object. Every action method below (join/leave/start/complete/
-   * cancel/addFeedback) calls Mongoose schema instance methods on the result
-   * of this function (session.addParticipant, session.startSession, etc.).
-   * Those methods don't exist on a plain lean object — calling them threw an
-   * uncaught TypeError, which is exactly what surfaced to the client as the
-   * generic "Internal server error". Fetching a real Mongoose document here
-   * (same pattern already used in updateGroupSession/deleteGroupSession)
-   * fixes all of those call sites at once.
-   */
   async getGroupSessionById(sessionId: string, _authToken?: string): Promise<any> {
     try {
       const isObjectId = mongoose.isValidObjectId(sessionId);
@@ -170,9 +183,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Get all group sessions with filters
-   */
   async getAllGroupSessions(
     page: number = 1,
     limit: number = 10,
@@ -222,9 +232,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Get upcoming group sessions
-   */
   async getUpcomingGroupSessions(
     mentorId?: string,
     limit: number = 10,
@@ -247,16 +254,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Join a group session
-   *
-   * ✅ FIX: removed `User.findByUserId(menteeId)`. This route is already
-   * behind `AuthMiddleware.authenticate`, so `menteeId` is a verified user
-   * from the JWT — re-checking existence via a method (`findByUserId`) that
-   * may not even exist as a static on the `@/auth/models` User model was a
-   * second, redundant point of failure throwing the same kind of uncaught
-   * TypeError -> generic 500.
-   */
   async joinGroupSession(
     sessionId: string,
     menteeId: string,
@@ -266,36 +263,22 @@ class GroupService {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
 
-      // Check if session is open
       if (session.status !== 'open') {
-        throw new BadRequestError(
-          'Session is not open for registration'
-        );
+        throw new BadRequestError('Session is not open for registration');
       }
 
-      // Check if already registered
       const isRegistered = session.participants.some(
         (p: any) => p.menteeId === menteeId
       );
 
       if (isRegistered) {
-        throw new BadRequestError(
-          'Already registered for this session'
-        );
+        throw new BadRequestError('Already registered for this session');
       }
 
-      // Add participant
       await session.addParticipant(menteeId, transactionId);
 
       logger.info(`User ${menteeId} joined group session: ${sessionId}`);
 
-      // ✅ FIX: this was a bare TODO — mentor never found out a mentee had
-      // joined their group session. Same non-blocking pattern as
-      // booking.service.ts's sendBookingNotifications(): resolve the
-      // mentor's userId (session.mentorId is the mentor PROFILE id, not the
-      // userId), look up display names best-effort, and fire an in-app
-      // notification. Wrapped so a notification failure never blocks the
-      // join itself.
       (async () => {
         try {
           const [mentorProfile, mentee] = await Promise.all([
@@ -324,6 +307,22 @@ class GroupService {
         }
       })();
 
+      (async () => {
+        try {
+          await NotificationService.sendNotification({
+            userId: menteeId,
+            type: NotificationType.BOOKING_CONFIRMED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Seat Reserved',
+              message: `You're registered for "${session.title}" on ${new Date(session.scheduledAt).toLocaleString()}.`,
+            },
+          });
+        } catch (notifyErr: any) {
+          logger.error('Notification failed (joinGroupSession → mentee):', notifyErr);
+        }
+      })();
+
       return session;
     } catch (error: any) {
       logger.error(`Failed to join group session:${error}`);
@@ -331,9 +330,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Leave a group session
-   */
   async leaveGroupSession(
     sessionId: string,
     menteeId: string,
@@ -342,59 +338,66 @@ class GroupService {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
 
-      // Check if registered
       const participant = session.participants.find(
         (p: any) => p.menteeId === menteeId
       );
 
       if (!participant) {
-        throw new BadRequestError(
-          'Not registered for this session'
-        );
+        throw new BadRequestError('Not registered for this session');
       }
 
-      // Check cancellation policy (24 hours before)
       const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
 
       if (hoursDiff < 24) {
-        throw new BadRequestError(
-          'Cannot leave within 24 hours of session'
-        );
+        throw new BadRequestError('Cannot leave within 24 hours of session');
       }
 
-      // Remove participant
       await session.removeParticipant(menteeId);
 
       logger.info(`User ${menteeId} left group session: ${sessionId}`);
+
+      (async () => {
+        try {
+          const mentorProfile = await mentorRepository.findByMentorId(session.mentorId);
+          if (!mentorProfile?.userId) return;
+
+          await NotificationService.sendNotification({
+            userId: mentorProfile.userId,
+            // ✅ FIXED: was NotificationType.BOOKING_CANCELLED (doesn't exist)
+            type: NotificationType.SESSION_CANCELLED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Group Session Seat Freed',
+              message: `A mentee left "${session.title}". ${session.currentParticipants}/${session.maxParticipants} seats filled.`,
+            },
+          });
+        } catch (notifyErr: any) {
+          logger.error('Notification failed (leaveGroupSession → mentor):', notifyErr);
+        }
+      })();
 
       // TODO: Process refund
 
       return session;
     } catch (error: any) {
-      logger.error(`Failed to leave group session:$ {error}`);
+      logger.error(`Failed to leave group session: ${error}`);
       throw error;
     }
   }
 
-  /**
-   * Start group session (mentor only)
-   */
   async startGroupSession(
     sessionId: string,
     mentorId: string,
     authToken?: string
   ): Promise<any> {
     try {
-      const mentor = await mentorRepository.findByUserId(mentorId); // mentorId param actually userId hai
+      const mentor = await mentorRepository.findByUserId(mentorId);
       if (!mentor) throw new ForbiddenError('Mentor profile not found');
 
       const session = await this.getGroupSessionById(sessionId, authToken);
 
       if (session.mentorId !== mentor.mentorId) {
-        throw new ForbiddenError(
-          'Only the mentor can start this session',
-
-        );
+        throw new ForbiddenError('Only the mentor can start this session');
       }
 
       if (session.currentParticipants < session.minParticipants) {
@@ -407,6 +410,13 @@ class GroupService {
 
       logger.info(`Group session started: ${sessionId}`);
 
+      await this.notifyParticipants(
+        session,
+        NotificationType.SESSION_STARTED,
+        'Group Session Started',
+        `"${session.title}" has started. Join now.`
+      );
+
       return session;
     } catch (error: any) {
       logger.error(`Failed to start group session:${error}`);
@@ -414,9 +424,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Complete group session (mentor only)
-   */
   async completeGroupSession(
     sessionId: string,
     mentorId: string,
@@ -427,16 +434,13 @@ class GroupService {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
 
-      const mentor = await mentorRepository.findByUserId(mentorId); // mentorId param actually userId hai
+      const mentor = await mentorRepository.findByUserId(mentorId);
       if (!mentor) throw new ForbiddenError('Mentor profile not found');
 
       if (session.mentorId !== mentor.mentorId) {
-        throw new ForbiddenError(
-          'Only the mentor can complete this session'
-        );
+        throw new ForbiddenError('Only the mentor can complete this session');
       }
 
-      // Mark attendance
       if (attendees && attendees.length > 0) {
         session.participants.forEach((p: any) => {
           p.attendanceStatus = attendees.includes(p.menteeId) ? 'attended' : 'absent';
@@ -453,7 +457,12 @@ class GroupService {
 
       logger.info(`Group session completed: ${sessionId}`);
 
-      // TODO: Send feedback request to attendees
+      await this.notifyParticipants(
+        session,
+        NotificationType.SESSION_COMPLETED,
+        'Session Completed',
+        `"${session.title}" has ended. Please share your feedback.`
+      );
 
       return session;
     } catch (error: any) {
@@ -462,9 +471,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Cancel group session (mentor only)
-   */
   async cancelGroupSession(
     sessionId: string,
     mentorId: string,
@@ -474,13 +480,11 @@ class GroupService {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
 
-      const mentor = await mentorRepository.findByUserId(mentorId); // mentorId param actually userId hai
+      const mentor = await mentorRepository.findByUserId(mentorId);
       if (!mentor) throw new ForbiddenError('Mentor profile not found');
 
       if (session.mentorId !== mentor.mentorId) {
-        throw new ForbiddenError(
-          'Only the mentor can cancel this session'
-        );
+        throw new ForbiddenError('Only the mentor can cancel this session');
       }
 
       await session.cancelSession(reason);
@@ -493,8 +497,15 @@ class GroupService {
 
       logger.info(`Group session cancelled: ${sessionId}`);
 
-      // TODO: Process refunds for all participants
-      // TODO: Send cancellation notifications
+      await this.notifyParticipants(
+        session,
+        // ✅ FIXED: was NotificationType.BOOKING_CANCELLED (doesn't exist)
+        NotificationType.SESSION_CANCELLED,
+        'Group Session Cancelled',
+        `"${session.title}" was cancelled by the mentor. Reason: ${reason}`
+      );
+
+      // TODO: Process refunds for all participants (payment gateway not wired yet)
 
       return session;
     } catch (error: any) {
@@ -503,13 +514,10 @@ class GroupService {
     }
   }
 
-  /**
-   * Update an existing group session
-   */
   async updateGroupSession(
     sessionId: string,
     userId: string,
-    updates: Partial<any>, // Accept fully parsed requests
+    updates: Partial<any>,
     file?: any,
     authToken?: string
   ): Promise<any> {
@@ -565,7 +573,6 @@ class GroupService {
         updatePayload.$set.status = updates.status;
       }
 
-      // Use findOneAndUpdate to force $set on nested schemas strongly
       const updatedSession = await GroupSession.findOneAndUpdate(
         query,
         updatePayload,
@@ -584,11 +591,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Delete a group session (mentor only).
-   * Only allowed when there are no registered participants —
-   * mentor must cancel/remove participants first otherwise.
-   */
   async deleteGroupSession(sessionId: string, userId: string, authToken?: string): Promise<void> {
     try {
       const session = await this.getGroupSessionById(sessionId, authToken);
@@ -613,9 +615,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Add feedback to group session
-   */
   async addFeedback(
     sessionId: string,
     menteeId: string,
@@ -627,20 +626,15 @@ class GroupService {
       const session = await this.getGroupSessionById(sessionId, authToken);
 
       if (session.status !== 'completed') {
-        throw new BadRequestError(
-          'Can only provide feedback for completed sessions'
-        );
+        throw new BadRequestError('Can only provide feedback for completed sessions');
       }
 
-      // Check if user attended
       const participant = session.participants.find(
         (p: any) => p.menteeId === menteeId && p.attendanceStatus === 'attended'
       );
 
       if (!participant) {
-        throw new ForbiddenError(
-          'Only attendees can provide feedback'
-        );
+        throw new ForbiddenError('Only attendees can provide feedback');
       }
 
       await session.addFeedback(menteeId, rating, comment);
@@ -654,9 +648,6 @@ class GroupService {
     }
   }
 
-  /**
-   * Get my group sessions
-   */
   async getMyGroupSessions(
     userId: string,
     role: 'mentor' | 'mentee',
@@ -676,6 +667,56 @@ class GroupService {
       throw error;
     }
   }
+
+  /**
+   * Group-session participants across a mentor's sessions, enriched into
+   * the same row shape BookingsPage.tsx already uses for 1:1 bookings —
+   * this is what's needed to make group joins show up as actionable rows
+   * in the mentor's Booking dashboard (currently they don't show up there
+   * at all, only as a bare count on the Services tab).
+   */
+  async getGroupSessionParticipantsForMentor(userId: string): Promise<any[]> {
+    try {
+      const mentor = await mentorRepository.findByUserId(userId);
+      const mentorIdQuery = mentor ? [mentor.mentorId, userId] : [userId];
+
+      const sessions = await GroupSession.find({ mentorId: { $in: mentorIdQuery } })
+        .sort({ scheduledAt: -1 })
+        .lean();
+
+      const rows: any[] = [];
+
+      for (const session of sessions) {
+        for (const participant of (session as any).participants || []) {
+          rows.push({
+            bookingId: `${session.sessionId}-${participant.menteeId}`,
+            sessionId: session.sessionId,
+            menteeId: participant.menteeId,
+            serviceName: `${session.title} (Group Session)`,
+            scheduledAt: session.scheduledAt,
+            status:
+              session.status === 'cancelled'
+                ? 'cancelled'
+                : participant.attendanceStatus === 'attended'
+                ? 'completed'
+                : session.status === 'in_progress'
+                ? 'in_progress'
+                : 'confirmed',
+            isGroupSession: true,
+            registeredAt: participant.registeredAt,
+            paymentStatus: participant.paymentStatus,
+          });
+        }
+      }
+
+      return rows;
+    } catch (error: any) {
+      logger.error(`Failed to fetch group session participants for mentor: ${error}`);
+      throw error;
+    }
+  }
+
+  
 }
 
 const groupService = new GroupService();
