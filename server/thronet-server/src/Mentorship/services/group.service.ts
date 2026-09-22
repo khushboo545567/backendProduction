@@ -7,6 +7,10 @@ import mentorRepository from "../repositories/mentor.repository";
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 import mongoose from 'mongoose';
 import { TrustScoreEvents } from '../events/trustScore.events';
+// ✅ NEW: in-app notification wiring — same pattern booking.service.ts already
+// uses for 1:1 bookings (sendNotification wrapped in .catch(), non-blocking).
+import { User } from '@/shared/models/index.models';
+import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 
 
 
@@ -285,7 +289,40 @@ class GroupService {
 
       logger.info(`User ${menteeId} joined group session: ${sessionId}`);
 
-      // TODO: Send confirmation notification
+      // ✅ FIX: this was a bare TODO — mentor never found out a mentee had
+      // joined their group session. Same non-blocking pattern as
+      // booking.service.ts's sendBookingNotifications(): resolve the
+      // mentor's userId (session.mentorId is the mentor PROFILE id, not the
+      // userId), look up display names best-effort, and fire an in-app
+      // notification. Wrapped so a notification failure never blocks the
+      // join itself.
+      (async () => {
+        try {
+          const [mentorProfile, mentee] = await Promise.all([
+            mentorRepository.findByMentorId(session.mentorId),
+            User.findOne({ userId: menteeId, 'flags.isDeleted': false }).select('fullName email'),
+          ]);
+
+          if (!mentorProfile?.userId) {
+            logger.warn(`Could not resolve mentor userId for group session notification: ${session.mentorId}`);
+            return;
+          }
+
+          const menteeName = mentee?.fullName || mentee?.email || 'A mentee';
+
+          await NotificationService.sendNotification({
+            userId: mentorProfile.userId,
+            type: NotificationType.BOOKING_CONFIRMED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'New Group Session Signup',
+              message: `${menteeName} joined your group session "${session.title}". ${session.currentParticipants}/${session.maxParticipants} seats filled.`,
+            },
+          });
+        } catch (notifyErr: any) {
+          logger.error('Notification failed (joinGroupSession → mentor):', notifyErr);
+        }
+      })();
 
       return session;
     } catch (error: any) {
