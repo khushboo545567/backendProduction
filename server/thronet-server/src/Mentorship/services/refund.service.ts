@@ -193,10 +193,11 @@ class RefundService {
               await cancellationLog.save();
             }
       
-            // Check if there are other active bookings in this session
-            const hasOtherActiveBookings = session.bookings?.some(
-              (b: any) => b._id?.toString() !== targetBooking?._id?.toString() && b.status !== 'cancelled'
-            );
+                      // Check if there are other active bookings in this session
+                      const targetBookingId = (targetBooking as any)?._id?.toString();
+                      const hasOtherActiveBookings = session.bookings?.some(
+                        (b: any) => b._id?.toString() !== targetBookingId && b.status !== 'cancelled'
+                      );
 
             const updateFields: any = {
               ...paymentUpdate,
@@ -219,7 +220,7 @@ class RefundService {
                 },
                 {
                   runValidators: true,
-                  arrayFilters: [{ 'elem._id': targetBooking._id }],
+                  arrayFilters: [{ 'elem._id': (targetBooking as any)._id }],
                 }
               );
             } else {
