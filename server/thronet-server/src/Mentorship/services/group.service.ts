@@ -62,6 +62,11 @@ class GroupService {
    * Fire-and-forget notifier for every registered participant of a session.
    * Used on start/cancel/complete so mentees are not left in the dark —
    * previously only the mentor ever got notified (on join). Never throws.
+   *
+   * ✅ CHANGED: only notifies participants whose join request has been
+   * ACCEPTED by the mentor. Pending/rejected requesters never joined the
+   * session, so they must never receive "session started" / "session
+   * cancelled" notifications or be allowed into the live room.
    */
   private async notifyParticipants(
     session: any,
@@ -71,7 +76,7 @@ class GroupService {
   ): Promise<void> {
     try {
       const menteeIds: string[] = (session.participants || [])
-        .filter((p: any) => p.attendanceStatus !== 'cancelled')
+        .filter((p: any) => p.attendanceStatus !== 'cancelled' && p.requestStatus === 'accepted')
         .map((p: any) => p.menteeId);
 
       if (menteeIds.length === 0) return;
@@ -254,6 +259,14 @@ class GroupService {
     }
   }
 
+  /**
+   * ✅ CHANGED: this no longer registers the mentee directly into the
+   * session. It creates a PENDING join request (via session.addParticipant,
+   * whose internal behaviour changed in the model) and notifies the mentor
+   * that a new request is waiting — mirroring the same "new request"
+   * notification pattern used by 1:1 bookSession(). The mentee is told the
+   * request was sent, not that they're confirmed.
+   */
   async joinGroupSession(
     sessionId: string,
     menteeId: string,
@@ -267,17 +280,21 @@ class GroupService {
         throw new BadRequestError('Session is not open for registration');
       }
 
-      const isRegistered = session.participants.some(
+      const existing = session.participants.find(
         (p: any) => p.menteeId === menteeId
       );
 
-      if (isRegistered) {
+      if (existing && existing.requestStatus === 'pending') {
+        throw new BadRequestError('Join request already sent and awaiting mentor approval');
+      }
+
+      if (existing && existing.requestStatus === 'accepted') {
         throw new BadRequestError('Already registered for this session');
       }
 
       await session.addParticipant(menteeId, transactionId);
 
-      logger.info(`User ${menteeId} joined group session: ${sessionId}`);
+      logger.info(`User ${menteeId} requested to join group session: ${sessionId}`);
 
       (async () => {
         try {
@@ -292,14 +309,17 @@ class GroupService {
           }
 
           const menteeName = mentee?.fullName || mentee?.email || 'A mentee';
+          const acceptedCount = session.participants.filter(
+            (p: any) => p.requestStatus === 'accepted'
+          ).length;
 
           await NotificationService.sendNotification({
             userId: mentorProfile.userId,
-            type: NotificationType.BOOKING_CONFIRMED,
+            type: NotificationType.NEW_BOOKING_REQUEST,
             channels: [NotificationChannel.IN_APP],
             data: {
-              title: 'New Group Session Signup',
-              message: `${menteeName} joined your group session "${session.title}". ${session.currentParticipants}/${session.maxParticipants} seats filled.`,
+              title: 'New Group Session Join Request',
+              message: `${menteeName} requested to join "${session.title}". ${acceptedCount}/${session.maxParticipants} seats filled. Review and accept/reject in your dashboard.`,
             },
           });
         } catch (notifyErr: any) {
@@ -311,11 +331,11 @@ class GroupService {
         try {
           await NotificationService.sendNotification({
             userId: menteeId,
-            type: NotificationType.BOOKING_CONFIRMED,
+            type: NotificationType.NEW_BOOKING_REQUEST,
             channels: [NotificationChannel.IN_APP],
             data: {
-              title: 'Seat Reserved',
-              message: `You're registered for "${session.title}" on ${new Date(session.scheduledAt).toLocaleString()}.`,
+              title: 'Join Request Sent',
+              message: `Your request to join "${session.title}" has been sent to the mentor. You'll be notified once it's reviewed.`,
             },
           });
         } catch (notifyErr: any) {
@@ -326,6 +346,153 @@ class GroupService {
       return session;
     } catch (error: any) {
       logger.error(`Failed to join group session:${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ NEW: mentor accepts a mentee's pending join request. This is the
+   * only place a mentee actually becomes a confirmed participant.
+   */
+  async acceptJoinRequest(
+    sessionId: string,
+    mentorId: string,
+    menteeId: string,
+    authToken?: string
+  ): Promise<any> {
+    try {
+      const mentor = await mentorRepository.findByUserId(mentorId);
+      if (!mentor) throw new ForbiddenError('Mentor profile not found');
+
+      const session = await this.getGroupSessionById(sessionId, authToken);
+
+      if (session.mentorId !== mentor.mentorId) {
+        throw new ForbiddenError('Only the host mentor can accept join requests for this session');
+      }
+
+      await session.acceptParticipant(menteeId);
+
+      logger.info(`Mentor ${mentorId} accepted join request from ${menteeId} for session ${sessionId}`);
+
+      (async () => {
+        try {
+          await NotificationService.sendNotification({
+            userId: menteeId,
+            type: NotificationType.BOOKING_CONFIRMED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Join Request Accepted',
+              message: `You're confirmed for "${session.title}" on ${new Date(session.scheduledAt).toLocaleString()}. We'll notify you when the mentor starts the session.`,
+            },
+          });
+        } catch (notifyErr: any) {
+          logger.error('Notification failed (acceptJoinRequest → mentee):', notifyErr);
+        }
+      })();
+
+      return session;
+    } catch (error: any) {
+      logger.error(`Failed to accept join request:${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ NEW: mentor rejects a mentee's pending join request.
+   */
+  async rejectJoinRequest(
+    sessionId: string,
+    mentorId: string,
+    menteeId: string,
+    authToken?: string
+  ): Promise<any> {
+    try {
+      const mentor = await mentorRepository.findByUserId(mentorId);
+      if (!mentor) throw new ForbiddenError('Mentor profile not found');
+
+      const session = await this.getGroupSessionById(sessionId, authToken);
+
+      if (session.mentorId !== mentor.mentorId) {
+        throw new ForbiddenError('Only the host mentor can reject join requests for this session');
+      }
+
+      await session.rejectParticipant(menteeId);
+
+      logger.info(`Mentor ${mentorId} rejected join request from ${menteeId} for session ${sessionId}`);
+
+      (async () => {
+        try {
+          await NotificationService.sendNotification({
+            userId: menteeId,
+            type: NotificationType.SESSION_CANCELLED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Join Request Declined',
+              message: `Your request to join "${session.title}" was declined by the mentor.`,
+            },
+          });
+        } catch (notifyErr: any) {
+          logger.error('Notification failed (rejectJoinRequest → mentee):', notifyErr);
+        }
+      })();
+
+      return session;
+    } catch (error: any) {
+      logger.error(`Failed to reject join request:${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ NEW: list of pending join requests across all of a mentor's group
+   * sessions — powers the "Join Requests" panel in the mentor dashboard.
+   */
+  async getPendingJoinRequestsForMentor(userId: string): Promise<any[]> {
+    try {
+      const mentor = await mentorRepository.findByUserId(userId);
+      const mentorIdQuery = mentor ? [mentor.mentorId, userId] : [userId];
+
+      const sessions = await GroupSession.find({
+        mentorId: { $in: mentorIdQuery },
+        'participants.requestStatus': 'pending',
+      }).lean();
+
+      const menteeIds = new Set<string>();
+      const rows: any[] = [];
+
+      for (const session of sessions) {
+        for (const participant of (session as any).participants || []) {
+          if (participant.requestStatus === 'pending') {
+            menteeIds.add(participant.menteeId);
+            rows.push({
+              sessionId: session.sessionId,
+              sessionTitle: session.title,
+              scheduledAt: session.scheduledAt,
+              menteeId: participant.menteeId,
+              requestedAt: participant.registeredAt,
+              currentAccepted: (session as any).currentParticipants,
+              maxParticipants: session.maxParticipants,
+            });
+          }
+        }
+      }
+
+      if (menteeIds.size > 0) {
+        const users = await User.find({ userId: { $in: Array.from(menteeIds) } })
+          .select('userId fullName email')
+          .lean();
+        const userMap = new Map(users.map((u: any) => [u.userId, u]));
+        for (const row of rows) {
+          const u = userMap.get(row.menteeId);
+          row.menteeName = u?.fullName || u?.email || 'Unknown';
+        }
+      }
+
+      rows.sort((a, b) => new Date(a.requestedAt).getTime() - new Date(b.requestedAt).getTime());
+
+      return rows;
+    } catch (error: any) {
+      logger.error(`Failed to fetch pending join requests for mentor: ${error}`);
       throw error;
     }
   }
@@ -363,7 +530,6 @@ class GroupService {
 
           await NotificationService.sendNotification({
             userId: mentorProfile.userId,
-            // ✅ FIXED: was NotificationType.BOOKING_CANCELLED (doesn't exist)
             type: NotificationType.SESSION_CANCELLED,
             channels: [NotificationChannel.IN_APP],
             data: {
@@ -410,6 +576,7 @@ class GroupService {
 
       logger.info(`Group session started: ${sessionId}`);
 
+      // notifyParticipants already filters to requestStatus === 'accepted'
       await this.notifyParticipants(
         session,
         NotificationType.SESSION_STARTED,
@@ -443,7 +610,9 @@ class GroupService {
 
       if (attendees && attendees.length > 0) {
         session.participants.forEach((p: any) => {
-          p.attendanceStatus = attendees.includes(p.menteeId) ? 'attended' : 'absent';
+          if (p.requestStatus === 'accepted') {
+            p.attendanceStatus = attendees.includes(p.menteeId) ? 'attended' : 'absent';
+          }
         });
       }
 
@@ -499,7 +668,6 @@ class GroupService {
 
       await this.notifyParticipants(
         session,
-        // ✅ FIXED: was NotificationType.BOOKING_CANCELLED (doesn't exist)
         NotificationType.SESSION_CANCELLED,
         'Group Session Cancelled',
         `"${session.title}" was cancelled by the mentor. Reason: ${reason}`
@@ -674,6 +842,10 @@ class GroupService {
    * this is what's needed to make group joins show up as actionable rows
    * in the mentor's Booking dashboard (currently they don't show up there
    * at all, only as a bare count on the Services tab).
+   *
+   * ✅ CHANGED: only ACCEPTED participants are surfaced here — pending
+   * requests belong in the Join Requests panel (getPendingJoinRequestsForMentor),
+   * not in the confirmed-bookings list.
    */
   async getGroupSessionParticipantsForMentor(userId: string): Promise<any[]> {
     try {
@@ -688,6 +860,8 @@ class GroupService {
 
       for (const session of sessions) {
         for (const participant of (session as any).participants || []) {
+          if (participant.requestStatus !== 'accepted') continue;
+
           rows.push({
             bookingId: `${session.sessionId}-${participant.menteeId}`,
             sessionId: session.sessionId,
@@ -716,7 +890,7 @@ class GroupService {
     }
   }
 
-  
+
 }
 
 const groupService = new GroupService();

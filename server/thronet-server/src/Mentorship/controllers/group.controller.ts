@@ -357,6 +357,31 @@ class GroupController {
       next(error);
     }
   }
+  async acceptJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id, menteeId } = req.params;
+    const userId = req.user?.id;
+    if (!userId) { ResponseHandler.unauthorized(res); return; }
+    const session = await groupService.acceptJoinRequest(id, userId, menteeId);
+    ResponseHandler.success(res, 'Join request accepted', session);
+  } catch (error: any) {
+    logger.error('Failed to accept join request:', error);
+    next(error);
+  }
+}
+
+async rejectJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id, menteeId } = req.params;
+    const userId = req.user?.id;
+    if (!userId) { ResponseHandler.unauthorized(res); return; }
+    const session = await groupService.rejectJoinRequest(id, userId, menteeId);
+    ResponseHandler.success(res, 'Join request rejected', session);
+  } catch (error: any) {
+    logger.error('Failed to reject join request:', error);
+    next(error);
+  }
+}
 }
 
 export default new GroupController();

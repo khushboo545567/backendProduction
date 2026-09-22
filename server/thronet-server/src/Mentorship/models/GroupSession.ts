@@ -3,12 +3,21 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { PaymentMethod } from '@/Mentorship/interface/session.types';
 
 export interface IParticipant {
-  menteeId: string;             
+  menteeId: string;
   registeredAt: Date;
   paymentStatus: 'pending' | 'completed' | 'failed' | 'refunded';
   transactionId?: string;
   paidAt?: Date;
   attendanceStatus: 'registered' | 'attended' | 'absent' | 'cancelled';
+  // ✅ NEW: drives the Join Group → Mentor Approval flow.
+  // 'pending'   -> mentee has requested to join, awaiting mentor action
+  // 'accepted'  -> mentor approved; this participant now counts toward
+  //                currentParticipants / maxParticipants and receives
+  //                session-start notifications
+  // 'rejected'  -> mentor declined; participant does NOT count toward
+  //                capacity and cannot join the live session
+  requestStatus: 'pending' | 'accepted' | 'rejected';
+  respondedAt?: Date;
   certificate?: {
     issued: boolean;
     issuedAt?: Date;
@@ -42,10 +51,6 @@ export interface IGroupSession {
     method: string;
   };
   settings: {
-    // ✅ FIX: was `Number` in the schema below while the Joi validator (group.routes.ts)
-    // and every caller treat this as a real boolean ("allowed: true/false"). Mongoose was
-    // silently coercing true/false -> 1/0, which is harmless in JS truthy checks but breaks
-    // strict equality checks (`=== true`) anywhere you compare it later (e.g. cron/refund jobs).
     followUp: {
       allowed: boolean;
       periodDays: number;
@@ -101,6 +106,9 @@ export interface GroupSessionDocument extends Omit<IGroupSession, '_id'>, Docume
   addParticipant(menteeId: string, transactionId?: string): Promise<GroupSessionDocument>;
   removeParticipant(menteeId: string): Promise<GroupSessionDocument>;
   markAttendance(menteeId: string, attended: boolean): Promise<GroupSessionDocument>;
+  // ✅ NEW
+  acceptParticipant(menteeId: string): Promise<GroupSessionDocument>;
+  rejectParticipant(menteeId: string): Promise<GroupSessionDocument>;
   startSession(): Promise<GroupSessionDocument>;
   completeSession(actualDuration?: number): Promise<GroupSessionDocument>;
   cancelSession(reason: string): Promise<GroupSessionDocument>;
@@ -124,6 +132,14 @@ const ParticipantSchema = new Schema<IParticipant>(
       enum: ['registered', 'attended', 'absent', 'cancelled'],
       default: 'registered',
     },
+    // ✅ NEW
+    requestStatus: {
+      type: String,
+      enum: ['pending', 'accepted', 'rejected'],
+      default: 'pending',
+      index: true,
+    },
+    respondedAt: { type: Date },
     certificate: {
       issued: { type: Boolean, default: false },
       issuedAt: { type: Date },
@@ -228,7 +244,6 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     },
     settings: {
       followUp: {
-        // ✅ FIX: Number -> Boolean (matches Joi validator + interface intent)
         allowed: { type: Boolean, default: false },
         periodDays: { type: Number, default: 0, min: 0, max: 30 },
       },
@@ -296,18 +311,31 @@ GroupSessionSchema.index({ 'participants.menteeId': 1 });
 GroupSessionSchema.index({ scheduledAt: 1, status: 1 });
 GroupSessionSchema.index({ mentorId: 1, status: 1 });
 GroupSessionSchema.index({ topic: 1, scheduledAt: 1 });
+// ✅ NEW: mentor dashboard "pending requests" queries filter on this a lot
+GroupSessionSchema.index({ mentorId: 1, 'participants.requestStatus': 1 });
 
 // Virtuals
+// ✅ CHANGED: isFull / hasMinParticipants / spotsRemaining now only count
+// ACCEPTED participants. Pending join-requests no longer occupy a seat.
 GroupSessionSchema.virtual('isFull').get(function (this: GroupSessionDocument) {
-  return this.currentParticipants >= this.maxParticipants;
+  const acceptedCount = (this.participants || []).filter(
+    (p: IParticipant) => p.requestStatus === 'accepted'
+  ).length;
+  return acceptedCount >= this.maxParticipants;
 });
 
 GroupSessionSchema.virtual('hasMinParticipants').get(function (this: GroupSessionDocument) {
-  return this.currentParticipants >= this.minParticipants;
+  const acceptedCount = (this.participants || []).filter(
+    (p: IParticipant) => p.requestStatus === 'accepted'
+  ).length;
+  return acceptedCount >= this.minParticipants;
 });
 
 GroupSessionSchema.virtual('spotsRemaining').get(function (this: GroupSessionDocument) {
-  return Math.max(0, this.maxParticipants - this.currentParticipants);
+  const acceptedCount = (this.participants || []).filter(
+    (p: IParticipant) => p.requestStatus === 'accepted'
+  ).length;
+  return Math.max(0, this.maxParticipants - acceptedCount);
 });
 
 GroupSessionSchema.virtual('canStart').get(function (this: GroupSessionDocument) {
@@ -319,6 +347,13 @@ GroupSessionSchema.virtual('canStart').get(function (this: GroupSessionDocument)
 });
 
 // Instance Methods
+
+// ✅ CHANGED: addParticipant now creates a PENDING join request instead of
+// an instantly-registered seat. It does NOT bump currentParticipants and
+// does NOT flip status to 'full' — that only happens once the mentor
+// accepts (see acceptParticipant below). isFull is checked against the
+// virtual (accepted-only), so a pile of pending requests can never block
+// new requests from coming in.
 GroupSessionSchema.methods.addParticipant = async function (
   this: GroupSessionDocument,
   menteeId: string,
@@ -333,7 +368,20 @@ GroupSessionSchema.methods.addParticipant = async function (
   );
 
   if (existingParticipant) {
-    throw new Error('User already registered');
+    if (existingParticipant.requestStatus === 'pending') {
+      throw new Error('Join request already sent and awaiting mentor approval');
+    }
+    if (existingParticipant.requestStatus === 'accepted') {
+      throw new Error('Already registered for this session');
+    }
+    // requestStatus === 'rejected' -> allow re-requesting by resetting the entry
+    existingParticipant.requestStatus = 'pending';
+    existingParticipant.registeredAt = new Date();
+    existingParticipant.respondedAt = undefined;
+    existingParticipant.transactionId = transactionId;
+    existingParticipant.paymentStatus = transactionId ? 'completed' : 'pending';
+    existingParticipant.paidAt = transactionId ? new Date() : undefined;
+    return await this.save();
   }
 
   this.participants.push({
@@ -343,13 +391,11 @@ GroupSessionSchema.methods.addParticipant = async function (
     transactionId,
     paidAt: transactionId ? new Date() : undefined,
     attendanceStatus: 'registered',
+    requestStatus: 'pending',
   } as IParticipant);
 
-  this.currentParticipants = this.participants.length;
-
-  if (this.isFull) {
-    this.status = 'full';
-  }
+  // currentParticipants intentionally NOT incremented here — it only
+  // reflects accepted participants (kept in sync by acceptParticipant).
 
   return await this.save();
 };
@@ -366,11 +412,16 @@ GroupSessionSchema.methods.removeParticipant = async function (
     throw new Error('Participant not found');
   }
 
+  const wasAccepted = this.participants[index].requestStatus === 'accepted';
   this.participants.splice(index, 1);
-  this.currentParticipants = this.participants.length;
 
-  if (this.status === 'full') {
-    this.status = 'open';
+  if (wasAccepted) {
+    this.currentParticipants = this.participants.filter(
+      (p: IParticipant) => p.requestStatus === 'accepted'
+    ).length;
+    if (this.status === 'full') {
+      this.status = 'open';
+    }
   }
 
   return await this.save();
@@ -390,6 +441,71 @@ GroupSessionSchema.methods.markAttendance = async function (
   }
 
   participant.attendanceStatus = attended ? 'attended' : 'absent';
+  return await this.save();
+};
+
+// ✅ NEW: mentor approves a pending join request.
+// This is the moment the mentee actually occupies a seat.
+GroupSessionSchema.methods.acceptParticipant = async function (
+  this: GroupSessionDocument,
+  menteeId: string
+): Promise<GroupSessionDocument> {
+  const participant = this.participants.find(
+    (p: IParticipant) => p.menteeId === menteeId
+  );
+
+  if (!participant) {
+    throw new Error('Join request not found for this participant');
+  }
+
+  if (participant.requestStatus === 'accepted') {
+    throw new Error('This request has already been accepted');
+  }
+
+  if (participant.requestStatus === 'rejected') {
+    throw new Error('This request was already rejected. Ask the mentee to request again.');
+  }
+
+  const acceptedCount = this.participants.filter(
+    (p: IParticipant) => p.requestStatus === 'accepted'
+  ).length;
+
+  if (acceptedCount >= this.maxParticipants) {
+    throw new Error('Session is already full');
+  }
+
+  participant.requestStatus = 'accepted';
+  participant.respondedAt = new Date();
+
+  this.currentParticipants = acceptedCount + 1;
+
+  if (this.currentParticipants >= this.maxParticipants) {
+    this.status = 'full';
+  }
+
+  return await this.save();
+};
+
+// ✅ NEW: mentor rejects a pending join request.
+GroupSessionSchema.methods.rejectParticipant = async function (
+  this: GroupSessionDocument,
+  menteeId: string
+): Promise<GroupSessionDocument> {
+  const participant = this.participants.find(
+    (p: IParticipant) => p.menteeId === menteeId
+  );
+
+  if (!participant) {
+    throw new Error('Join request not found for this participant');
+  }
+
+  if (participant.requestStatus === 'accepted') {
+    throw new Error('Cannot reject a request that was already accepted. Remove the participant instead.');
+  }
+
+  participant.requestStatus = 'rejected';
+  participant.respondedAt = new Date();
+
   return await this.save();
 };
 

@@ -264,4 +264,16 @@ router.get(
   groupController.getMentorGroupParticipants
 );
 
+router.patch(
+  '/:id/requests/:menteeId/accept',
+  AuthMiddleware.authenticate as any,
+  groupController.acceptJoinRequest
+);
+
+router.patch(
+  '/:id/requests/:menteeId/reject',
+  AuthMiddleware.authenticate as any,
+  groupController.rejectJoinRequest
+);
+
 export default router;
