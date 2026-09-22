@@ -107,6 +107,12 @@ class GroupController {
 
   /**
    * @route   POST /api/v1/mentorship/group-sessions/:id/join
+   * @route   POST /api/v1/mentorship/group-sessions/:id/request   (alias — mentee UI calls this one)
+   * @desc    Mentee sends a request to join a group session. Creates a
+   *          PENDING request — does NOT register the mentee directly.
+   *          Both routes point here so existing callers of "/join" keep
+   *          working while the new mentee UI (which calls "/request") also
+   *          works without any backend duplication.
    * @access  Private (Mentee)
    */
   async joinGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -122,9 +128,111 @@ class GroupController {
       const { transactionId } = req.body;
 
       const session = await groupService.joinGroupSession(id, userId, transactionId, authToken);
-      ResponseHandler.success(res, 'Successfully joined group session', session);
+      ResponseHandler.success(res, 'Join request sent successfully', session);
     } catch (error: any) {
       logger.error('Failed to join group session:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/v1/mentorship/group-sessions/:id/request
+   * @desc    Get the logged-in mentee's own join-request status for a
+   *          session — powers the Join Group / Request Pending / Joined
+   *          button state on the mentor-card page.
+   * @access  Private (Mentee)
+   */
+  async getMyJoinRequestStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const authToken = getAuthToken(req) || undefined;
+      const result = await groupService.getMyJoinRequestStatus(id, userId, authToken);
+
+      if (!result) {
+        ResponseHandler.notFound(res, 'No join request found for this session');
+        return;
+      }
+
+      ResponseHandler.success(res, 'Join request status retrieved successfully', result);
+    } catch (error: any) {
+      logger.error('Failed to fetch join request status:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   PATCH /api/v1/mentorship/group-sessions/:id/requests/:menteeId/accept
+   * @desc    Mentor accepts a mentee's pending join request. This is the
+   *          only place a mentee actually becomes a confirmed participant.
+   * @access  Private (Mentor)
+   */
+  async acceptJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id, menteeId } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const authToken = getAuthToken(req) || undefined;
+      const session = await groupService.acceptJoinRequest(id, userId, menteeId, authToken);
+      ResponseHandler.success(res, 'Join request accepted successfully', session);
+    } catch (error: any) {
+      logger.error('Failed to accept join request:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   PATCH /api/v1/mentorship/group-sessions/:id/requests/:menteeId/reject
+   * @desc    Mentor rejects a mentee's pending join request.
+   * @access  Private (Mentor)
+   */
+  async rejectJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id, menteeId } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const authToken = getAuthToken(req) || undefined;
+      const session = await groupService.rejectJoinRequest(id, userId, menteeId, authToken);
+      ResponseHandler.success(res, 'Join request rejected successfully', session);
+    } catch (error: any) {
+      logger.error('Failed to reject join request:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/v1/mentorship/group-sessions/mentor/join-requests
+   * @desc    All PENDING join requests across the mentor's group sessions —
+   *          powers the "Join Requests" panel in the mentor dashboard.
+   *          This is the piece that was missing: notifications were firing
+   *          but there was nowhere for the mentor to actually act on them.
+   * @access  Private (Mentor)
+   */
+  async getMentorJoinRequests(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const rows = await groupService.getPendingJoinRequestsForMentor(userId);
+      ResponseHandler.success(res, 'Pending join requests retrieved successfully', rows);
+    } catch (error: any) {
+      logger.error('Failed to fetch mentor join requests:', error);
       next(error);
     }
   }
@@ -285,58 +393,59 @@ class GroupController {
     }
   }
 
-    /**
+  /**
    * @route   PUT /api/v1/mentorship/group-sessions/:id
    * @access  Private (Mentor)
    */
-    async updateGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
-      try {
-        const { id } = req.params;
-        const userId = req.user?.id;
-        if (!userId) {
-          ResponseHandler.unauthorized(res);
-          return;
-        }
-  
-        const authToken = getAuthToken(req) || undefined;
-        const file = req.file as Express.Multer.File | undefined;
-        const session = await groupService.updateGroupSession(
-          id,
-          userId,
-          req.body,
-          file,
-          authToken
-        );
-  
-        ResponseHandler.success(res, 'Group session updated successfully', session);
-      } catch (error: any) {
-        logger.error('Failed to update group session:', error);
-        next(error);
+  async updateGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
       }
+
+      const authToken = getAuthToken(req) || undefined;
+      const file = req.file as Express.Multer.File | undefined;
+      const session = await groupService.updateGroupSession(
+        id,
+        userId,
+        req.body,
+        file,
+        authToken
+      );
+
+      ResponseHandler.success(res, 'Group session updated successfully', session);
+    } catch (error: any) {
+      logger.error('Failed to update group session:', error);
+      next(error);
     }
-  
-    /**
-     * @route   DELETE /api/v1/mentorship/group-sessions/:id
-     * @access  Private (Mentor)
-     */
-    async deleteGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
-      try {
-        const { id } = req.params;
-        const userId = req.user?.id;
-        if (!userId) {
-          ResponseHandler.unauthorized(res);
-          return;
-        }
-  
-        const authToken = getAuthToken(req) || undefined;
-        await groupService.deleteGroupSession(id, userId, authToken);
-        ResponseHandler.success(res, 'Group session deleted successfully', null);
-      } catch (error: any) {
-        logger.error('Failed to delete group session:', error);
-        next(error);
+  }
+
+  /**
+   * @route   DELETE /api/v1/mentorship/group-sessions/:id
+   * @access  Private (Mentor)
+   */
+  async deleteGroupSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
       }
+
+      const authToken = getAuthToken(req) || undefined;
+      await groupService.deleteGroupSession(id, userId, authToken);
+      ResponseHandler.success(res, 'Group session deleted successfully', null);
+    } catch (error: any) {
+      logger.error('Failed to delete group session:', error);
+      next(error);
     }
-      /**
+  }
+
+  /**
    * @route   GET /api/v1/mentorship/group-sessions/mentor/participants
    * @desc    All group-session participants across the mentor's sessions,
    *          shaped like 1:1 booking rows — powers the Booking dashboard.
@@ -357,31 +466,6 @@ class GroupController {
       next(error);
     }
   }
-  async acceptJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { id, menteeId } = req.params;
-    const userId = req.user?.id;
-    if (!userId) { ResponseHandler.unauthorized(res); return; }
-    const session = await groupService.acceptJoinRequest(id, userId, menteeId);
-    ResponseHandler.success(res, 'Join request accepted', session);
-  } catch (error: any) {
-    logger.error('Failed to accept join request:', error);
-    next(error);
-  }
-}
-
-async rejectJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { id, menteeId } = req.params;
-    const userId = req.user?.id;
-    if (!userId) { ResponseHandler.unauthorized(res); return; }
-    const session = await groupService.rejectJoinRequest(id, userId, menteeId);
-    ResponseHandler.success(res, 'Join request rejected', session);
-  } catch (error: any) {
-    logger.error('Failed to reject join request:', error);
-    next(error);
-  }
-}
 }
 
 export default new GroupController();

@@ -10,6 +10,13 @@
  *  2. Group membership verified before joining a room
  *  3. Room participant limit enforced (MAX_ROOM_SIZE)
  *  4. All event handlers validate input before acting
+ *  5. ✅ NEW: group-session (mentorship) membership check — previously
+ *     `isMember` only recognised StudyGroup rooms and 1:1 mentorship
+ *     booking rooms. A group-session roomId (== GroupSession.sessionId)
+ *     matched neither, so even an ACCEPTED participant was always
+ *     rejected with "You are not a member of this group". Mirrors the
+ *     same in_progress + role check `isMentorshipSessionMember` already
+ *     does for 1:1 sessions.
  */
 
 import { Server } from 'socket.io';
@@ -27,7 +34,7 @@ import {
 } from '../types/Socket.types';
 import GroupMember from '../models/GroupMember.model';
 import { LoggerUtil } from '@/shared/logger.util';
-import { SessionMentor, Mentor } from '@/Mentorship/models';
+import { SessionMentor, Mentor, GroupSession } from '@/Mentorship/models';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MAX_ROOM_SIZE = 16; // WebRTC mesh: 16 peers = 120 connections — hard limit
@@ -60,7 +67,13 @@ async function isMember(userId: string, groupId: string): Promise<boolean> {
 
   // Not a StudyGroup member — check if this roomId is actually a mentorship
   // booking instead (mentor-session rooms reuse the booking's _id as roomId).
-  return await isMentorshipSessionMember(userId, groupId);
+  const mentorship1on1 = await isMentorshipSessionMember(userId, groupId);
+  if (mentorship1on1) return true;
+
+  // ✅ NEW: not a 1:1 booking either — check if this roomId is a group
+  // mentorship session instead (group-session rooms reuse GroupSession.sessionId
+  // as the roomId, mirroring the 1:1 convention above).
+  return await isGroupSessionMember(userId, groupId);
 }
 
 // ─── Helper: verify mentor/mentee membership on a mentorship session room ─────
@@ -88,6 +101,36 @@ async function isMentorshipSessionMember(userId: string, roomId: string): Promis
     return !!mentor && mentor.userId === userId;
   } catch (error: any) {
     LoggerUtil.warn(`isMentorshipSessionMember check failed: ${error.message}`);
+    return false;
+  }
+}
+
+// ─── Helper: verify mentor/accepted-participant membership on a GROUP
+// mentorship session room ─────────────────────────────────────────────────────
+// ✅ NEW. roomId here is GroupSession.sessionId (the frontend passes it as
+// both sessionId and roomId when it opens the live room — see
+// group.service.ts's startGroupSession, which now emits `roomId:
+// session.sessionId` in its 'session:started' payload for exactly this
+// reason). Only allows entry while the session is actually 'in_progress',
+// and only for participants whose join request was ACCEPTED — a PENDING or
+// REJECTED requester, and anyone with no participant row at all, must never
+// get into the live room, no matter what roomId they guess.
+async function isGroupSessionMember(userId: string, roomId: string): Promise<boolean> {
+  try {
+    const session = await GroupSession.findOne({ sessionId: roomId }).lean();
+    if (!session) return false;
+
+    if ((session as any).status !== 'in_progress') return false;
+
+    const participant = ((session as any).participants || []).find(
+      (p: any) => p.menteeId === userId && p.requestStatus === 'accepted'
+    );
+    if (participant) return true;
+
+    const mentor = await Mentor.findOne({ mentorId: (session as any).mentorId, isDeleted: false }).lean();
+    return !!mentor && mentor.userId === userId;
+  } catch (error: any) {
+    LoggerUtil.warn(`isGroupSessionMember check failed: ${error.message}`);
     return false;
   }
 }

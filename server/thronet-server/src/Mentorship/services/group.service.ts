@@ -63,7 +63,7 @@ class GroupService {
    * Used on start/cancel/complete so mentees are not left in the dark —
    * previously only the mentor ever got notified (on join). Never throws.
    *
-   * ✅ CHANGED: only notifies participants whose join request has been
+   * Only notifies participants whose join request has been
    * ACCEPTED by the mentor. Pending/rejected requesters never joined the
    * session, so they must never receive "session started" / "session
    * cancelled" notifications or be allowed into the live room.
@@ -260,7 +260,7 @@ class GroupService {
   }
 
   /**
-   * ✅ CHANGED: this no longer registers the mentee directly into the
+   * This no longer registers the mentee directly into the
    * session. It creates a PENDING join request (via session.addParticipant,
    * whose internal behaviour changed in the model) and notifies the mentor
    * that a new request is waiting — mirroring the same "new request"
@@ -351,7 +351,44 @@ class GroupService {
   }
 
   /**
-   * ✅ NEW: mentor accepts a mentee's pending join request. This is the
+   * Returns the logged-in mentee's own join-request status for a session —
+   * powers the Join Group / Request Pending / Joined button state on the
+   * mentor-card page. Returns null when the mentee has never requested to
+   * join (controller maps that to a 404), otherwise returns the
+   * participant's current status.
+   */
+  async getMyJoinRequestStatus(
+    sessionId: string,
+    menteeId: string,
+    authToken?: string
+  ): Promise<any | null> {
+    try {
+      const session = await this.getGroupSessionById(sessionId, authToken);
+
+      const participant = session.participants.find(
+        (p: any) => p.menteeId === menteeId
+      );
+
+      if (!participant) {
+        return null;
+      }
+
+      return {
+        sessionId: session.sessionId,
+        menteeId: participant.menteeId,
+        requestStatus: participant.requestStatus,
+        attendanceStatus: participant.attendanceStatus,
+        registeredAt: participant.registeredAt,
+        paymentStatus: participant.paymentStatus,
+      };
+    } catch (error: any) {
+      logger.error(`Failed to fetch join request status:${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mentor accepts a mentee's pending join request. This is the
    * only place a mentee actually becomes a confirmed participant.
    */
   async acceptJoinRequest(
@@ -398,7 +435,7 @@ class GroupService {
   }
 
   /**
-   * ✅ NEW: mentor rejects a mentee's pending join request.
+   * Mentor rejects a mentee's pending join request.
    */
   async rejectJoinRequest(
     sessionId: string,
@@ -444,7 +481,7 @@ class GroupService {
   }
 
   /**
-   * ✅ NEW: list of pending join requests across all of a mentor's group
+   * List of pending join requests across all of a mentor's group
    * sessions — powers the "Join Requests" panel in the mentor dashboard.
    */
   async getPendingJoinRequestsForMentor(userId: string): Promise<any[]> {
@@ -843,7 +880,7 @@ class GroupService {
    * in the mentor's Booking dashboard (currently they don't show up there
    * at all, only as a bare count on the Services tab).
    *
-   * ✅ CHANGED: only ACCEPTED participants are surfaced here — pending
+   * Only ACCEPTED participants are surfaced here — pending
    * requests belong in the Join Requests panel (getPendingJoinRequestsForMentor),
    * not in the confirmed-bookings list.
    */
