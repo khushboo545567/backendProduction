@@ -385,7 +385,7 @@ class SessionController {
   async cancelSession(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
-      const userId = req.user?.id;
+      const userId = (req.user as any)?.userId || req.user?.id;
       if (!userId) {
         ResponseHandler.unauthorized(res);
         return;
@@ -426,7 +426,7 @@ class SessionController {
   async rescheduleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
-      const userId = req.user?.id;
+      const userId = (req.user as any)?.userId || req.user?.id;
       if (!userId) {
         ResponseHandler.unauthorized(res);
         return;

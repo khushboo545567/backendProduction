@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { logger } from '@/shared/logger.util';
 import emailService from './email.service';
 import smsService from './sms.service';
@@ -11,6 +12,7 @@ import smsTemplates from '@/Mentorship/utils/smsTemplates';
 import Razorpay from 'razorpay';
 import availabilityService from './availability.service';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
+import { NotFoundError, ForbiddenError, ConflictError, BadRequestError } from '@/shared/errors/app.error';
 
 // Razorpay instance — initialized once, reused across calls
 let razorpay: Razorpay | null = null;
@@ -76,35 +78,36 @@ class RefundService {
        * prevent ObjectId cast errors while preserving
        * the existing backend architecture.
        */
-      const session = await SessionMentor.findOne({
-        sessionId: input.sessionId,
-    });
-    if (!session) {
-      throw new Error('Session not found');
-    }
+      const session = await SessionMentor.findOne(
+        mongoose.Types.ObjectId.isValid(input.sessionId)
+          ? { $or: [{ sessionId: input.sessionId }, { _id: input.sessionId }] }
+          : { sessionId: input.sessionId }
+      );
+      if (!session) {
+        throw new NotFoundError('Session');
+      }
 
-    // ✅ FIX: resolve the SPECIFIC booking being cancelled. A session
-    // "template" can have multiple bookings from different mentees.
-    // The old code only ever compared against session.menteeId (set
-    // only for whichever mentee booked FIRST) — any other mentee
-    // cancelling their own valid booking got wrongly rejected.
-    const targetBooking = input.bookingId
-      ? session.bookings?.find((b: any) => b._id?.toString() === input.bookingId)
-      : undefined;
+      const targetBooking = input.bookingId
+        ? session.bookings?.find((b: any) => b._id?.toString() === input.bookingId || b.bookingId === input.bookingId)
+        : undefined;
 
-    const effectiveMenteeId = targetBooking?.menteeId || targetBooking?.bookedBy || session.menteeId;
-    const effectivePricing = targetBooking?.pricing?.totalAmount ? targetBooking.pricing : session.pricing;
-    const effectiveScheduledAt = targetBooking?.scheduledAt || session.scheduledAt;
+      if (input.bookingId && !targetBooking) {
+        throw new NotFoundError('Booking');
+      }
 
-    // Step 2: Idempotency check — prevent double refund
-    if (
-      session.status === BookingStatus.CANCELLED ||
-      session.status === BookingStatus.REFUNDED ||
-      (targetBooking && targetBooking.status === 'cancelled')
-    ) {
-      logger.warn(`Refund already processed for session: ${input.sessionId}`);
-      throw new Error('Refund has already been processed for this session');
-    }
+      const effectiveMenteeId = targetBooking?.menteeId || targetBooking?.bookedBy || session.menteeId;
+      const effectivePricing = targetBooking?.pricing?.totalAmount ? targetBooking.pricing : (session.pricing || { totalAmount: 0, basePrice: 0, platformFee: 0 });
+      const effectiveScheduledAt = targetBooking?.scheduledAt || session.scheduledAt;
+
+      // Step 2: Idempotency check — prevent double refund
+      if (
+        session.status === BookingStatus.CANCELLED ||
+        session.status === BookingStatus.REFUNDED ||
+        (targetBooking && targetBooking.status === 'cancelled')
+      ) {
+        logger.warn(`Refund already processed for session: ${input.sessionId}`);
+        throw new ConflictError('Session or booking has already been cancelled');
+      }
 
         // ✅ FIX: session.mentorId is the Mentor-PROFILE id (e.g. from the
     // Mentor collection), not the mentor's actual auth userId. The old
@@ -190,23 +193,33 @@ class RefundService {
               await cancellationLog.save();
             }
       
-               // ✅ FIX: When a specific booking is cancelled (multi-mentee session
-            // template), only THAT booking's status is updated via arrayFilters.
-            // Previously, session-level `status` was always overwritten — which
-            // would incorrectly cancel every other mentee's booking on the same
-            // session template too.
+            // Check if there are other active bookings in this session
+            const hasOtherActiveBookings = session.bookings?.some(
+              (b: any) => b._id?.toString() !== targetBooking?._id?.toString() && b.status !== 'cancelled'
+            );
+
+            const updateFields: any = {
+              ...paymentUpdate,
+            };
+
+            // If there are no other active bookings (or 1-on-1 session), update top-level status as well
+            if (!hasOtherActiveBookings) {
+              updateFields.status = sessionStatus;
+              updateFields.isBooked = false;
+            }
+
             if (input.bookingId && targetBooking) {
               await SessionMentor.findByIdAndUpdate(
                 session._id,
                 {
                   $set: {
                     'bookings.$[elem].status': bookingStatus,
-                    ...paymentUpdate,
+                    ...updateFields,
                   },
                 },
                 {
                   runValidators: true,
-                  arrayFilters: [{ 'elem._id': input.bookingId }],
+                  arrayFilters: [{ 'elem._id': targetBooking._id }],
                 }
               );
             } else {
@@ -215,7 +228,8 @@ class RefundService {
                 {
                   $set: {
                     status: sessionStatus,
-                    ...paymentUpdate,
+                    isBooked: false,
+                    ...updateFields,
                   },
                 },
                 { runValidators: true }
@@ -238,10 +252,14 @@ if (targetBooking?.availabilityId && targetBooking?.slotTime) {
 await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId, input.userId);
 
       // Step 9: Mark notifications sent in log
-      cancellationLog.mentorNotified = true;
-      cancellationLog.menteeNotified = true;
-      cancellationLog.notificationsSentAt = new Date();
-      await cancellationLog.save();
+      try {
+        cancellationLog.mentorNotified = true;
+        cancellationLog.menteeNotified = true;
+        cancellationLog.notificationsSentAt = new Date();
+        await cancellationLog.save();
+      } catch (logErr: any) {
+        logger.warn(`Failed to update notificationsSentAt in cancellationLog: ${logErr.message}`);
+      }
 
       logger.info(`Refund processed successfully for session: ${input.sessionId}`);
 
@@ -272,34 +290,25 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
     effectiveScheduledAt?: Date
   ): void {
     const menteeIdToCheck = effectiveMenteeId ?? session.menteeId;
-    // ✅ FIX: compare against the mentor's resolved userId, not the raw
-    // session.mentorId (which is a Mentor-profile id, not an auth userId).
     if (menteeIdToCheck !== userId && mentorUserId !== userId) {
-      throw new Error('You are not authorized to cancel this session');
+      throw new ForbiddenError('You are not authorized to cancel this session');
     }
 
-
-
     if (session.status === BookingStatus.CANCELLED || session.status === BookingStatus.REFUNDED) {
-      throw new Error('Session is already cancelled');
+      throw new ConflictError('Session is already cancelled');
     }
 
     if (session.status === BookingStatus.COMPLETED) {
-      throw new Error('Cannot cancel a completed session');
+      throw new ConflictError('Cannot cancel a completed session');
     }
 
     if (session.status === BookingStatus.IN_PROGRESS) {
-      throw new Error('Cannot cancel a session that is in progress');
+      throw new ConflictError('Cannot cancel a session that is in progress');
     }
 
-    // ✅ FIX: use the SPECIFIC booking's scheduledAt (effectiveScheduledAt),
-    // not the session template's top-level scheduledAt. For multi-mentee
-    // session templates, the template date can differ from this mentee's
-    // actual booked slot — checking the wrong field caused future bookings
-    // to be wrongly rejected as "past session".
     const dateToCheck = effectiveScheduledAt ?? session.scheduledAt;
-    if (dateToCheck < new Date()) {
-      throw new Error('Cannot cancel a past session');
+    if (dateToCheck && new Date(dateToCheck) < new Date()) {
+      throw new ConflictError('Cannot cancel a past session');
     }
   }
 
@@ -313,21 +322,21 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
     userRole: 'mentor' | 'mentee'
   ): Promise<any> {
     const cancellationLog = await CancellationLog.create({
-      sessionId: session._id.toString(),
+      sessionId: session.sessionId || session._id.toString(),
       cancelledBy: input.userId,
       cancelledByRole: userRole,
       sessionType: session.sessionType,
       scheduledAt: session.scheduledAt,
-      timezone: session.timezone,
-      sessionPrice: session.pricing.totalAmount,
+      timezone: session.timezone || 'UTC',
+      sessionPrice: session.pricing?.totalAmount ?? 0,
       reason: input.reason,
       cancellationCategory: input.cancellationCategory || 'other',
       additionalNotes: input.additionalNotes,
-      hoursBeforeSession: refundCalculation.hoursBeforeSession,
-      withinPolicy: refundCalculation.withinPolicy,
-      refundEligible: refundCalculation.refundEligible,
-      refundPercentage: refundCalculation.refundPercentage,
-      refundAmount: refundCalculation.refundAmount,
+      hoursBeforeSession: refundCalculation.hoursBeforeSession ?? 0,
+      withinPolicy: refundCalculation.withinPolicy ?? false,
+      refundEligible: refundCalculation.refundEligible ?? false,
+      refundPercentage: refundCalculation.refundPercentage ?? 0,
+      refundAmount: refundCalculation.refundAmount ?? 0,
       refundStatus: refundCalculation.refundEligible ? 'pending' : 'not_applicable',
       cancelledAt: new Date(),
     });

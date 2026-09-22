@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { OAuth2Client } from 'google-auth-library';
 import { v4 as uuidv4 } from 'uuid';
 import { User, UserProfile } from '@/auth/models';
 import userEmitter from '@/shared/events/emitters/user.emitter';
@@ -71,16 +72,53 @@ export interface GoogleProfileInput {
     photos?: Array<{ value: string }>;
 }
 
-export class GoogleAuthService {
-    /**
-     * Verify Google ID Token using Google's official tokeninfo API.
-     * Supports multi-client IDs (Web, iOS, Android).
-     */
-    static async verifyIdToken(idToken: string): Promise<GoogleTokenPayload> {
-        if (!idToken) {
-            throw new Error('idToken is required');
+/**
+ * Verify Google ID Token using google-auth-library OAuth2Client.
+ * Ensures audience matches GOOGLE_CLIENT_ID.
+ */
+export async function verifyGoogleIdToken(idToken: string): Promise<GoogleTokenPayload> {
+    if (!idToken) {
+        throw new Error('idToken is required');
+    }
+
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const allowedAudiences = [
+        clientId,
+        process.env.GOOGLE_WEB_CLIENT_ID,
+        process.env.GOOGLE_ANDROID_CLIENT_ID,
+        process.env.GOOGLE_IOS_CLIENT_ID,
+    ].filter(Boolean) as string[];
+
+    try {
+        const oauthClient = new OAuth2Client(clientId);
+        const ticket = await oauthClient.verifyIdToken({
+            idToken,
+            audience: allowedAudiences.length > 0 ? allowedAudiences : clientId,
+        });
+
+        const payload = ticket.getPayload();
+        if (!payload || !payload.email) {
+            throw new Error('Invalid Google token payload: email missing');
         }
 
+        return {
+            sub: payload.sub,
+            email: payload.email.toLowerCase(),
+            email_verified: payload.email_verified,
+            name: payload.name,
+            given_name: payload.given_name,
+            family_name: payload.family_name,
+            picture: payload.picture,
+            aud: payload.aud,
+            exp: payload.exp,
+        };
+    } catch (libraryError: any) {
+        if (libraryError.message && libraryError.message.includes('audience')) {
+            logger.warn('Google token audience mismatch in OAuth2Client', { error: libraryError.message });
+            throw new Error('Google token audience mismatch');
+        }
+
+        // Fallback to Google OAuth2 tokeninfo REST API
         try {
             const response = await axios.get<Record<string, any>>(
                 `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
@@ -92,20 +130,11 @@ export class GoogleAuthService {
                 throw new Error('Invalid Google token payload: email missing');
             }
 
-            // Verify audience against configured Client IDs
-            const allowedAudiences = [
-                process.env.GOOGLE_CLIENT_ID,
-                process.env.GOOGLE_WEB_CLIENT_ID,
-                process.env.GOOGLE_ANDROID_CLIENT_ID,
-                process.env.GOOGLE_IOS_CLIENT_ID,
-            ].filter(Boolean) as string[];
-
             if (allowedAudiences.length > 0 && !allowedAudiences.includes(data.aud)) {
                 logger.warn('Google token audience mismatch', { aud: data.aud, allowedAudiences });
                 throw new Error('Google token audience mismatch');
             }
 
-            // Verify expiration
             if (data.exp && Number(data.exp) * 1000 < Date.now()) {
                 throw new Error('Google token has expired');
             }
@@ -123,10 +152,19 @@ export class GoogleAuthService {
             };
         } catch (error: any) {
             logger.error('Google idToken verification failed', {
-                error: error.response?.data || error.message,
+                error: error.response?.data || error.message || libraryError.message,
             });
-            throw new Error(error.response?.data?.error_description || error.message || 'Google token verification failed');
+            throw new Error(error.response?.data?.error_description || libraryError.message || error.message || 'Google token verification failed');
         }
+    }
+}
+
+export class GoogleAuthService {
+    /**
+     * Verify Google ID Token using OAuth2Client / tokeninfo API.
+     */
+    static async verifyIdToken(idToken: string): Promise<GoogleTokenPayload> {
+        return verifyGoogleIdToken(idToken);
     }
 
     /**
