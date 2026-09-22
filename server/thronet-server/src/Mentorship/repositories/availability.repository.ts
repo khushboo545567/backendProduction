@@ -124,30 +124,55 @@ class AvailabilityRepository {
             return availability.toObject();
         }
 
-        /**
+             /**
          * Block a whole date — creates a record if none exists yet (leave/holiday case)
          */
-        async blockByDate(mentorId: string, date: Date, timezone: string, reason?: string): Promise<any> {
-            const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
-            const endOfDay = new Date(date); endOfDay.setHours(23, 59, 59, 999);
-
-            let availability = await Availability.findOne({
-                mentorId,
-                date: { $gte: startOfDay, $lte: endOfDay },
-                isDeleted: false,
-            });
-
-            if (!availability) {
-                availability = new Availability({
-                    mentorId,
-                    date,
-                    slots: [],
-                    dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase(),
-                    timezone,
-                    isDateBlocked: true,
-                    dateBlockReason: reason,
-                });
-            } else {
+             async blockByDate(mentorId: string, date: Date, timezone: string, reason?: string): Promise<any> {
+                const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+    
+                const findExisting = () =>
+                    Availability.findOne({
+                        mentorId,
+                        date: { $gte: startOfDay, $lte: endOfDay },
+                        isDeleted: false,
+                    });
+    
+                let availability = await findExisting();
+    
+                if (!availability) {
+                    // ✅ FIX: pehle yahan seedha `new Availability(...).save()`
+                    // call hota tha — agar us date ka record already DB me
+                    // hota (jaisa "Save Month" se pehle se bana hota hai) aur
+                    // upar ka findOne kisi wajah se (double-click race, ya
+                    // replica lag) usko miss kar deta, to save() ka insert
+                    // `mentorId_1_date_1` unique index se takra ke raw MongoDB
+                    // E11000 error throw karta tha — jo controller me
+                    // "Failed to block date" bankar frontend tak leak ho jaata
+                    // tha. Ab insert ko try/catch me wrap kiya hai: agar
+                    // E11000 aaye, to record dobara fetch karke usi ko update
+                    // kar dete hain, insert ki jagah — exact wahi pattern jo
+                    // availabilityService.createAvailability() me already hai.
+                    try {
+                        const newAvailability = new Availability({
+                            mentorId,
+                            date,
+                            slots: [],
+                            dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase(),
+                            timezone,
+                            isDateBlocked: true,
+                            dateBlockReason: reason,
+                        });
+                        await newAvailability.save();
+                        return newAvailability.toObject();
+                    } catch (err: any) {
+                        if (err?.code !== 11000) throw err;
+    
+                        availability = await findExisting();
+                        if (!availability) throw err;
+                    }
+                }
+    
                 (availability as any).isDateBlocked = true;
                 (availability as any).dateBlockReason = reason;
                 availability.slots.forEach((slot: any) => {
@@ -156,12 +181,10 @@ class AvailabilityRepository {
                         slot.blockReason = reason;
                     }
                 });
+    
+                await availability.save();
+                return availability.toObject();
             }
-
-            await availability.save();
-            return availability.toObject();
-        }
-
         /**
          * Unblock a whole date by mentorId + date (no availabilityId needed)
          */

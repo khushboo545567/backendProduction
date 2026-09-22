@@ -9,6 +9,7 @@ import { PaymentStatus } from '@/Mentorship/interface/session.types';
 import emailTemplates from '@/Mentorship/utils/emailTemplates';
 import smsTemplates from '@/Mentorship/utils/smsTemplates';
 import Razorpay from 'razorpay';
+import availabilityService from './availability.service';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 
 // Razorpay instance — initialized once, reused across calls
@@ -222,8 +223,19 @@ class RefundService {
             }
 
                        // Step 8: Send notifications (non-critical — failure does not throw)
-                       await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId, input.userId);
+// ✅ NEW: cancelled booking ka availability slot wapas free karo
+if (targetBooking?.availabilityId && targetBooking?.slotTime) {
+  try {
+    const [releaseStart, releaseEnd] = String(targetBooking.slotTime)
+      .split(' - ')
+      .map((t: string) => t.trim());
+    await availabilityService.releaseRange(targetBooking.availabilityId, releaseStart, releaseEnd);
+  } catch (releaseErr: any) {
+    logger.warn(`Slot release failed after cancellation: ${releaseErr.message}`);
+  }
+}
 
+await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId, input.userId);
 
       // Step 9: Mark notifications sent in log
       cancellationLog.mentorNotified = true;

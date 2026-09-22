@@ -6,6 +6,9 @@ import { logger } from '@/shared/logger.util';
 import { NotFoundError, BadRequestError, ConflictError } from '@/shared/errors/app.error';
 import mentorRepository from '../repositories/mentor.repository';
 import availabilityRepository from '../repositories/availability.repository';
+import { bookRangeInSlots, releaseRangeInSlots, subtractBusyRanges } from '@/Mentorship/utils/slotSplitter';
+
+
 
 interface CreateAvailabilityInput {
   mentorId: string;
@@ -352,9 +355,9 @@ class AvailabilityService {
           (s: any) => s.isBooked || s.isBlocked
         );
 
-        const incomingSlots = updates.slots.filter(
-          (incoming: any) => !preservedSlots.some((ps: any) => ps.startTime === incoming.startTime)
-        );
+              // ✅ NEW: booked/blocked time ko incoming slots se minus karo
+              const incomingSlots = subtractBusyRanges(updates.slots, preservedSlots);
+
 
         finalUpdates.slots = [...incomingSlots, ...preservedSlots] as any;
 
@@ -380,7 +383,72 @@ class AvailabilityService {
     }
   }
 
-  async deleteAvailability(availabilityId: string): Promise<void> {
+
+    /**
+   * ✅ NEW: [startTime, endTime) range ko atomically book karta hai.
+   * Stored slot bada ho to use todta hai. __v optimistic lock + 3 retries.
+   * Return: booked range, ya null agar slot available nahi.
+   */
+    async bookRange(
+      availabilityId: string,
+      mentorId: string,
+      startTime: string,
+      endTime: string,
+      sessionId: string
+    ): Promise<{ startTime: string; endTime: string } | null> {
+      const MAX_RETRIES = 3;
+  
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const doc: any = await Availability.findOne({ availabilityId, mentorId, isDeleted: false }).lean();
+        if (!doc) return null;
+  
+        const newSlots = bookRangeInSlots(doc.slots, startTime, endTime, sessionId);
+        if (!newSlots) return null;
+  
+        const updated = await Availability.findOneAndUpdate(
+          { availabilityId, isDeleted: false, __v: doc.__v ?? null } as any,
+          { $set: { slots: newSlots }, $inc: { __v: 1 } } as any,
+          { new: true }
+        );
+  
+        if (updated) return { startTime, endTime };
+      }
+  
+      throw new ConflictError('This slot is being booked by someone else. Please try again.');
+    }
+  
+    /**
+     * ✅ NEW: cancel par exact booked range wapas free karta hai.
+     */
+    async releaseRange(availabilityId: string, startTime: string, endTime: string): Promise<boolean> {
+      const MAX_RETRIES = 3;
+  
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const doc: any = await Availability.findOne({ availabilityId, isDeleted: false }).lean();
+        if (!doc) return false;
+  
+        const newSlots = releaseRangeInSlots(
+          doc.slots,
+          startTime,
+          endTime,
+          doc.isDateBlocked ? { reason: doc.dateBlockReason } : undefined
+        );
+        if (!newSlots) return false;
+  
+        const updated = await Availability.findOneAndUpdate(
+          { availabilityId, isDeleted: false, __v: doc.__v ?? null } as any,
+          { $set: { slots: newSlots }, $inc: { __v: 1 } } as any,
+          { new: true }
+        );
+  
+        if (updated) return true;
+      }
+  
+      return false;
+    }
+  
+    async deleteAvailability(availabilityId: string): Promise<void> {
+      
     try {
       logger.info(`Deleting availability: ${availabilityId}`);
 

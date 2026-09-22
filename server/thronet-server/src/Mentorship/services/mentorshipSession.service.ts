@@ -2,7 +2,9 @@ import mentorService from './mentor.service';
 import { SESSION_DURATIONS, SessionType } from '@/shared/constants/sessionTypes';
 import { PaymentMethod, PaymentStatus, ISessionMentor } from '@/Mentorship/interface/session.types';
 import { Types } from 'mongoose';
-import { Availability, Mentor, SessionMentor } from '../models';
+import { Mentor, SessionMentor } from '../models';
+import availabilityService from './availability.service';
+import { computeEndTime, toMinutes, toTimeString } from '@/Mentorship/utils/slotSplitter';
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
 import { TrustScoreEvents } from '../events/trustScore.events';
@@ -325,25 +327,31 @@ class MentorshipSessionService {
       // save() landed. findOneAndUpdate() is a single atomic DB op: if two
       // requests race, Mongo serializes them and only the FIRST one's filter
       // (isBooked: false) matches — the second gets `null` back and fails cleanly.
-      const [slotStart, slotEnd] = input.slotTime.split(' - ');
-      const availability = await Availability.findOneAndUpdate(
-        {
-          availabilityId: input.availabilityId,
-          isDeleted: false,
-          slots: {
-            $elemMatch: {
-              startTime: slotStart,
-              endTime: slotEnd,
-              isBooked: false,
-              isBlocked: false,
-            },
-          },
-        },
-        { $set: { 'slots.$.isBooked': true } },
-        { new: true }
+          // ✅ NEW: mentee sirf START time chunta hai. END time hum service ke
+      // duration (template ka session.duration) se khud nikalte hain.
+      const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+      const [rawStart, rawEnd] = String(input.slotTime).split(' - ').map((t: string) => t.trim());
+      if (!rawStart || !timeRegex.test(rawStart)) {
+        throw new BadRequestError('Invalid slot time');
+      }
+      const slotStart = toTimeString(toMinutes(rawStart));
+      const slotEnd = Number(session.duration) > 0
+        ? computeEndTime(rawStart, Number(session.duration))
+        : rawEnd;
+      if (!slotEnd || !timeRegex.test(slotEnd)) {
+        throw new BadRequestError('Invalid slot time');
+      }
+
+      // ✅ NEW: atomic range booking (bada stored slot ho to todta hai)
+      const bookedRange = await availabilityService.bookRange(
+        input.availabilityId,
+        input.mentorId,
+        slotStart,
+        slotEnd,
+        session.sessionId
       );
-      if (!availability) {
-        throw new BadRequestError('Slot not found, already booked, or blocked');
+      if (!bookedRange) {
+        throw new BadRequestError('This time slot is no longer available. Please pick another slot.');
       }
 
       // ✅ REAL FIX for double booking: atomic duplicate-booking guard.
@@ -367,7 +375,7 @@ class MentorshipSessionService {
               bookedBy:       input.menteeId,
               bookedAt:       new Date(),
               status:         'pending',
-              slotTime:       input.slotTime,
+              slotTime:       `${slotStart} - ${slotEnd}`,
               scheduledAt:    new Date(input.scheduledAt),
               availabilityId: input.availabilityId,
               payment: {
@@ -395,10 +403,7 @@ class MentorshipSessionService {
       if (!updatedSession) {
         // Booking didn't happen (duplicate/cancelled/not-found) — release the
         // slot lock we took above so it doesn't stay stuck as booked.
-        await Availability.updateOne(
-          { availabilityId: input.availabilityId, 'slots.startTime': slotStart, 'slots.endTime': slotEnd },
-          { $set: { 'slots.$.isBooked': false } }
-        );
+        await availabilityService.releaseRange(input.availabilityId, slotStart, slotEnd);
         throw new BadRequestError('You have already booked this session for this date and time.');
       }
 
