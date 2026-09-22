@@ -118,10 +118,36 @@ const MentorSchema = new Schema<MentorDocument>(
       autoAcceptBookings:     { type: Boolean, default: false },
       maxSessionsPerDay:      { type: Number, default: 5, min: 1, max: 15 },
       bufferBetweenSessions:  { type: Number, default: 15, min: 0 },
-      // ✅ NEW: Service creation ke time jo Duration mentor select karta hai,
+           // ✅ NEW: Service creation ke time jo Duration mentor select karta hai,
       // wahi yahan sync hoke future availability slots ka default duration
       // banti hai (30/45/60 min).
       slotDuration:           { type: Number, default: 30, min: 5, max: 180 },
+      // ✅ NEW: poora per-day, multi-time-range weekly schedule ab backend
+      // me persist hota hai (pehle sirf ek single daysAvailable[] +
+      // preferredHours{start,end} store hota tha, jo alag-alag din ke
+      // alag time ya ek din ke multiple ranges (subah+shaam) store nahi
+      // kar sakta tha — isliye refresh/dusre device par purana simple
+      // data hi dikhta tha aur detailed schedule "reset" ho jaata tha).
+      weeklySchedule: {
+        type: [
+           {
+            day:     { type: String, required: true },
+            enabled: { type: Boolean, default: true },
+            timeRanges: {
+              type: [
+                {
+                  startTime: { type: String, required: true },
+                  endTime:   { type: String, required: true },
+                },
+              ],
+              default: [],
+              _id: false,
+            },
+          },
+        ],
+        default: [],
+        _id: false,
+      },
     },
     socialProof: {
       linkedinUrl:    { type: String, trim: true },

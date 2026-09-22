@@ -83,8 +83,8 @@ export interface IMentor extends TimeStamps, SoftDelete {
     responseTime: number; // in minutes
     completionRate: number; // percentage
   };
-  // CHANGE: availability optional karo
-  availability?: {
+   // CHANGE: availability optional karo
+   availability?: {
     timezone?: string;
     daysAvailable?: string[];
     preferredHours?: {
@@ -96,6 +96,15 @@ export interface IMentor extends TimeStamps, SoftDelete {
     bufferBetweenSessions?: number;
     // ✅ NEW: Service Duration se sync hone wala default slot-duration
     slotDuration?: number;
+    // ✅ NEW: poora per-day, multi-time-range weekly schedule — is se
+    // ab alag-alag din ke alag custom time-ranges (jaise ek din me subah
+    // + shaam dono) backend me full-fidelity save/load hote hain, na ki
+    // sirf simple daysAvailable[] + ek single preferredHours summary.
+    weeklySchedule?: Array<{
+      day: string;
+      enabled: boolean;
+      timeRanges: Array<{ startTime: string; endTime: string }>;
+    }>;
   };
   socialProof: {
     linkedinUrl: string;
