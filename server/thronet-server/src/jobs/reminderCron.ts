@@ -45,257 +45,195 @@ class ReminderCron {
   /**
    * Send 24-hour reminders
    */
-  private static async send24HourReminders(): Promise<void> {
-    try {
-      const now = new Date();
-      const in24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      const in24HoursPlus15Min = new Date(in24Hours.getTime() + 15 * 60 * 1000);
-
-      // Find sessions starting in 24 hours (with 15-min window)
-      const sessions = await SessionMentor.find({
-        scheduledAt: {
-          $gte: in24Hours,
-          $lt: in24HoursPlus15Min,
-        },
-        status: BookingStatus.CONFIRMED,
-      });
-
-      logger.info(`ðŸ“§ Sending 24-hour reminders for ${sessions.length} sessions`);
-
-      for (const session of sessions) {
-        try {
-          // Get user and mentor details
-          const [user, mentor] = await Promise.all([
-            User.findByUserId(session.menteeId),
-            User.findByUserId(session.mentorId),
-          ]);
-
-          if(!user || !mentor) throw new NotFoundError("user and mentor not found")
-
-          // Send email
-          await emailService.sendEmail({
-            to: user.email,
-            subject: 'ðŸ“… Session Reminder - Tomorrow',
-            html: `
-              <h2>Your session is tomorrow!</h2>
-              <p>Hi ${user.fullName || user.email},</p>
-              <p>This is a reminder that you have a session scheduled with <strong>${mentor.fullName || mentor.email}</strong> tomorrow.</p>
-              <p><strong>Session Details:</strong></p>
-              <ul>
-                <li>Type: ${session.sessionType}</li>
-                <li>Date: ${session.scheduledAt.toLocaleDateString()}</li>
-                <li>Time: ${session.scheduledAt.toLocaleTimeString()}</li>
-                <li>Duration: ${session.duration} minutes</li>
-              </ul>
-              ${session.meeting?.meetingUrl ? `<p><strong>Meeting Link:</strong> <a href="${session.meeting.meetingUrl}">${session.meeting.meetingUrl}</a></p>` : ''}
-              <p>Need to reschedule? Contact your mentor.</p>
-            `,
-          });
-          // ✅ NEW: in-app reminder for both mentee and mentor
-          NotificationService.sendNotification({
-            userId: user.userId,
-            type: NotificationType.SESSION_REMINDER,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Session Tomorrow',
-              message: `Your session with ${mentor.fullName || mentor.email} is scheduled for tomorrow.`,
-            },
-          }).catch((e) => logger.error('In-app reminder failed (24h → mentee):', e));
-
-          NotificationService.sendNotification({
-            userId: mentor.userId,
-            type: NotificationType.SESSION_REMINDER,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Session Tomorrow',
-              message: `Your session with ${user.fullName || user.email} is scheduled for tomorrow.`,
-            },
-          }).catch((e) => logger.error('In-app reminder failed (24h → mentor):', e));
-
-          logger.info(`âœ… 24-hour reminder sent for session: ${session._id}`);
-        } catch(error : any) {
-          logger.error(`Failed to send 24-hour reminder for session ${session._id}:`, error);
-        }
-      }
-    } catch(error : any) {
-      logger.error('Error sending 24-hour reminders:', error);
-    }
-  }
-
-  /**
-   * Send 1-hour reminders (Email + SMS)
+    /**
+   * Generic helper — 24h / 1h / 30min reminders sabke liye same shape.
+   * window: kitne minute pehle se reminder bhejna hai (from, to)
+   * flagKey: bookings[].reminders ke andar kaunsa flag
    */
-  private static async send1HourReminders(): Promise<void> {
+  private static async sendWindowReminder(opts: {
+    fromMin: number;
+    toMin: number;
+    flagKey: 'h24' | 'h1' | 'm30';
+    label: string;
+    sendSms: boolean;
+    subject: string;
+    buildHtml: (user: any, mentor: any, session: any) => string;
+    smsText?: (user: any, mentor: any, session: any) => string;
+  }): Promise<void> {
     try {
       const now = new Date();
-      const in1Hour = new Date(now.getTime() + 60 * 60 * 1000);
-      const in1HourPlus15Min = new Date(in1Hour.getTime() + 15 * 60 * 1000);
+      const from = new Date(now.getTime() + opts.fromMin * 60 * 1000);
+      const to = new Date(now.getTime() + opts.toMin * 60 * 1000);
+      const flagPath = `reminders.${opts.flagKey}`;
+      const liveStatuses = [BookingStatus.CONFIRMED, BookingStatus.RESCHEDULED];
 
-      // Find sessions starting in 1 hour (with 15-min window)
+      // ✅ FIX: root-level fields ke bajay bookings[] pe query
       const sessions = await SessionMentor.find({
-        scheduledAt: {
-          $gte: in1Hour,
-          $lt: in1HourPlus15Min,
+        bookings: {
+          $elemMatch: {
+            status: { $in: liveStatuses },
+            scheduledAt: { $gte: from, $lt: to },
+            [flagPath]: { $ne: true },
+          },
         },
-        status: BookingStatus.CONFIRMED,
-      });
+      } as any);
 
-      logger.info(`ðŸ“§ Sending 1-hour reminders for ${sessions.length} sessions`);
+      logger.info(`📧 Sending ${opts.label} reminders for ${sessions.length} session(s)`);
 
       for (const session of sessions) {
-        try {
-          // Get user and mentor details
-          const [user, mentor] = await Promise.all([
-            User.findByUserId(session.menteeId),
-            User.findByUserId(session.mentorId),
-          ]);
+        // ✅ FIX: mentorId → Mentor doc → uska userId
+        const mentorDoc: any = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+        const mentor: any = mentorDoc?.userId ? await User.findByUserId(mentorDoc.userId) : null;
 
-          if(!user || !mentor) throw new NotFoundError("user and mentor not found")
+        for (const booking of ((session.bookings ?? []) as any[])) {
+          try {
+            if (!liveStatuses.includes(booking.status)) continue;
+            const startAt = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
+            if (!startAt || startAt < from || startAt >= to) continue;
+            if (booking.reminders?.[opts.flagKey]) continue;
 
-          // Send email
-          await emailService.sendEmail({
-            to: user.email,
-            subject: 'â° Session Starting in 1 Hour!',
-            html: `
-              <h2>Your session starts in 1 hour!</h2>
-              <p>Hi ${user.fullName || user.email},</p>
-              <p>Your session with <strong>${mentor.fullName || mentor.email}</strong> starts in 1 hour.</p>
-              <p><strong>Session Details:</strong></p>
-              <ul>
-                <li>Type: ${session.sessionType}</li>
-                <li>Time: ${session.scheduledAt.toLocaleTimeString()}</li>
-                <li>Duration: ${session.duration} minutes</li>
-              </ul>
-              ${session.meeting?.meetingUrl ? `<p><strong>Join Meeting:</strong> <a href="${session.meeting.meetingUrl}">${session.meeting.meetingUrl}</a></p>` : ''}
-              <p>Get ready! ðŸš€</p>
-            `,
-          });
+            // ✅ FIX: booking-level menteeId, root-level nahi
+            const menteeId: string | undefined = booking.menteeId || booking.bookedBy;
+            const user: any = menteeId ? await User.findByUserId(menteeId) : null;
 
-          // Send SMS if phone number available
-          if (user.phoneNumber) {
-            await smsService.sendSMS({
-              to: user.phoneNumber,
-              message: `â° Your session with ${mentor.fullName || mentor.email} starts in 1 hour! ${session.meeting?.meetingUrl ? `Join: ${session.meeting.meetingUrl}` : ''}`,
-            });
-          }
-          // ✅ NEW: in-app reminder for both mentee and mentor
-          NotificationService.sendNotification({
-            userId: user.userId,
-            type: NotificationType.SESSION_REMINDER,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Session in 1 Hour',
-              message: `Your session with ${mentor.fullName || mentor.email} starts in 1 hour.`,
-            },
-          }).catch((e) => logger.error('In-app reminder failed (1h → mentee):', e));
-
-          NotificationService.sendNotification({
-            userId: mentor.userId,
-            type: NotificationType.SESSION_REMINDER,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Session in 1 Hour',
-              message: `Your session with ${user.fullName || user.email} starts in 1 hour.`,
-            },
-          }).catch((e) => logger.error('In-app reminder failed (1h → mentor):', e));
-
-          logger.info(`âœ… 1-hour reminder sent for session: ${session._id}`);
-        } catch(error : any) {
-          logger.error(`Failed to send 1-hour reminder for session ${session._id}:`, error);
-        }
-      }
-    } catch(error : any) {
-      logger.error('Error sending 1-hour reminders:', error);
-    }
-  }
-  /**
-   * Send 15-minute reminders (Email + SMS + Push)
-   */
-  private static async send15MinuteReminders(): Promise<void> {
-    try {
-      const now = new Date();
-      const in15Min = new Date(now.getTime() + 15 * 60 * 1000);
-      const in30Min = new Date(now.getTime() + 30 * 60 * 1000);
-
-      // Find sessions starting in 15-30 minutes
-      const sessions = await SessionMentor.find({
-        scheduledAt: {
-          $gte: in15Min,
-          $lt: in30Min,
-        },
-        status: BookingStatus.CONFIRMED,
-      });
-
-      logger.info(`ðŸ“§ Sending 15-minute reminders for ${sessions.length} sessions`);
-
-      for (const session of sessions) {
-        try {
-          // Get user and mentor details
-          const [user, mentor] = await Promise.all([
-            User.findByUserId(session.menteeId),
-            User.findByUserId(session.mentorId),
-          ]);
-
-          if(!user || !mentor) throw new NotFoundError("user and mentor not found")
-
-          // Send email
-          await emailService.sendEmail({
-            to: user.email,
-            subject: 'ðŸš€ Session Starting Soon - Join Now!',
-            html: `
-              <h2>Your session is starting soon!</h2>
-              <p>Hi ${user.fullName || user.email},</p>
-              <p>Your session with <strong>${mentor.fullName || mentor.email}</strong> is starting in 15 minutes!</p>
-              <p><strong>Time:</strong> ${session.scheduledAt.toLocaleTimeString()}</p>
-              ${session.meeting?.meetingUrl ? `
-                <p><strong>Join Now:</strong></p>
-                <a href="${session.meeting.meetingUrl}" style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                  Join Meeting
-                </a>
-              ` : ''}
-              <p>See you there! ðŸŽ¯</p>
-            `,
-          });
-
-          // Send SMS
-          if (user.phoneNumber) {
-            await smsService.sendSMS({
-              to: user.phoneNumber,
-              message: `ðŸš€ Your session starts in 15 minutes! ${session.meeting?.meetingUrl ? `Join now: ${session.meeting.meetingUrl}` : ''}`,
-            });
-          }
-
-              // ✅ NEW: in-app reminder for both mentee and mentor
-              NotificationService.sendNotification({
-                userId: user.userId,
-                type: NotificationType.SESSION_REMINDER,
-                channels: [NotificationChannel.IN_APP],
-                data: {
-                  title: 'Session Starting Soon',
-                  message: `Your session with ${mentor.fullName || mentor.email} starts in 15 minutes.`,
-                },
-              }).catch((e) => logger.error('In-app reminder failed (15min → mentee):', e));
-    
-              NotificationService.sendNotification({
-                userId: mentor.userId,
-                type: NotificationType.SESSION_REMINDER,
-                channels: [NotificationChannel.IN_APP],
-                data: {
-                  title: 'Session Starting Soon',
-                  message: `Your session with ${user.fullName || user.email} starts in 15 minutes.`,
-                },
-              }).catch((e) => logger.error('In-app reminder failed (15min → mentor):', e));
-    
-              logger.info(`âœ… 15-minute reminder sent for session: ${session._id}`);
-            } catch(error : any) {
-              logger.error(`Failed to send 15-minute reminder for session ${session._id}:`, error);
+            if (!user || !mentor) {
+              logger.warn(`Skipping ${opts.label} reminder: user or mentor not found`, {
+                sessionId: session.sessionId,
+                bookingId: String(booking._id),
+                menteeId,
+                mentorId: session.mentorId,
+              });
+              continue;
             }
+
+            // ✅ FIX: atomic claim — sirf ek hi run/instance isko claim karega
+            const claim = await SessionMentor.updateOne(
+              {
+                sessionId: session.sessionId,
+                bookings: { $elemMatch: { _id: booking._id, [flagPath]: { $ne: true } } },
+              } as any,
+              { $set: { [`bookings.$.${flagPath}`]: true } } as any
+            );
+            if (claim.modifiedCount === 0) continue; // kisi aur run ne pehle claim kar liya
+
+            await emailService.sendEmail({
+              to: user.email,
+              subject: opts.subject,
+              html: opts.buildHtml(user, mentor, session),
+            });
+
+            if (opts.sendSms && user.phoneNumber && opts.smsText) {
+              await smsService.sendSMS({
+                to: user.phoneNumber,
+                message: opts.smsText(user, mentor, session),
+              });
+            }
+
+            NotificationService.sendNotification({
+              userId: user.userId,
+              type: NotificationType.SESSION_REMINDER,
+              channels: [NotificationChannel.IN_APP],
+              data: {
+                title: opts.label,
+                message: `Your session with ${mentor.fullName || mentor.email} — ${opts.label.toLowerCase()}.`,
+              },
+            }).catch((e) => logger.error(`In-app reminder failed (${opts.flagKey} → mentee):`, e));
+
+            NotificationService.sendNotification({
+              userId: mentor.userId,
+              type: NotificationType.SESSION_REMINDER,
+              channels: [NotificationChannel.IN_APP],
+              data: {
+                title: opts.label,
+                message: `Your session with ${user.fullName || user.email} — ${opts.label.toLowerCase()}.`,
+              },
+            }).catch((e) => logger.error(`In-app reminder failed (${opts.flagKey} → mentor):`, e));
+
+            logger.info(`✅ ${opts.label} reminder sent — session ${session.sessionId} / booking ${booking._id}`);
+          } catch (error: any) {
+            logger.error(`Failed ${opts.label} reminder for booking ${booking._id}:`, error);
           }
-        } catch(error : any) {
-          logger.error('Error sending 15-minute reminders:', error);
         }
       }
+    } catch (error: any) {
+      logger.error(`Error sending ${opts.label} reminders:`, error);
+    }
+  }
 
+  private static async send24HourReminders(): Promise<void> {
+    await this.sendWindowReminder({
+      fromMin: 24 * 60,
+      toMin: 24 * 60 + 15,
+      flagKey: 'h24',
+      label: 'Session Tomorrow',
+      sendSms: false,
+      subject: '📅 Session Reminder - Tomorrow',
+      buildHtml: (user, mentor, session) => `
+        <h2>Your session is tomorrow!</h2>
+        <p>Hi ${user.fullName || user.email},</p>
+        <p>This is a reminder that you have a session scheduled with <strong>${mentor.fullName || mentor.email}</strong> tomorrow.</p>
+        <ul>
+          <li>Type: ${session.sessionType}</li>
+          <li>Date: ${session.scheduledAt.toLocaleDateString()}</li>
+          <li>Time: ${session.scheduledAt.toLocaleTimeString()}</li>
+          <li>Duration: ${session.duration} minutes</li>
+        </ul>
+        ${session.meeting?.meetingUrl ? `<p><strong>Meeting Link:</strong> <a href="${session.meeting.meetingUrl}">${session.meeting.meetingUrl}</a></p>` : ''}
+        <p>Need to reschedule? Contact your mentor.</p>
+      `,
+    });
+  }
+
+  private static async send1HourReminders(): Promise<void> {
+    await this.sendWindowReminder({
+      fromMin: 60,
+      toMin: 75,
+      flagKey: 'h1',
+      label: 'Session in 1 Hour',
+      sendSms: true,
+      subject: '⏰ Session Starting in 1 Hour!',
+      buildHtml: (user, mentor, session) => `
+        <h2>Your session starts in 1 hour!</h2>
+        <p>Hi ${user.fullName || user.email},</p>
+        <p>Your session with <strong>${mentor.fullName || mentor.email}</strong> starts in 1 hour.</p>
+        <ul>
+          <li>Type: ${session.sessionType}</li>
+          <li>Time: ${session.scheduledAt.toLocaleTimeString()}</li>
+          <li>Duration: ${session.duration} minutes</li>
+        </ul>
+        ${session.meeting?.meetingUrl ? `<p><strong>Join Meeting:</strong> <a href="${session.meeting.meetingUrl}">${session.meeting.meetingUrl}</a></p>` : ''}
+        <p>Get ready! 🚀</p>
+      `,
+      smsText: (user, mentor, session) =>
+        `⏰ Your session with ${mentor.fullName || mentor.email} starts in 1 hour! ${session.meeting?.meetingUrl ? `Join: ${session.meeting.meetingUrl}` : ''}`,
+    });
+  }
+
+  private static async send15MinuteReminders(): Promise<void> {
+    await this.sendWindowReminder({
+      fromMin: 15,
+      toMin: 30,
+      flagKey: 'm30',
+      label: 'Session Starting Soon',
+      sendSms: true,
+      subject: '🚀 Session Starting Soon - Join Now!',
+      buildHtml: (user, mentor, session) => `
+        <h2>Your session is starting soon!</h2>
+        <p>Hi ${user.fullName || user.email},</p>
+        <p>Your session with <strong>${mentor.fullName || mentor.email}</strong> is starting soon!</p>
+        <p><strong>Time:</strong> ${session.scheduledAt.toLocaleTimeString()}</p>
+        ${session.meeting?.meetingUrl ? `
+          <p><strong>Join Now:</strong></p>
+          <a href="${session.meeting.meetingUrl}" style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
+            Join Meeting
+          </a>
+        ` : ''}
+        <p>See you there! 🎯</p>
+      `,
+      smsText: (user, mentor, session) =>
+        `🚀 Your session starts soon! ${session.meeting?.meetingUrl ? `Join now: ${session.meeting.meetingUrl}` : ''}`,
+    });
+  }
   /**
    * Manual trigger for testing
    */

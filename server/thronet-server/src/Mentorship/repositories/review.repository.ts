@@ -13,6 +13,7 @@ interface LeanUser {
     firstName?: string;
     lastName?: string;
     profilePhotoId?: string;
+    title?: string;
 }
 
 interface LeanMentor {
@@ -94,7 +95,7 @@ class ReviewRepository {
             if (mentor && mentor.userId) {
                 mentorUser = await User.findOne(
                     { userId: mentor.userId },
-                    { firstName: 1, lastName: 1, profilePhotoId: 1 }
+                    { firstName: 1, lastName: 1, profilePhotoId: 1, title: 1 }
                 ).lean() as LeanUser | null;
             }
 
@@ -113,7 +114,7 @@ class ReviewRepository {
                 if (orConditions.length > 0) {
                     users = await User.find(
                         { $or: orConditions },
-                        { userId: 1, firstName: 1, lastName: 1, profilePhotoId: 1 }
+                        { userId: 1, firstName: 1, lastName: 1, profilePhotoId: 1, title: 1 }
                     ).lean() as LeanUser[];
 
                     const photoIds = users.map(u => u.profilePhotoId).filter(Boolean) as string[];
@@ -143,21 +144,21 @@ class ReviewRepository {
             });
 
             reviews.forEach(review => {
-                const user = review.menteeId ? userMap.get(review.menteeId) : undefined;
+                const user = review.menteeId ? userMap.get(review.menteeId as unknown as string) : undefined;
                 if (user) {
-                    review.mentee = {
-                        firstName: user.firstName,
-                        lastName: user.lastName,
-                        profilePhotoId: user.profilePhotoId ? (photoMap.get(user.profilePhotoId) || user.profilePhotoId) : null
-                    };
+                    review.menteeId = {
+                        fullName: `${user.firstName} ${user.lastName}`.trim(),
+                        profilePic: user.profilePhotoId ? (photoMap.get(user.profilePhotoId) || user.profilePhotoId) : null,
+                        title: user.title // if available
+                    } as any;
                 }
 
                 if (mentorUser) {
-                    review.mentor = {
-                        firstName: mentorUser.firstName,
-                        lastName: mentorUser.lastName,
-                        profilePhotoId: mentor?.profilePic || (mentorUser.profilePhotoId ? (photoMap.get(mentorUser.profilePhotoId) || mentorUser.profilePhotoId) : null)
-                    };
+                    review.mentorId = {
+                        fullName: `${mentorUser.firstName} ${mentorUser.lastName}`.trim(),
+                        profilePic: mentor?.profilePic || (mentorUser.profilePhotoId ? (photoMap.get(mentorUser.profilePhotoId) || mentorUser.profilePhotoId) : null),
+                        title: mentorUser.title // if available
+                    } as any;
                 }
             });
         }

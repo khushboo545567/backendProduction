@@ -146,7 +146,7 @@ async function initializeApp(): Promise<void> {
     // ========================================================
 
     logger.info('STEP 4: Starting Notification Service...');
-
+    
     try {
       const notificationInitialized =
         await NotificationService.initialize();
@@ -173,6 +173,37 @@ async function initializeApp(): Promise<void> {
               : undefined,
         }
       );
+    }
+
+        // ========================================================
+    // STEP 5.5 — SCHEDULED JOBS (SESSION REMINDER CRON)
+    // ========================================================
+
+    logger.info('STEP 4.5: Starting scheduled jobs...');
+
+    try {
+      const { default: ReminderCron } = await import('./src/jobs/reminderCron');
+      ReminderCron.init();
+      logger.info('Session reminder cron initialized');
+
+      // TEMP (sirf testing ke liye, baad mein hata dena)
+      ReminderCron.triggerManually().catch(console.error);
+    } catch (error: any) {
+      logger.error('Session reminder cron failed to initialize (non-critical)', {
+        error: error instanceof Error ? error.message : 'Unknown cron error',
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
+
+    try {
+      const { default: waitlistCron } = await import('./src/jobs/waitlistCron');
+      waitlistCron.init();
+      logger.info('Waitlist cron initialized');
+    } catch (error: any) {
+      logger.error('Waitlist cron failed to initialize (non-critical)', {
+        error: error instanceof Error ? error.message : 'Unknown waitlist cron error',
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
 
     // ========================================================

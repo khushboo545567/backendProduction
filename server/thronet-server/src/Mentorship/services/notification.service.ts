@@ -41,6 +41,7 @@ export enum NotificationType {
   // ✅ NEW — query flow had no notification at all before this
   QUERY_RECEIVED = 'query_received',
   QUERY_ANSWERED = 'query_answered',
+  PROFILE_VIEWED = 'profile_viewed',
 }
 
 export enum NotificationChannel {

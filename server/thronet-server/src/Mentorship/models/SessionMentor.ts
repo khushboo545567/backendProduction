@@ -103,6 +103,9 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         reminders: {
           m15: { type: Boolean, default: false },
           m5:  { type: Boolean, default: false },
+          h24: { type: Boolean, default: false },   // 24-hour reminder
+          h1:  { type: Boolean, default: false },   // 1-hour reminder
+          m30: { type: Boolean, default: false },
         },
         startedAt:      { type: Date },
         payment: {
@@ -337,6 +340,16 @@ SessionMentorSchema.methods.rescheduleSession = async function (
   this.scheduledAt = newScheduledAt;
   if (this.bookings && this.bookings.length > 0) {
     this.bookings[0].scheduledAt = newScheduledAt;
+     // ✅ NEW: reschedule pe saare reminder flags reset karo,
+    // warna naye time ka koi reminder nahi jayega
+    this.bookings[0].reminders = {
+      m15: false,
+      m5: false,
+      h24: false,
+      h1: false,
+      m30: false,
+    };
+    this.markModified('bookings');
   }
   this.reschedule.count += 1;
   this.reschedule.lastRescheduledAt = new Date();

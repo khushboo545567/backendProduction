@@ -5,6 +5,8 @@ import { Mentor, MentorshipReview, SessionMentor } from "../models";
 import reviewRepository from "../repositories/review.repository";
 import { generateSecureId } from "@/shared/security";
 import { TrustScoreEvents } from '../events/trustScore.events';
+import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
+
 
 
 
@@ -80,6 +82,23 @@ class ReviewService {
         reviewId: review.reviewId,
         timestamp: new Date()
       });
+
+      try {
+        const mentorDoc = await Mentor.findOne({ mentorId: input.mentorId, isDeleted: false });
+        if (mentorDoc && mentorDoc.userId && mentorDoc.userId !== input.menteeId) {
+          NotificationService.sendNotification({
+            userId: mentorDoc.userId,
+            type: NotificationType.REVIEW_RECEIVED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'New Review',
+              message: `You received a new review with a rating of ${input.rating}★.`,
+            },
+          }).catch((e) => logger.error('Notification failed (submitReview):', e));
+        }
+      } catch (notifErr: any) {
+        logger.warn(`⚠️ Failed to send review notification: ${notifErr.message}`);
+      }
 
       logger.info(`✅ Review submitted: ${review._id}`);
 

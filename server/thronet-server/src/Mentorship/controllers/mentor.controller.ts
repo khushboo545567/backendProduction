@@ -14,6 +14,9 @@ import { TrustScoreService } from '@/Mentorship/services/trustScore.service';
 import mentorRepository from '@/Mentorship/repositories/mentor.repository';
 import { TrustScoreCalculator } from '../utils/trustScoreCalculator';
 import MentorshipAnalytics from '@/Mentorship/models/mentorshipAnalytics';
+import { User } from '@/auth/models';
+import { Notification } from '@/Mentorship/models';
+import notificationService, { NotificationType, NotificationChannel } from '../services/notification.service';
 
 class MentorController {
   /**
@@ -115,6 +118,7 @@ class MentorController {
         logger.error('Failed to record mentor profile view:', err)
       );
 
+
       if (mentor && req.user?.id) {
         const savedBy: string[] = mentor.savedBy || [];
         mentor.isSavedByCurrentUser = savedBy.includes(req.user.id);
@@ -136,6 +140,75 @@ class MentorController {
       const { userId } = req.params;
       const authToken = req.headers.authorization?.split(' ')[1];
       const mentor = await mentorService.getMentorByUserId(userId, authToken);
+
+      // ✅ Profile Viewed in-app notification (fire-and-forget, non-blocking)
+      try {
+        let viewerId: string | undefined = req.user?.id || (req.user as any)?.userId;
+        if (!viewerId && authToken) {
+          try {
+            const decoded = User.verifyToken(authToken) as any;
+            viewerId = decoded?.userId || decoded?.id;
+          } catch {
+            // invalid or expired token -> viewer remains anonymous
+          }
+        }
+
+        const mentorUserId = userId; // Directly from req.params.userId
+
+        // Only notify if viewer is logged in and not the mentor themselves (self-view)
+        if (mentorUserId && viewerId && viewerId !== mentorUserId) {
+          (async () => {
+            let viewerName = 'Someone';
+
+try {
+  const viewer = await User.findByUserId(viewerId);
+
+  if (viewer) {
+    viewerName =
+      viewer.fullName ||
+      viewer.email ||
+      viewer.firstName ||
+      'Someone';
+  }
+} catch (err) {
+  logger.error('Failed to resolve profile viewer:', err);
+}
+            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const alreadyNotified = await Notification.findOne({
+              userId: mentorUserId,
+              type: NotificationType.PROFILE_VIEWED,
+              'data.viewerId': viewerId,
+              createdAt: { $gte: twentyFourHoursAgo },
+            }).lean();
+
+            if (alreadyNotified) {
+              logger.info(`Profile view notification deduped: mentor ${mentorUserId}, viewer ${viewerId}`);
+              return;
+            }
+
+            try {
+              await notificationService.sendNotification({
+                userId: mentorUserId,
+                type: NotificationType.PROFILE_VIEWED,
+                channels: [NotificationChannel.IN_APP],
+                priority: 'low',
+                data: {
+                  title: 'Profile Viewed',
+                message: `${viewerName} viewed your profile.`,
+                  viewerId,
+                },
+              });
+              logger.info(`✅ Profile view notification sent to mentor ${mentorUserId}`);
+            } catch (err: any) {
+              logger.error('Failed to send profile view notification: ', err);
+            }
+          })().catch((err: any) =>
+            logger.error('Failed to process profile view notification:', err)
+          );
+        }
+      } catch (err: any) {
+        logger.error('Error in profile view notification check:', err);
+      }
 
       ResponseHandler.success(res, 'Mentor profile fetched successfully', mentor);
     } catch (error: any) {

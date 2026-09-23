@@ -1062,6 +1062,11 @@ class MentorshipSessionService {
         $set: {
           'bookings.$.status': BookingStatus.RESCHEDULED,
           'bookings.$.scheduledAt': newScheduledAt,
+          'bookings.$.reminders.m15': false,
+          'bookings.$.reminders.m5': false,
+          'bookings.$.reminders.h24': false,
+          'bookings.$.reminders.h1': false,
+          'bookings.$.reminders.m30': false,
           'reschedule.lastRescheduledAt': new Date(),
           'reschedule.rescheduledBy': userId,
           'reschedule.reason': reason || 'Rescheduled by user'

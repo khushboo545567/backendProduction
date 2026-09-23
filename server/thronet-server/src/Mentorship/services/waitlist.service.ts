@@ -81,6 +81,26 @@ class WaitlistService {
       const mentorName = mentorUser?.fullName || mentorUser?.email || 'your mentor';
       const what = entry.serviceTitle || entry.sessionType;
 
+      // ✅ In-app notification for slot available
+      try {
+        await notificationService.sendNotification({
+          userId: user.userId,
+          type: NotificationType.WAITLIST_AVAILABLE,
+          channels: [NotificationChannel.IN_APP],
+          priority: 'high',
+          data: {
+            title: 'Slot Available!',
+            message: `A spot with ${mentorName} just opened up. Book within 48h.`,
+            mentorName,
+            serviceTitle: entry.serviceTitle,
+            sessionType: entry.sessionType,
+            waitlistId: entry.waitlistId,
+          },
+        });
+      } catch (inAppErr: any) {
+        logger.warn(`Failed to send in-app waitlist notification: ${inAppErr.message}`);
+      }
+
       await emailService.sendEmail({
         to: user.email,
         subject: '🎉 Slot Available — Book Now!',

@@ -81,6 +81,7 @@ const NotificationSchema = new Schema<INotification>(
         'query_received',
 
         // User notifications
+        'profile_viewed',
         'profile_updated',
         'password_changed',
         'email_verified',
