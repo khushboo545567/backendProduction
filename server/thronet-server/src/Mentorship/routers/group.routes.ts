@@ -164,6 +164,61 @@ router.get('/upcoming', groupController.getUpcomingGroupSessions);
 router.get('/my-sessions', AuthMiddleware.authenticate as any, groupController.getMyGroupSessions);
 
 /**
+ * @route   GET /api/v1/group-sessions/mentor/participants
+ * @desc    Group-session participants for the logged-in mentor — powers Booking dashboard
+ * @access  Private (Mentor)
+ *
+ * ⚠️ Must be declared BEFORE the generic '/:id' route below — otherwise
+ * Express would try to treat "mentor" as the :id param for that route
+ * instead of matching this one (multi-segment paths like this one still
+ * need to come first to be safe with future single-segment additions).
+ */
+router.get(
+  '/mentor/participants',
+  AuthMiddleware.authenticate as any,
+  groupController.getMentorGroupParticipants
+);
+
+/**
+ * @route   GET /api/v1/group-sessions/mentor/join-requests
+ * @desc    All PENDING join requests across the mentor's group sessions —
+ *          powers the Pending tab / Pending stat card in the Booking
+ *          dashboard (BookingsPage.tsx → SessionService.getMentorGroupJoinRequests()).
+ * @access  Private (Mentor)
+ *
+ * ✅ FIX: this route was missing entirely even though
+ * groupController.getMentorJoinRequests already existed — the frontend
+ * call was hitting a 404 (silently swallowed by BookingsPage's .catch()),
+ * so the Pending tab always showed 0 despite notifications firing
+ * correctly on join request creation.
+ */
+router.get(
+  '/mentor/join-requests',
+  AuthMiddleware.authenticate as any,
+  groupController.getMentorJoinRequests
+);
+
+/**
+ * @route   GET /api/v1/group-sessions/:id/request
+ * @desc    Get the logged-in mentee's own join-request status for a
+ *          session — powers the Join Group / Request Pending / Joined
+ *          button state on the mentor-card page.
+ * @access  Private (Mentee)
+ *
+ * ⚠️ Must also be declared BEFORE the generic '/:id' route below, or
+ * a request to "/SOME_SESSION_ID/request" would never reach this handler
+ * since Express matches routes top-to-bottom and '/:id' only captures a
+ * single path segment (so it wouldn't itself swallow this two-segment
+ * path — but keeping it above keeps intent clear and avoids any future
+ * regression if '/:id' is ever changed to a wildcard).
+ */
+router.get(
+  '/:id/request',
+  AuthMiddleware.authenticate as any,
+  groupController.getMyJoinRequestStatus
+);
+
+/**
  * @route   GET /api/v1/group-sessions/:id
  * @desc    Get group session details by ID
  * @access  Private
@@ -251,17 +306,6 @@ router.post(
   AuthMiddleware.authenticate as any,
   validateJoi(addFeedbackValidator),
   groupController.addFeedback
-);
-
-/**
- * @route   GET /api/v1/group-sessions/mentor/participants
- * @desc    Group-session participants for the logged-in mentor — powers Booking dashboard
- * @access  Private (Mentor)
- */
-router.get(
-  '/mentor/participants',
-  AuthMiddleware.authenticate as any,
-  groupController.getMentorGroupParticipants
 );
 
 router.patch(
