@@ -1,4 +1,4 @@
-// src/Mentorship/services/group.service.ts
+//src/Mentorship/services/group.service.ts
 import { logger } from "@/shared/logger.util";
 import { NotFoundError, BadRequestError, ForbiddenError } from "@/shared/errors/app.error";
 import { GroupSession } from "../models";
@@ -873,16 +873,18 @@ class GroupService {
     }
   }
 
-  /**
-   * Group-session participants across a mentor's sessions, enriched into
-   * the same row shape BookingsPage.tsx already uses for 1:1 bookings —
-   * this is what's needed to make group joins show up as actionable rows
-   * in the mentor's Booking dashboard (currently they don't show up there
-   * at all, only as a bare count on the Services tab).
+   /**
+   * Group-session participants across a mentor's sessions — grouped into
+   * ONE row per session (not one row per participant), each row carrying
+   * the full accepted-participant list so the mentor's Booking dashboard
+   * can show "2/7 Enrolled" plus a "View Participants" list, instead of
+   * spawning a duplicate table row per student in the same session.
    *
-   * Only ACCEPTED participants are surfaced here — pending
-   * requests belong in the Join Requests panel (getPendingJoinRequestsForMentor),
-   * not in the confirmed-bookings list.
+   * Only ACCEPTED participants are counted/listed here — pending
+   * requests belong in the Join Requests panel
+   * (getPendingJoinRequestsForMentor), not in the confirmed-bookings list.
+   * Sessions with zero accepted participants are skipped — nothing for
+   * the mentor to manage yet on those.
    */
   async getGroupSessionParticipantsForMentor(userId: string): Promise<any[]> {
     try {
@@ -893,31 +895,65 @@ class GroupService {
         .sort({ scheduledAt: -1 })
         .lean();
 
+      // Collect all accepted menteeIds across every session in one batch,
+      // so we hit the User collection once instead of once per session.
+      const menteeIds = new Set<string>();
+      for (const session of sessions) {
+        for (const participant of (session as any).participants || []) {
+          if (participant.requestStatus === 'accepted') {
+            menteeIds.add(participant.menteeId);
+          }
+        }
+      }
+
+      let userMap = new Map<string, any>();
+      if (menteeIds.size > 0) {
+        const users = await User.find({ userId: { $in: Array.from(menteeIds) } })
+          .select('userId firstName lastName email profilePhotoId')
+          .lean();
+        userMap = new Map(users.map((u: any) => [u.userId, u]));
+      }
+
       const rows: any[] = [];
 
       for (const session of sessions) {
-        for (const participant of (session as any).participants || []) {
-          if (participant.requestStatus !== 'accepted') continue;
+        const accepted = ((session as any).participants || []).filter(
+          (p: any) => p.requestStatus === 'accepted'
+        );
 
-          rows.push({
-            bookingId: `${session.sessionId}-${participant.menteeId}`,
-            sessionId: session.sessionId,
-            menteeId: participant.menteeId,
-            serviceName: `${session.title} (Group Session)`,
-            scheduledAt: session.scheduledAt,
-            status:
-              session.status === 'cancelled'
-                ? 'cancelled'
-                : participant.attendanceStatus === 'attended'
-                ? 'completed'
-                : session.status === 'in_progress'
-                ? 'in_progress'
-                : 'confirmed',
-            isGroupSession: true,
-            registeredAt: participant.registeredAt,
-            paymentStatus: participant.paymentStatus,
-          });
-        }
+        if (accepted.length === 0) continue;
+
+        const participants = accepted.map((p: any) => {
+          const u = userMap.get(p.menteeId);
+          return {
+            menteeId: p.menteeId,
+            menteeName:
+              (u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : '') ||
+              u?.email ||
+              'Student',
+            menteeProfilePhoto: u?.profilePhotoId || null,
+            attendanceStatus: p.attendanceStatus,
+            registeredAt: p.registeredAt,
+          };
+        });
+
+        rows.push({
+          sessionId: session.sessionId,
+          serviceName: `${session.title} (Group Session)`,
+          scheduledAt: session.scheduledAt,
+          maxParticipants: session.maxParticipants,
+          enrolledCount: accepted.length,
+          status:
+            session.status === 'cancelled'
+              ? 'cancelled'
+              : session.status === 'completed'
+              ? 'completed'
+              : session.status === 'in_progress'
+              ? 'in_progress'
+              : 'confirmed',
+          isGroupSession: true,
+          participants,
+        });
       }
 
       return rows;
@@ -926,7 +962,6 @@ class GroupService {
       throw error;
     }
   }
-
 
 }
 
