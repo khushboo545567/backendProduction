@@ -259,6 +259,20 @@ router.post(
 );
 
 /**
+ * @route   POST /api/v1/group-sessions/:id/request
+ * @desc    Mentee sends a request to join a group session (creates a
+ *          PENDING request — mentor approval required). Same handler as
+ *          /:id/join so both existing and new frontend callers work.
+ * @access  Private (Mentee)
+ */
+router.post(
+  '/:id/request',
+  AuthMiddleware.authenticate as any,
+  validateJoi(joinGroupSessionValidator),
+  groupController.joinGroupSession
+);
+
+/**
  * @route   POST /api/v1/group-sessions/:id/leave
  * @desc    Leave a group session
  * @access  Private (Mentee)
