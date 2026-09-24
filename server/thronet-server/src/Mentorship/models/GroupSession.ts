@@ -338,13 +338,19 @@ GroupSessionSchema.virtual('spotsRemaining').get(function (this: GroupSessionDoc
   return Math.max(0, this.maxParticipants - acceptedCount);
 });
 
+// ✅ CHANGED: start window ab scheduledAt se 5 min PEHLE se lekar
+// scheduledAt ke 10 min BAAD tak hai. Participant-count check pehle hi
+// hata diya gaya tha — mentor kam logon ke sath bhi start kar sakta hai.
 GroupSessionSchema.virtual('canStart').get(function (this: GroupSessionDocument) {
-  return (
-    this.status === 'open' &&
-    this.hasMinParticipants &&
-    new Date() >= new Date(this.scheduledAt.getTime() - 15 * 60 * 1000)
-  );
+  const scheduledTime = this.scheduledAt.getTime();
+  const earliestStart = scheduledTime - 5 * 60 * 1000;  // scheduled time se 5 min pehle se allowed
+  const latestStart = scheduledTime + 10 * 60 * 1000;   // scheduled time ke 10 min baad tak allowed
+  const now = Date.now();
+
+  return this.status === 'open' && now >= earliestStart && now <= latestStart;
 });
+
+
 
 // Instance Methods
 
@@ -512,13 +518,33 @@ GroupSessionSchema.methods.rejectParticipant = async function (
 GroupSessionSchema.methods.startSession = async function (
   this: GroupSessionDocument
 ): Promise<GroupSessionDocument> {
-  if (!this.canStart) {
-    throw new Error('Cannot start session: minimum participants not met');
+  // ✅ FIX: start window ab scheduledAt se 5 min pehle se lekar 10 min
+  // baad tak hai.
+  if (this.status !== 'open') {
+    throw new Error(`Cannot start session: session status is "${this.status}", expected "open"`);
+  }
+
+  const scheduledTime = this.scheduledAt.getTime();
+  const earliestStart = scheduledTime - 5 * 60 * 1000;
+  const latestStart = scheduledTime + 10 * 60 * 1000;
+  const now = Date.now();
+
+  if (now < earliestStart) {
+    const minsUntil = Math.ceil((earliestStart - now) / 60000);
+    throw new Error(`Cannot start session yet: you can start up to 5 minutes before the scheduled time (${minsUntil} min remaining).`);
+  }
+
+  if (now > latestStart) {
+    throw new Error('Cannot start session: the 10-minute window after the scheduled time has passed. Please reschedule this session.');
   }
 
   this.status = 'in_progress';
   return await this.save();
 };
+
+
+
+
 
 GroupSessionSchema.methods.completeSession = async function (
   this: GroupSessionDocument,

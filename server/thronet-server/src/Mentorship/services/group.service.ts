@@ -604,14 +604,11 @@ class GroupService {
         throw new ForbiddenError('Only the mentor can start this session');
       }
 
-      if (session.currentParticipants < session.minParticipants) {
-        throw new BadRequestError(
-          `Minimum ${session.minParticipants} participants required`,
-        );
-      }
-
+      // ✅ FIX: mentor ko decide karne do — kam participants ke sath bhi
+      // session start ho sakti hai. Sirf time-window ab startSession()
+      // ke andar model level pe check hota hai (15 min pehle se scheduled
+      // time ke 5 min baad tak).
       await session.startSession();
-
       logger.info(`Group session started: ${sessionId}`);
 
       // notifyParticipants already filters to requestStatus === 'accepted'
