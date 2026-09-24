@@ -535,6 +535,18 @@ class GroupService {
     }
   }
 
+  /**
+   * Leave a group session (mentee-initiated cancellation).
+   *
+   * ✅ FIX: the 24-hour lock-in only makes sense for a participant who
+   * actually holds a CONFIRMED seat (requestStatus === 'accepted'). A
+   * mentee whose join request is still PENDING — never accepted by the
+   * mentor, never occupying a seat, never counted in currentParticipants —
+   * must always be able to cancel that request, even inside the 24-hour
+   * window. Previously this check ran unconditionally, so a mentee with a
+   * pending request on a session starting soon could never cancel it
+   * (the "Cancel Request" button in the UI would just throw).
+   */
   async leaveGroupSession(
     sessionId: string,
     menteeId: string,
@@ -551,34 +563,43 @@ class GroupService {
         throw new BadRequestError('Not registered for this session');
       }
 
-      const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
+      const wasAccepted = participant.requestStatus === 'accepted';
 
-      if (hoursDiff < 24) {
-        throw new BadRequestError('Cannot leave within 24 hours of session');
+      if (wasAccepted) {
+        const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
+
+        if (hoursDiff < 24) {
+          throw new BadRequestError('Cannot leave within 24 hours of session');
+        }
       }
 
       await session.removeParticipant(menteeId);
 
       logger.info(`User ${menteeId} left group session: ${sessionId}`);
 
-      (async () => {
-        try {
-          const mentorProfile = await mentorRepository.findByMentorId(session.mentorId);
-          if (!mentorProfile?.userId) return;
+      // Only notify the mentor when an actual accepted seat was freed — a
+      // pending request being cancelled never occupied a seat, so there's
+      // nothing for the mentor to act on here.
+      if (wasAccepted) {
+        (async () => {
+          try {
+            const mentorProfile = await mentorRepository.findByMentorId(session.mentorId);
+            if (!mentorProfile?.userId) return;
 
-          await NotificationService.sendNotification({
-            userId: mentorProfile.userId,
-            type: NotificationType.SESSION_CANCELLED,
-            channels: [NotificationChannel.IN_APP],
-            data: {
-              title: 'Group Session Seat Freed',
-              message: `A mentee left "${session.title}". ${session.currentParticipants}/${session.maxParticipants} seats filled.`,
-            },
-          });
-        } catch (notifyErr: any) {
-          logger.error('Notification failed (leaveGroupSession → mentor):', notifyErr);
-        }
-      })();
+            await NotificationService.sendNotification({
+              userId: mentorProfile.userId,
+              type: NotificationType.SESSION_CANCELLED,
+              channels: [NotificationChannel.IN_APP],
+              data: {
+                title: 'Group Session Seat Freed',
+                message: `A mentee left "${session.title}". ${session.currentParticipants}/${session.maxParticipants} seats filled.`,
+              },
+            });
+          } catch (notifyErr: any) {
+            logger.error('Notification failed (leaveGroupSession → mentor):', notifyErr);
+          }
+        })();
+      }
 
       // TODO: Process refund
 
