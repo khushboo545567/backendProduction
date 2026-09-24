@@ -279,20 +279,31 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
   // socket.io removes the socket from all rooms automatically on disconnect,
   // but it does NOT emit 'leave-live-room' for us — so without this, other
   // peers never learn this user actually left (stale UI/session state).
-  socket.on('disconnect', async () => {
+   // 'disconnecting' use karo, 'disconnect' nahi: disconnect tak socket.rooms khali ho jata hai,
+  // isliye purana handler kabhi kuch emit nahi karta tha.
+  socket.on('disconnecting', async () => {
     try {
+      // await se pehle sync capture karo
       const rooms = Array.from(socket.rooms || []).filter((r) =>
         r.startsWith('live-room:')
       );
       for (const room of rooms) {
         const roomId = room.replace('live-room:', '');
-        const remainingSockets = await io.in(room).fetchSockets();
-        // fetchSockets() runs after socket.io's internal room cleanup,
-        // so this socket is already excluded from the count.
-        if (remainingSockets.length === 0) {
+        // Is waqt ye socket abhi room me hai, isliye filter karna zaroori hai
+        const remaining = (await io.in(room).fetchSockets()).filter(
+          (s) => s.id !== socket.id
+        );
+
+        if (remaining.length === 0) {
           roomSessions.delete(roomId);
           LoggerUtil.info(`Cleared study session for empty room ${roomId} (disconnect)`);
         }
+
+        // Same user ka naya socket (rejoin) room me hai to "left" mat bhejo,
+        // warna peers naya working connection tod denge.
+        const stillPresent = remaining.some((s: any) => s.data?.userId === userId);
+        if (stillPresent) continue;
+
         socket.to(room).emit('user-left-room', {
           userId,
           userName,
