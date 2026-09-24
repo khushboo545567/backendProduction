@@ -4,8 +4,12 @@ import { NotFoundError, BadRequestError, ForbiddenError } from "@/shared/errors/
 import { GroupSession } from "../models";
 import { generateSecureId } from "@/shared/security";
 import groupRepository from "../repositories/group.repository";
+
 import mentorRepository from "../repositories/mentor.repository";
+import availabilityRepository from "../repositories/availability.repository";
+import availabilityService from "./availability.service";
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
+
 import mongoose from 'mongoose';
 import { TrustScoreEvents } from '../events/trustScore.events';
 import { User } from '@/shared/models/index.models';
@@ -20,7 +24,7 @@ interface CreateGroupSessionInput {
   description: string;
   topic: string;
   category?: string;
-  scheduledAt: Date;
+  scheduledAt?: Date;   // ✅ CHANGED: optional — isTemplate: true pe absent hota hai
   duration: number;
   timezone: string;
   maxParticipants: number;
@@ -34,7 +38,9 @@ interface CreateGroupSessionInput {
     periodDays: number;
   };
   bufferTimeMinutes?: number;
+  isTemplate?: boolean;   // ✅ NEW
 }
+
 
 class GroupService {
   private async uploadImageToCloudinary(buffer: Buffer, identifier: string): Promise<string> {
@@ -112,9 +118,19 @@ class GroupService {
         throw new NotFoundError('Mentor profile not found for this user');
       }
 
-      const scheduledDate = new Date(input.scheduledAt);
-      if (scheduledDate <= new Date()) {
-        throw new BadRequestError('Scheduled time must be in the future');
+      // ✅ CHANGED: template (isTemplate: true) ke paas fixed scheduledAt
+      // hota hi nahi — is validation aur date-parsing ko skip karo. Sirf
+      // fixed-date group session (legacy / isTemplate: false) ke liye hi
+      // future-date check chalta hai.
+      let scheduledDate: Date | undefined = undefined;
+      if (!input.isTemplate) {
+        if (!input.scheduledAt) {
+          throw new BadRequestError('Scheduled time is required for a fixed-date group session');
+        }
+        scheduledDate = new Date(input.scheduledAt);
+        if (scheduledDate <= new Date()) {
+          throw new BadRequestError('Scheduled time must be in the future');
+        }
       }
 
       let thumbnailUrl: string | undefined = undefined;
@@ -131,6 +147,7 @@ class GroupService {
         topic: input.topic,
         category: input.category,
         scheduledAt: scheduledDate,
+        isTemplate: !!input.isTemplate,
         duration: input.duration,
         timezone: input.timezone,
         status: 'open',
@@ -983,6 +1000,233 @@ class GroupService {
       return rows;
     } catch (error: any) {
       logger.error(`Failed to fetch group session participants for mentor: ${error}`);
+      throw error;
+    }
+  }
+
+  private timeToMinutes(time: string): number {
+    const [h, m] = time.split(':').map(Number);
+    return h * 60 + m;
+  }
+
+  private minutesToTime(mins: number): string {
+    const h = Math.floor(mins / 60) % 24;
+    const m = mins % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  /**
+   * Bookable slots for a group-session TEMPLATE on a given date, derived
+   * from the mentor's Availability. A slot comes back one of two ways:
+   *  - status 'available' — free slot, joining it will spawn a brand-new
+   *    instance and book this exact range in Availability.
+   *  - status 'joinable'  — an OPEN instance of THIS template already
+   *    exists for that slot (someone else requested it first); joining it
+   *    just adds a pending request to that same instance, no re-booking.
+   * Slots booked by anything else (a 1:1 session, another template, a
+   * closed/full instance) or blocked by the mentor are left out entirely.
+   */
+  async getTemplateAvailability(templateId: string, date: string): Promise<any[]> {
+    try {
+      const template = await this.getGroupSessionById(templateId);
+
+      if (!template.isTemplate) {
+        throw new BadRequestError('This session is not a template — it has a fixed date/time');
+      }
+
+      const targetDate = new Date(date);
+      if (isNaN(targetDate.getTime())) {
+        throw new BadRequestError('Invalid date format. Use YYYY-MM-DD');
+      }
+
+      const startOfDay = new Date(targetDate); startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate); endOfDay.setHours(23, 59, 59, 999);
+
+      const availability = await availabilityRepository.findByMentorAndDate(
+        template.mentorId,
+        startOfDay,
+        endOfDay
+      );
+
+      if (!availability || availability.isDateBlocked) {
+        return [];
+      }
+
+      const openInstances = await GroupSession.find({
+        templateId,
+        isTemplate: false,
+        status: 'open',
+        scheduledAt: { $gte: startOfDay, $lte: endOfDay },
+      }).lean();
+
+      const results: any[] = [];
+
+      for (const slot of availability.slots || []) {
+        if (slot.isBlocked) continue;
+
+        if (slot.isBooked) {
+          const inst = openInstances.find(
+            (i: any) => i.availabilityId === availability.availabilityId && i.sessionId === slot.sessionId
+          );
+          if (!inst) continue; // booked by something else — hide it
+
+          const acceptedCount = (inst.participants || []).filter(
+            (p: any) => p.requestStatus === 'accepted'
+          ).length;
+
+          results.push({
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            status: 'joinable',
+            instanceId: inst.sessionId,
+            spotsRemaining: Math.max(0, inst.maxParticipants - acceptedCount),
+            maxParticipants: inst.maxParticipants,
+          });
+          continue;
+        }
+
+        const slotDuration = this.timeToMinutes(slot.endTime) - this.timeToMinutes(slot.startTime);
+        if (slotDuration < template.duration) continue; // too short for this template
+
+        results.push({
+          startTime: slot.startTime,
+          endTime: this.minutesToTime(this.timeToMinutes(slot.startTime) + template.duration),
+          status: 'available',
+        });
+      }
+
+      return results;
+    } catch (error: any) {
+      logger.error(`Failed to fetch template availability: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mentee picks a date+time slot for a template group session.
+   *  - If an OPEN instance already exists for that exact slot, the mentee
+   *    just sends a join request to it (no re-booking of Availability).
+   *  - Otherwise a new instance is spawned from the template AND the slot
+   *    is atomically booked in Availability first (bookRange), so two
+   *    mentees racing for the same free slot can't both spawn instances.
+   */
+  async joinBySlot(
+    templateId: string,
+    menteeId: string,
+    scheduledAt: string,
+    transactionId?: string,
+    authToken?: string
+  ): Promise<any> {
+    try {
+      const template = await this.getGroupSessionById(templateId, authToken);
+
+      if (!template.isTemplate) {
+        throw new BadRequestError('This session is not a template — it has a fixed date/time. Use the regular join endpoint.');
+      }
+
+      const slotDate = new Date(scheduledAt);
+      if (isNaN(slotDate.getTime())) {
+        throw new BadRequestError('Invalid scheduledAt date/time');
+      }
+      if (slotDate <= new Date()) {
+        throw new BadRequestError('Selected slot must be in the future');
+      }
+
+      const startTime = `${String(slotDate.getHours()).padStart(2, '0')}:${String(slotDate.getMinutes()).padStart(2, '0')}`;
+      const startOfDay = new Date(slotDate); startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(slotDate); endOfDay.setHours(23, 59, 59, 999);
+
+      const availability = await availabilityRepository.findByMentorAndDate(
+        template.mentorId,
+        startOfDay,
+        endOfDay
+      );
+
+      if (!availability || availability.isDateBlocked) {
+        throw new BadRequestError('Mentor is not available on this date');
+      }
+
+      const slot = availability.slots.find((s: any) => s.startTime === startTime);
+      if (!slot || slot.isBlocked) {
+        throw new BadRequestError('This slot is not available');
+      }
+
+      let instance: any;
+
+      if (slot.isBooked) {
+        // Slot is taken — only proceed if it's an OPEN instance of THIS template
+        instance = await GroupSession.findOne({
+          sessionId: slot.sessionId,
+          templateId,
+          isTemplate: false,
+          status: 'open',
+        });
+
+        if (!instance) {
+          throw new BadRequestError('This slot is no longer available');
+        }
+
+        if (instance.isFull) {
+          throw new BadRequestError('This time slot is already full');
+        }
+      } else {
+        // Free slot — book it in Availability first, then spawn the instance
+        const endTime = this.minutesToTime(this.timeToMinutes(startTime) + template.duration);
+        const newSessionId = generateSecureId();
+
+        const booked = await availabilityService.bookRange(
+          availability.availabilityId,
+          template.mentorId,
+          startTime,
+          endTime,
+          newSessionId
+        );
+
+        if (!booked) {
+          throw new BadRequestError('This slot was just booked by someone else. Please pick another slot.');
+        }
+
+        instance = new GroupSession({
+          sessionId: newSessionId,
+          mentorId: template.mentorId,
+          title: template.title,
+          description: template.description,
+          thumbnailImage: template.thumbnailImage,
+          topic: template.topic,
+          category: template.category,
+          scheduledAt: slotDate,
+          isTemplate: false,
+          templateId,
+          availabilityId: availability.availabilityId,
+          duration: template.duration,
+          timezone: template.timezone,
+          status: 'open',
+          maxParticipants: template.maxParticipants,
+          minParticipants: template.minParticipants,
+          currentParticipants: 0,
+          participants: [],
+          pricing: template.pricing,
+          payment: template.payment,
+          settings: template.settings,
+          meeting: template.meeting,
+          agenda: template.agenda,
+          outcomes: template.outcomes,
+          chat: { enabled: true, messageCount: 0 },
+        });
+
+        try {
+          await instance.save();
+        } catch (err) {
+          // rollback the Availability booking if instance creation fails
+          await availabilityService.releaseRange(availability.availabilityId, startTime, endTime).catch(() => {});
+          throw err;
+        }
+      }
+
+      // Reuse the same pending-request flow as the normal join path
+      return await this.joinGroupSession(instance.sessionId, menteeId, transactionId, authToken);
+    } catch (error: any) {
+      logger.error(`Failed to join group session by slot: ${error}`);
       throw error;
     }
   }
