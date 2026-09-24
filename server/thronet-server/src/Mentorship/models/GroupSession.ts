@@ -33,8 +33,14 @@ export interface IGroupSession {
   description: string;
   thumbnailImage?: string;
   topic: string;
+
   category?: string;
   scheduledAt: Date;
+  // ✅ NEW: template / instance flow ke liye — interface mein missing thi,
+  // isi wajah se schema definition mein TS2353 aa raha tha
+  isTemplate?: boolean;
+  templateId?: string;
+  availabilityId?: string;
   duration: number;
   timezone: string;
   status: 'draft' | 'open' | 'full' | 'in_progress' | 'completed' | 'cancelled' | 'rescheduled';
@@ -187,10 +193,41 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
       type: String,
       trim: true,
     },
+       // ✅ CHANGED: required hata diya — "template" documents (isTemplate: true)
+    // ke paas fixed scheduledAt nahi hota, mentee jab availability se koi
+    // date+time slot choose karta hai tabhi ek "instance" document banta hai
+    // jisme scheduledAt set hota hai. Instance banane wala service-layer
+    // code (group.service.ts → createInstanceFromTemplate) hamesha
+    // scheduledAt bharega, isliye actual bookable session kabhi bina date
+    // ke nahi rahega — sirf template document bina date ke rehta hai.
     scheduledAt: {
       type: Date,
-      required: [true, 'Scheduled time is required'],
+      required: false,
       index: true,
+    },
+    // ✅ NEW: true = yeh ek reusable "Group Session service" hai (Quick Call
+    // jaisa), jiska koi fixed time nahi — mentor ki Availability se hi
+    // mentee slot choose karta hai. false (default) = ya to purana-style
+    // fixed-date group session hai, ya kisi template se automatically bana
+    // hua ek specific-time "instance" hai jisme mentees join karte hain.
+    isTemplate: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    // ✅ NEW: sirf instance documents (isTemplate: false, template se bane)
+    // pe set hota hai — parent template ka sessionId store karta hai, taaki
+    // ek hi date+time slot ke liye dusra mentee naya instance banane ki
+    // jagah isi instance mein join ho sake.
+    templateId: {
+      type: String,
+      index: true,
+    },
+    // ✅ NEW: instance kis Availability document ke kis slot se bana —
+    // session cancel/reject hone par us slot ko releaseRange() se wapas
+    // free karne ke liye chahiye hota hai.
+    availabilityId: {
+      type: String,
     },
     duration: {
       type: Number,
@@ -296,7 +333,7 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     toJSON: {
       virtuals: true,
       transform: function (_doc, ret) {
-        ret.id = ret.sessionId;
+        (ret as any).id = (ret as any).sessionId;
         delete (ret as any)._id;
         delete (ret as any).__v;
         return ret;

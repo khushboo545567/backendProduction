@@ -466,6 +466,70 @@ class GroupController {
       next(error);
     }
   }
+
+  /**
+   * @route   GET /api/v1/mentorship/group-sessions/:id/template-slots?date=YYYY-MM-DD
+   * @desc    Bookable slots for a group-session template on a given date,
+   *          derived from the mentor's Availability — powers the
+   *          "Select Date & Time" calendar for template-based group sessions.
+   * @access  Public
+   */
+  async getTemplateAvailability(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { date } = req.query;
+
+      if (!date) {
+        ResponseHandler.badRequest(res, 'Query param "date" (YYYY-MM-DD) is required');
+        return;
+      }
+
+      const slots = await groupService.getTemplateAvailability(id, date as string);
+      ResponseHandler.success(res, 'Template availability retrieved successfully', slots);
+    } catch (error: any) {
+      logger.error('Failed to fetch template availability:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/v1/mentorship/group-sessions/:id/join-by-slot
+   * @desc    Mentee picks a specific date+time slot for a template group
+   *          session and sends a join request. If an open instance already
+   *          exists for that slot, joins it; otherwise creates a new
+   *          instance and books that slot from the mentor's Availability.
+   * @access  Private (Mentee)
+   */
+  async joinBySlot(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const { scheduledAt, transactionId } = req.body;
+      if (!scheduledAt) {
+        ResponseHandler.badRequest(res, '"scheduledAt" is required to pick a slot');
+        return;
+      }
+
+      const authToken = getAuthToken(req) || undefined;
+      const session = await groupService.joinBySlot(
+        id,
+        userId,
+        scheduledAt,
+        transactionId,
+        authToken
+      );
+
+      ResponseHandler.success(res, 'Join request sent successfully', session);
+    } catch (error: any) {
+      logger.error('Failed to join group session by slot:', error);
+      next(error);
+    }
+  }
 }
 
 export default new GroupController();

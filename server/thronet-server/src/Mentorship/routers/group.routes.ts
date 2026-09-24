@@ -12,6 +12,7 @@ import { NextFunction, Request, Response } from 'express';
 const parseFormDataFields = (req: Request, res: Response, next: NextFunction): void => {
   const fieldsToParse = ['outcomes', 'resources', 'followUp'];
   const numberFields = ['duration', 'maxParticipants', 'minParticipants', 'pricePerPerson', 'bufferTimeMinutes'];
+  const booleanFields = ['isTemplate']; // ✅ NEW
   const body = req.body as Record<string, any>;
 
   for (const field of fieldsToParse) {
@@ -28,6 +29,13 @@ const parseFormDataFields = (req: Request, res: Response, next: NextFunction): v
       body[field] = Number(body[field]);
     }
   }
+  // ✅ NEW: "true"/"false" string ko boolean banao — multipart form-data
+  // se sab kuch string aata hai
+  for (const field of booleanFields) {
+    if (body[field] !== undefined && typeof body[field] === 'string') {
+      body[field] = body[field] === 'true';
+    }
+  }
   next();
 };
 
@@ -39,7 +47,14 @@ const createGroupSessionValidator = Joi.object({
   description: Joi.string().min(50).max(2000).required(),
   topic: Joi.string().min(5).max(100).required(),
   category: Joi.string().max(50).optional(),
-  scheduledAt: Joi.date().iso().greater('now').required(),
+  // ✅ CHANGED: isTemplate = true (mentor "availability-based" group service
+  // banata hai) to scheduledAt zaroori nahi — instance banne par set hoga.
+  isTemplate: Joi.boolean().optional().default(false),
+  scheduledAt: Joi.date().iso().greater('now').when('isTemplate', {
+    is: true,
+    then: Joi.optional(),
+    otherwise: Joi.required(),
+  }),
   duration: Joi.number().min(30).max(180).required(),
   timezone: Joi.string().required(),
   maxParticipants: Joi.number().min(3).max(50).required(),
@@ -58,6 +73,7 @@ const createGroupSessionValidator = Joi.object({
   }).optional(),
   bufferTimeMinutes: Joi.number().min(0).max(60).optional().default(0),
 });
+
 
 const joinGroupSessionValidator = Joi.object({
   transactionId: Joi.string().optional(),
@@ -217,6 +233,33 @@ router.get(
   AuthMiddleware.authenticate as any,
   groupController.getMyJoinRequestStatus
 );
+
+/**
+ * ✅ NEW: mentor availability se, group-session template ke liye ek
+ * specific date par bookable slots — Quick Call jaisa "Select Date & Time"
+ * calendar power karta hai group session ke liye.
+ * @route   GET /api/v1/group-sessions/:id/template-slots?date=YYYY-MM-DD
+ * @access  Public
+ *
+ * ⚠️ Same reason as /:id/request above — must sit BEFORE the generic
+ * '/:id' route.
+ */
+router.get('/:id/template-slots', groupController.getTemplateAvailability);
+
+/**
+ * ✅ NEW: mentee ek specific date+time slot choose karke join request
+ * bhejta hai. Agar us slot pe already koi open group instance hai to
+ * usi mein join hota hai, warna naya instance banta hai aur mentor ki
+ * availability se wo slot book ho jaata hai.
+ * @route   POST /api/v1/group-sessions/:id/join-by-slot
+ * @access  Private (Mentee)
+ */
+router.post(
+  '/:id/join-by-slot',
+  AuthMiddleware.authenticate as any,
+  groupController.joinBySlot
+);
+
 
 /**
  * @route   GET /api/v1/group-sessions/:id
