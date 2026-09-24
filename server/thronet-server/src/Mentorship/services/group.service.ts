@@ -10,6 +10,7 @@ import mongoose from 'mongoose';
 import { TrustScoreEvents } from '../events/trustScore.events';
 import { User } from '@/shared/models/index.models';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
+import { emitToUser } from '@/socket';
 
 
 
@@ -620,6 +621,32 @@ class GroupService {
         'Group Session Started',
         `"${session.title}" has started. Join now.`
       );
+
+      // ✅ FIX: notifyParticipants sirf DB notification save karta hai aur
+      // generic 'notification:new' (bell icon) event emit karta hai.
+      // Frontend ka incoming-call popup + ringtone (MentorshipCallProvider.tsx)
+      // aur useSocket ka SessionStartedEvent 'session:started' /
+      // 'mentorship:session:started' events sunte hain — jo yaha kabhi emit
+      // hi nahi ho rahe the. Isliye student ko sirf bell notification milti
+      // thi, popup kabhi nahi aata tha.
+      const acceptedMenteeIds: string[] = (session.participants || [])
+        .filter((p: any) => p.attendanceStatus !== 'cancelled' && p.requestStatus === 'accepted')
+        .map((p: any) => p.menteeId);
+
+      const sessionStartedPayload = {
+        sessionId: session.sessionId,
+        bookingId: session.sessionId, // group session me alag bookingId nahi hota — sessionId hi reuse
+        roomId: session.sessionId,    // room name = sessionId (1:1 wale convention jaisa hi)
+        title: session.title,
+        startedAt: new Date().toISOString(),
+        scheduledAt: session.scheduledAt,
+        meetingUrl: session.meeting?.meetingUrl || null,
+      };
+
+      acceptedMenteeIds.forEach((menteeId) => {
+        emitToUser(menteeId, 'session:started', sessionStartedPayload);
+        emitToUser(menteeId, 'mentorship:session:started', sessionStartedPayload);
+      });
 
       return session;
     } catch (error: any) {
