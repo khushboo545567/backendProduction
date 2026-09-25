@@ -93,6 +93,26 @@ const updateGroupSessionValidator = Joi.object({
   agenda: Joi.string().max(2000).optional().allow(''),
   outcomes: Joi.array().items(Joi.string()).optional(),
   resources: Joi.array().items(Joi.string()).optional(),
+  // ✅ FIX: GroupSessionEditModal.tsx sends these too, but this schema
+  // didn't declare them. validateJoi runs with { allowUnknown: true,
+  // stripUnknown: true } — so these never triggered a 400, they were just
+  // silently stripped before reaching the controller. Edit "succeeded"
+  // (200 OK) but status/paymentMethod/followUp/bufferTimeMinutes/
+  // thumbnailImage changes were never actually saved.
+  status: Joi.string().valid('draft', 'open', 'full', 'in_progress', 'completed', 'cancelled', 'rescheduled').optional(),
+  paymentMethod: Joi.string().valid('razorpay', 'stripe', 'cash', 'bank_transfer', 'free').optional(),
+  bufferTimeMinutes: Joi.number().min(0).max(60).optional(),
+  followUp: Joi.object({
+    allowed: Joi.boolean().required(),
+    periodDays: Joi.number().min(0).max(30).when('allowed', {
+      is: true,
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  }).optional(),
+  // thumbnailImage is a file — handled by uploadSingle() middleware
+  // separately (lands on req.file, not req.body), so it never needs a
+  // Joi key here. Left out intentionally.
 });
 
 const completeGroupSessionValidator = Joi.object({
