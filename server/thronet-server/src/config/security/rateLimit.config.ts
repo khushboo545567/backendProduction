@@ -17,7 +17,7 @@ const isDev = process.env.NODE_ENV !== 'production';
  */
 export const global = {
     windowMs: FIFTEEN_MINUTES,
-    maxRequests: isDev ? 1000 : 100,
+    maxRequests: isDev ? 1000 : 600,
     message: 'Too many requests from this IP, please try again later.',
     redisPrefix: 'ratelimit:global',
     skipSuccessfulRequests: false,
