@@ -18,6 +18,9 @@ import seniorMentorApplicationRoutes from './seniorMentorApplication.routes';
 import trustScoreRoutes from './trustScore.routes';
 import withdrawalRouter from "./withdrawal.routes";
 import seniorSessionRoutes from './seniorSession.routes';
+import forumRoutes from './forum.routes';
+import communityRoutes from './community.routes';
+import communityEventRoutes from './communityEvent.routes';
 
 const router = Router();
 
@@ -66,5 +69,8 @@ router.use('/senior-mentor-applications', seniorMentorApplicationRoutes);
 router.use('/', trustScoreRoutes);
 router.use("/withdrawal", withdrawalRouter);
 router.use('/senior-sessions', seniorSessionRoutes);
+router.use('/forums', forumRoutes);
+router.use('/community', communityRoutes);
+router.use('/community/events', communityEventRoutes);
 
 export default router;

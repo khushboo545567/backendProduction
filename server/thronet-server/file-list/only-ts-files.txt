@@ -367,6 +367,9 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\jobs\waitl
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\admin.controller.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\ai.controller.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\availability.controller.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\community.controller.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\communityEvent.controller.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\forum.controller.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\group.controller.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\index.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\controllers\mentor.controller.ts
@@ -386,7 +389,9 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\api.types.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\availability.types.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\common.types.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\communityEvent.types.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\company.types.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\forum.types.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\index.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\mentor.types.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\interface\notification.types.ts
@@ -401,7 +406,11 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\AdminAction.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\Availability.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\CancellationLog.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\CommunityEvent.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\Coupon.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\EventRSVP.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\Forum.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\ForumReply.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\GroupSession.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\index.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\MatchScore.ts
@@ -422,6 +431,8 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\Waitlist.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\models\WithdrawalMethod.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\repositories\availability.repository.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\repositories\communityEvent.repository.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\repositories\forum.repository.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\repositories\group.repository.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\repositories\mentor.repository.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\repositories\notification.repository.ts
@@ -437,6 +448,9 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\ai.routes.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\analytics.routes.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\availability.routes.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\community.routes.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\communityEvent.routes.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\forum.routes.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\group.routes.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\index.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\routers\mentor.routes.ts
@@ -456,9 +470,12 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\booking.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\calendar.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\calendarSync.service.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\communityEvent.service.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\community.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\companyService.api.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\cron.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\email.service.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\forum.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\group.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\health.service.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\services\index.ts
@@ -502,6 +519,8 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\utils\trustScore.constants.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\utils\trustScoreCalculator.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\utils\validation.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\validations\communityEvent.validator.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\validations\forum.validator.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\validations\mentor.validator.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\validations\query.validator.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\Mentorship\validations\review.validator.ts
