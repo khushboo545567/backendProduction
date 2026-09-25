@@ -105,7 +105,7 @@ export class TooManyRequestsError extends AppError {
 
 export class BadRequestError extends AppError {
     constructor(resource: string = 'Bad request', errors: any[] = []) {
-        super(`${resource} Too Many Requests`, 400, true, errors, 'BAD_REQUEST');
+        super(resource, 400, true, errors, 'BAD_REQUEST');
     }
 }
 
