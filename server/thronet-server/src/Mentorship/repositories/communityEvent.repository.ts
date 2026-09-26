@@ -3,6 +3,40 @@ import CommunityEvent, { ICommunityEvent } from '@/Mentorship/models/CommunityEv
 import EventRSVP from '@/Mentorship/models/EventRSVP';
 import { CreateCommunityEventDTO, UpdateCommunityEventDTO, CommunityEventListQuery } from '@/Mentorship/interface/communityEvent.types';
 
+// CommunityEvent.createdBy aur EventRSVP.user ab plain UUID string hain
+// (ObjectId ref nahi), isliye Mongoose ka .populate() use nahi ho sakta.
+// Ye helper manually User collection se un UUIDs ka profile fetch karke
+// docs ke saath attach karta hai — jaisa top-mentors / forum.repository
+// mein kiya tha.
+async function attachUserField<T extends Record<string, any>>(
+  docs: T[],
+  field: string,
+  projection = 'userId firstName lastName'   // ← default bhi update karo
+): Promise<any[]> {
+  if (docs.length === 0) return docs;
+
+  const ids = [...new Set(docs.map((d) => d[field]).filter(Boolean))];
+  if (ids.length === 0) return docs.map((d) => ({ ...toPlain(d), [field]: null }));
+
+  const User = mongoose.model('User');
+  const users = await User.find({ userId: { $in: ids } }, projection).lean();
+  const userMap = new Map(
+    users.map((u: any) => [
+      u.userId,
+      { userId: u.userId, name: `${u.firstName} ${u.lastName || ''}`.trim() },
+    ])
+  );
+
+  return docs.map((d) => ({
+    ...toPlain(d),
+    [field]: userMap.get(d[field]) || null,
+  }));
+}
+
+function toPlain(doc: any) {
+  return typeof doc.toObject === 'function' ? doc.toObject() : doc;
+}
+
 export class CommunityEventRepository {
   async create(createdBy: string, data: CreateCommunityEventDTO): Promise<ICommunityEvent> {
     return CommunityEvent.create({
@@ -16,8 +50,11 @@ export class CommunityEventRepository {
     });
   }
 
-  async findById(id: string): Promise<ICommunityEvent | null> {
-    return CommunityEvent.findById(id).populate('createdBy', 'name avatar');
+  async findById(id: string) {
+    const event = await CommunityEvent.findById(id);
+    if (!event) return null;
+    const [withCreator] = await attachUserField([event], 'createdBy', 'userId name avatar');
+    return withCreator;
   }
 
   async update(id: string, data: UpdateCommunityEventDTO): Promise<ICommunityEvent | null> {
@@ -52,14 +89,15 @@ export class CommunityEventRepository {
     if (type) filter.type = type;
     if (upcoming) filter.date = { $gte: new Date() };
 
-    const [items, total] = await Promise.all([
+    const [rawItems, total] = await Promise.all([
       CommunityEvent.find(filter)
         .sort({ date: upcoming ? 1 : -1 })
         .skip((page - 1) * limit)
-        .limit(limit)
-        .populate('createdBy', 'name avatar'),
+        .limit(limit),
       CommunityEvent.countDocuments(filter),
     ]);
+
+    const items = await attachUserField(rawItems, 'createdBy', 'userId name avatar');
 
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
@@ -149,14 +187,14 @@ export class CommunityEventRepository {
   }
 
   async listAttendees(eventId: string, page = 1, limit = 30) {
-    const [items, total] = await Promise.all([
+    const [rawItems, total] = await Promise.all([
       EventRSVP.find({ event: eventId, status: 'going' })
         .sort({ createdAt: 1 })
         .skip((page - 1) * limit)
-        .limit(limit)
-        .populate('user', 'name avatar headline'),
+        .limit(limit),
       EventRSVP.countDocuments({ event: eventId, status: 'going' }),
     ]);
+    const items = await attachUserField(rawItems, 'user', 'userId name avatar headline');
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
 }

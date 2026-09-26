@@ -1,11 +1,11 @@
-import mongoose, { Schema, Document, Types } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ICommunityEvent extends Document {
   title: string;
   description?: string;
   date: Date;
   type: 'meetup' | 'webinar' | 'workshop' | 'networking';
-  createdBy: Types.ObjectId;
+  createdBy: string;
   participantsCount: number;
   resourceLink?: string;
   isCancelled: boolean;
@@ -23,7 +23,7 @@ const CommunityEventSchema = new Schema<ICommunityEvent>(
       enum: ['meetup', 'webinar', 'workshop', 'networking'],
       default: 'meetup',
     },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    createdBy: { type: String, required: true, index: true },
     participantsCount: { type: Number, default: 0 },
     resourceLink: { type: String, trim: true },
     isCancelled: { type: Boolean, default: false },

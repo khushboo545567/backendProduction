@@ -2,7 +2,7 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export interface IEventRSVP extends Document {
   event: Types.ObjectId;
-  user: Types.ObjectId;
+  user: string;
   status: 'going' | 'cancelled';
   createdAt: Date;
   updatedAt: Date;
@@ -11,7 +11,7 @@ export interface IEventRSVP extends Document {
 const EventRSVPSchema = new Schema<IEventRSVP>(
   {
     event: { type: Schema.Types.ObjectId, ref: 'CommunityEvent', required: true },
-    user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    user: { type: String, required: true, index: true },
     status: { type: String, enum: ['going', 'cancelled'], default: 'going' },
   },
   { timestamps: true }

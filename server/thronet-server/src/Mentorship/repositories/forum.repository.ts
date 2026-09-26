@@ -1,15 +1,52 @@
+import mongoose from "mongoose";
 import Forum, { IForum } from "../models/Forum";
 import ForumReply, { IForumReply } from "../models/ForumReply";
 import { CreateForumDTO, CreateForumReplyDTO, ForumListQuery } from "../interface/forum.types";
-import { Types, SortOrder } from "mongoose";
+import { SortOrder } from "mongoose";
+
+// Forum.author / ForumReply.author ab plain UUID string hai (ObjectId ref
+// nahi), isliye Mongoose ka .populate() use nahi ho sakta. Ye helper
+// manually User collection se un UUIDs ka basic profile fetch karke
+// ek Map banata hai — jaisa community.service.ts mein top-mentors ke
+// liye kiya tha.
+async function attachAuthors<T extends { author: string }>(
+  docs: T[]
+): Promise<(T & { author: any })[]> {
+  const authorIds = [...new Set(docs.map((d) => d.author))];
+  if (authorIds.length === 0) return docs as any;
+
+  const User = mongoose.model("User");
+  const users = await User.find(
+    { userId: { $in: authorIds } },
+    "userId firstName lastName"   // ← sirf jo fields actually exist karte hain
+  ).lean();
+
+  const userMap = new Map(
+    users.map((u: any) => [
+      u.userId,
+      { userId: u.userId, name: `${u.firstName} ${u.lastName || ""}`.trim() },
+    ])
+  );
+
+  return docs.map((d) => {
+    const plain = typeof (d as any).toObject === "function" ? (d as any).toObject() : d;
+    return {
+      ...plain,
+      author: userMap.get(d.author) || null,
+    };
+  });
+}
 
 export class ForumRepository {
   async create(authorId: string, data: CreateForumDTO): Promise<IForum> {
     return Forum.create({ ...data, author: authorId, lastActivityAt: new Date() });
   }
 
-  async findById(id: string): Promise<IForum | null> {
-    return Forum.findById(id).populate("author", "name avatar headline");
+  async findById(id: string) {
+    const forum = await Forum.findById(id);
+    if (!forum) return null;
+    const [withAuthor] = await attachAuthors([forum]);
+    return withAuthor;
   }
 
   async list(query: ForumListQuery) {
@@ -22,14 +59,15 @@ export class ForumRepository {
         ? { isPinned: -1, replyCount: -1, lastActivityAt: -1 }
         : { isPinned: -1, lastActivityAt: -1 };
 
-    const [items, total] = await Promise.all([
+    const [rawItems, total] = await Promise.all([
       Forum.find(filter)
         .sort(sortStage)
         .skip((page - 1) * limit)
-        .limit(limit)
-        .populate("author", "name avatar headline"),
+        .limit(limit),
       Forum.countDocuments(filter),
     ]);
+
+    const items = await attachAuthors(rawItems);
 
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
@@ -44,12 +82,11 @@ export class ForumRepository {
   async toggleUpvote(forumId: string, userId: string) {
     const forum = await Forum.findById(forumId);
     if (!forum) return null;
-    const uid = new Types.ObjectId(userId);
-    const has = forum.upvotes.some((u) => u.equals(uid));
+    const has = forum.upvotes.includes(userId);
     if (has) {
-      forum.upvotes = forum.upvotes.filter((u) => !u.equals(uid));
+      forum.upvotes = forum.upvotes.filter((u) => u !== userId);
     } else {
-      forum.upvotes.push(uid);
+      forum.upvotes.push(userId);
     }
     await forum.save();
     return forum;
@@ -80,14 +117,14 @@ export class ForumRepository {
   }
 
   async listReplies(forumId: string, page = 1, limit = 30) {
-    const [items, total] = await Promise.all([
+    const [rawItems, total] = await Promise.all([
       ForumReply.find({ forum: forumId })
         .sort({ createdAt: 1 })
         .skip((page - 1) * limit)
-        .limit(limit)
-        .populate("author", "name avatar headline"),
+        .limit(limit),
       ForumReply.countDocuments({ forum: forumId }),
     ]);
+    const items = await attachAuthors(rawItems);
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
 }

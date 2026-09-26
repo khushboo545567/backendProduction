@@ -2,10 +2,10 @@ import mongoose, { Schema, Document, Types } from "mongoose";
 
 export interface IForumReply extends Document {
   forum: Types.ObjectId;
-  author: Types.ObjectId;
+  author: string;
   content: string;
-  mentions: Types.ObjectId[];
-  upvotes: Types.ObjectId[];
+  mentions: string[];
+  upvotes: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -13,10 +13,10 @@ export interface IForumReply extends Document {
 const ForumReplySchema = new Schema<IForumReply>(
   {
     forum: { type: Schema.Types.ObjectId, ref: "Forum", required: true },
-    author: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    author: { type: String, required: true, index: true },
     content: { type: String, required: true, trim: true, maxlength: 3000 },
-    mentions: [{ type: Schema.Types.ObjectId, ref: "User" }],
-    upvotes: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    mentions: [{ type: String }],
+    upvotes: [{ type: String }],
   },
   { timestamps: true }
 );

@@ -256,23 +256,36 @@ app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => 
         method: req.method,
     });
 
-    const statusCode = err.statusCode || err.status || 500;
+    let statusCode = err.statusCode || err.status || 500;
+let message = err.message;
 
-    // ✅ Sirf genuine 500 (unexpected/unknown) errors ke liye generic
-    // message chhupao. Operational errors (400/401/403/404/409 etc — jo
-    // BadRequestError, NotFoundError, ConflictError se aate hain aur
-    // .message already set hoti hai) ka asli message hamesha bhejo,
-    // production mein bhi — warna debugging/UX dono break ho jate hain.
-    const isKnownOperationalError = statusCode < 500 && !!err.message;
+// Mongoose validation/cast errors (jaise ID type mismatch, missing
+// required field) aur Zod validation errors ko 400 mein map karo —
+// warna ye generic 500 "Internal server error" ke peeche chhup jate
+// hain aur asli wajah pata nahi chalti.
+if (err.name === 'ValidationError' || err.name === 'CastError') {
+    statusCode = 400;
+    message = err.message;
+} else if (err.name === 'ZodError') {
+    statusCode = 400;
+    message = (err as any).errors?.map((e: any) => `${e.path?.join('.')}: ${e.message}`).join('; ') || 'Validation failed';
+}
 
-    return res.status(statusCode).json({
-        status: 'error',
-        message: isKnownOperationalError
-            ? err.message
-            : (process.env['NODE_ENV'] === 'production'
-                ? 'Internal server error'
-                : err.message || 'Internal server error'),
-    });
+// ✅ Sirf genuine 500 (unexpected/unknown) errors ke liye generic
+// message chhupao. Operational errors (400/401/403/404/409 etc — jo
+// BadRequestError, NotFoundError, ConflictError se aate hain aur
+// .message already set hoti hai) ka asli message hamesha bhejo,
+// production mein bhi — warna debugging/UX dono break ho jate hain.
+const isKnownOperationalError = statusCode < 500 && !!message;
+
+return res.status(statusCode).json({
+    status: 'error',
+    message: isKnownOperationalError
+        ? message
+        : (process.env['NODE_ENV'] === 'production'
+            ? 'Internal server error'
+            : message || 'Internal server error'),
+});
 }) as express.ErrorRequestHandler);
 
 export { app, NotificationService };
