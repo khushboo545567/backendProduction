@@ -379,6 +379,14 @@ GroupSessionSchema.virtual('spotsRemaining').get(function (this: GroupSessionDoc
 // scheduledAt ke 10 min BAAD tak hai. Participant-count check pehle hi
 // hata diya gaya tha — mentor kam logon ke sath bhi start kar sakta hai.
 GroupSessionSchema.virtual('canStart').get(function (this: GroupSessionDocument) {
+  // ✅ FIX: template sessions (isTemplate: true) ke paas scheduledAt hota
+  // hi nahi — .getTime() undefined pe call karne se TypeError throw hota
+  // tha jab bhi is document ka toJSON() chalta (e.g. create response
+  // serialize karte waqt). Ye request ko crash kar deta tha DOCUMENT
+  // SAVE HONE KE BAAD — isliye DB me session ban jaata tha lekin client
+  // ko "Internal server error" milta tha.
+  if (!this.scheduledAt) return false;
+
   const scheduledTime = this.scheduledAt.getTime();
   const earliestStart = scheduledTime - 5 * 60 * 1000;  // scheduled time se 5 min pehle se allowed
   const latestStart = scheduledTime + 10 * 60 * 1000;   // scheduled time ke 10 min baad tak allowed
