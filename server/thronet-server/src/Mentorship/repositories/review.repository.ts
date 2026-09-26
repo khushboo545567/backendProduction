@@ -33,7 +33,8 @@ interface LeanPhoto {
 // strict Mongoose lean type so those assignments type-check.
 interface EnrichedReview {
     [key: string]: any;
-    menteeId?: string;
+
+    menteeId?: string | { userId?: string; _id?: any };
     mentorId?: string;
     mentee?: {
         firstName?: string;
@@ -143,22 +144,67 @@ class ReviewRepository {
                 if (p.photoId) photoMap.set(p.photoId, p.cloudinarySecureUrl || p.cloudinaryUrl);
             });
 
+            // Fetch session info if uniqueSessionIds exist
+            const uniqueSessionIds = [...new Set(reviews.map(r => r.sessionId).filter(Boolean))];
+            let sessionMap = new Map<string, any>();
+            if (uniqueSessionIds.length > 0) {
+                try {
+                    const SessionMentor = mongoose.model('SessionMentor');
+                    const sessions = await SessionMentor.find(
+                        { sessionId: { $in: uniqueSessionIds } },
+                        { sessionId: 1, title: 1, sessionType: 1, scheduledAt: 1 }
+                    ).lean();
+                    sessions.forEach((s: any) => {
+                        if (s.sessionId) sessionMap.set(s.sessionId, s);
+                    });
+                } catch (e) {
+                    // silent fallback if SessionMentor query fails
+                }
+            }
+
             reviews.forEach(review => {
-                const user = review.menteeId ? userMap.get(review.menteeId as unknown as string) : undefined;
+                const rawMenteeId = typeof review.menteeId === 'string'
+                    ? review.menteeId
+                    : (review.menteeId?.userId || review.menteeId?._id);
+                const user = rawMenteeId ? userMap.get(rawMenteeId as unknown as string) : undefined;
+                
                 if (user) {
+                    const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+                    const profilePic = user.profilePhotoId ? (photoMap.get(user.profilePhotoId) || user.profilePhotoId) : null;
+                    
+                    review.mentee = {
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        fullName: fullName || "Mentee",
+                        name: fullName || "Mentee",
+                        profilePic: profilePic,
+                        profilePhotoId: profilePic,
+                        title: user.title,
+                    } as any;
                     review.menteeId = {
-                        fullName: `${user.firstName} ${user.lastName}`.trim(),
-                        profilePic: user.profilePhotoId ? (photoMap.get(user.profilePhotoId) || user.profilePhotoId) : null,
-                        title: user.title // if available
+                        userId: user.userId || (user._id ? user._id.toString() : rawMenteeId),
+                        fullName: fullName || "Mentee",
+                        name: fullName || "Mentee",
+                        profilePic: profilePic,
+                        title: user.title,
                     } as any;
                 }
 
                 if (mentorUser) {
                     review.mentorId = {
-                        fullName: `${mentorUser.firstName} ${mentorUser.lastName}`.trim(),
+                        fullName: `${mentorUser.firstName || ''} ${mentorUser.lastName || ''}`.trim(),
                         profilePic: mentor?.profilePic || (mentorUser.profilePhotoId ? (photoMap.get(mentorUser.profilePhotoId) || mentorUser.profilePhotoId) : null),
-                        title: mentorUser.title // if available
+                        title: mentorUser.title
                     } as any;
+                }
+
+                if (review.sessionId && sessionMap.has(review.sessionId)) {
+                    const sess = sessionMap.get(review.sessionId);
+                    review.session = {
+                        title: sess.title,
+                        sessionType: sess.sessionType,
+                        scheduledAt: sess.scheduledAt,
+                    };
                 }
             });
         }
