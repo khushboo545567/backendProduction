@@ -95,10 +95,10 @@ async function isMentorshipSessionMember(userId: string, roomId: string): Promis
     if ((booking.status as string) !== 'in_progress') return false;
 
     const menteeId = booking.menteeId || booking.bookedBy;
-    if (menteeId && userId === menteeId) return true;
+    if (menteeId && userId === menteeId.toString()) return true;
 
     const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
-    return !!mentor && mentor.userId === userId;
+    return !!mentor && mentor.userId.toString() === userId;
   } catch (error: any) {
     LoggerUtil.warn(`isMentorshipSessionMember check failed: ${error.message}`);
     return false;
@@ -123,12 +123,12 @@ async function isGroupSessionMember(userId: string, roomId: string): Promise<boo
     if ((session as any).status !== 'in_progress') return false;
 
     const participant = ((session as any).participants || []).find(
-      (p: any) => p.menteeId === userId && p.requestStatus === 'accepted'
+      (p: any) => p.menteeId.toString() === userId && p.requestStatus === 'accepted'
     );
     if (participant) return true;
 
     const mentor = await Mentor.findOne({ mentorId: (session as any).mentorId, isDeleted: false }).lean();
-    return !!mentor && mentor.userId === userId;
+    return !!mentor && mentor.userId.toString() === userId;
   } catch (error: any) {
     LoggerUtil.warn(`isGroupSessionMember check failed: ${error.message}`);
     return false;

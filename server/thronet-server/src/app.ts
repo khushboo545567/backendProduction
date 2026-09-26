@@ -60,7 +60,8 @@ app.use(cors({
         if (!origin) return callback(null, true);
 
         const isVercel = /\.vercel\.app$/.test(origin);
-        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel) {
+        const isLocalhost = /^http:\/\/localhost:\d+$/.test(origin);
+        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel || isLocalhost) {
             return callback(null, origin);
         }
 
