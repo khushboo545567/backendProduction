@@ -66,7 +66,7 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
           title: `${joinerRole === 'mentor' ? 'Mentor' : 'Mentee'} joined the session`,
           message: `${joinerRole === 'mentor' ? 'Your mentor' : 'Your mentee'} has joined "${session.title || 'the session'}". Join now to start the call.`,
           sessionId,
-          actionUrl: `/mentorship/session-room/${sessionId}?bookingId=${confirmedBooking?._id?.toString() || ''}`,
+          actionUrl: `/mentorship/session-room/${sessionId}?bookingId=${(confirmedBooking as any)?._id?.toString() || ''}`,
         },
       });
 

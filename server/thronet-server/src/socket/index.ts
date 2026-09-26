@@ -42,9 +42,18 @@ let io: Server | null = null;
 export const initializeSocketIO = (httpServer: HTTPServer): Server => {
   io = new Server(httpServer, {
     cors: {
-      origin: (process.env['ALLOWED_ORIGINS'] || 'http://localhost:3000,http://localhost:3001')
-        .split(',')
-        .map((o) => o.trim()),
+      origin: (origin, callback) => {
+        const allowed = (process.env['ALLOWED_ORIGINS'] || 'http://localhost:3000,http://localhost:3001')
+          .split(',')
+          .map((o) => o.trim());
+        const isVercel = origin && /\.vercel\.app$/.test(origin);
+        const isLocalhost = origin && /^http:\/\/localhost:\d+$/.test(origin);
+        if (!origin || allowed.includes('*') || allowed.includes(origin) || isVercel || isLocalhost) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'), false);
+        }
+      },
       methods: ['GET', 'POST'],
       credentials: true,
       allowedHeaders: ['Authorization'],

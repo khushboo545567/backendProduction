@@ -1,12 +1,12 @@
-import mongoose, { Schema, Document, Types } from "mongoose";
+import mongoose, { Schema, Document } from "mongoose";
 
 export interface IForum extends Document {
   topic: string;
   description?: string;
   category: "teaching-tips" | "pricing" | "tech-stack" | "general";
-  author: Types.ObjectId;
+  author: string;
   replyCount: number;
-  upvotes: Types.ObjectId[];
+  upvotes: string[];
   isPinned: boolean;
   isLocked: boolean;
   lastActivityAt: Date;
@@ -23,9 +23,9 @@ const ForumSchema = new Schema<IForum>(
       enum: ["teaching-tips", "pricing", "tech-stack", "general"],
       default: "general",
     },
-    author: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    author: { type: String, required: true, index: true },
     replyCount: { type: Number, default: 0 },
-    upvotes: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    upvotes: [{ type: String }],
     isPinned: { type: Boolean, default: false },
     isLocked: { type: Boolean, default: false },
     lastActivityAt: { type: Date, default: Date.now },
