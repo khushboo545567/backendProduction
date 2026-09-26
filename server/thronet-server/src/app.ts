@@ -33,7 +33,7 @@ import { User } from './auth/models';
 import { LoggerUtil, requestLogger } from './shared/logger.util';
 import NotificationService from './auth/services/notification.service';
 import CacheUtil from './shared/cache.util';
-
+ console.log('🔍 LOADING:, app.ts ');
 interface CustomError extends Error {
     status?: number;
     statusCode?: number;
