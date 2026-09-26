@@ -1,9 +1,17 @@
+import mongoose from 'mongoose';
 import Mentor from '@/Mentorship/models/Mentor';
-// ⚠️ REPLACE THIS IMPORT with wherever your User model actually lives,
-// e.g. '@/Auth/models/User' or '@/User/models/User.model' — I don't have
-// that file so I can't confirm the exact path or export name.
-import User from './User.model';
 import { logger } from '@/shared/logger.util';
+
+// Confirmed: the real User model lives at src/auth/models/User.model.ts,
+// registered as mongoose.model('User', UserSchema). Rather than import
+// that file directly (risking an export-name/path mismatch), this uses
+// mongoose.model('User') to fetch the already-registered model — the
+// same pattern already used elsewhere in this codebase, e.g.
+// src/Mentorship/repositories/review.repository.ts and
+// src/StudyGroup/socket/chatHandler.ts. This works as long as
+// User.model.ts has been loaded somewhere before this code runs (it will
+// be, since the app registers all models at startup).
+const User = mongoose.model('User');
 
 class CommunityService {
   async getTopMentors(limit: number, period: 'weekly' | 'monthly' | 'all-time', domain?: string) {
