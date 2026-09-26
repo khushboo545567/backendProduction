@@ -50,12 +50,11 @@ export class CommunityEventRepository {
     });
   }
 
-  async findById(id: string) {
-    const event = await CommunityEvent.findById(id);
-    if (!event) return null;
-    const [withCreator] = await attachUserField([event], 'createdBy', 'userId name avatar');
-    return withCreator;
-  }
+  async list(query: CommunityEventListQuery) {
+  // ... unchanged ...
+  const items = await attachUserField(rawItems, 'createdBy', 'userId firstName lastName');
+  return { items, total, page, pages: Math.ceil(total / limit) };
+}
 
   async update(id: string, data: UpdateCommunityEventDTO): Promise<ICommunityEvent | null> {
     const updates: Record<string, any> = { ...data };
