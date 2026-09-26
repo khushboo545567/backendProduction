@@ -1,3 +1,5 @@
+//Mentorship>routers>forum.routes.ts
+
 import { Router } from "express";
 import forumController from "../controllers/forum.controller";
 import AuthMiddleware from "../../shared/middlewares/auth.middleware";
