@@ -11,6 +11,7 @@ import availabilityService from "./availability.service";
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 
 import mongoose from 'mongoose';
+import { DateTime } from 'luxon';
 import { TrustScoreEvents } from '../events/trustScore.events';
 import { User } from '@/shared/models/index.models';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
@@ -1060,8 +1061,15 @@ class GroupService {
         throw new BadRequestError('Invalid date format. Use YYYY-MM-DD');
       }
 
-      const startOfDay = new Date(targetDate); startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(targetDate); endOfDay.setHours(23, 59, 59, 999);
+      // ✅ FIX: same timezone-safety as joinBySlot — server local time
+      // se day-boundary compute karne par near-midnight edge cases me
+      // galat din ke slots aa sakte the.
+      const zone = template.timezone || 'Asia/Kolkata';
+      const targetDT = DateTime.fromISO(date, { zone });
+      const startOfDay = targetDT.startOf('day').toJSDate();
+      const endOfDay = targetDT.endOf('day').toJSDate();
+
+      
 
       const availability = await availabilityRepository.findByMentorAndDate(
         template.mentorId,
@@ -1153,9 +1161,19 @@ class GroupService {
         throw new BadRequestError('Selected slot must be in the future');
       }
 
-      const startTime = `${String(slotDate.getHours()).padStart(2, '0')}:${String(slotDate.getMinutes()).padStart(2, '0')}`;
-      const startOfDay = new Date(slotDate); startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(slotDate); endOfDay.setHours(23, 59, 59, 999);
+      // ✅ FIX: startTime ko server ke local timezone (Date.getHours()) se
+      // nikalna production me galat tha — server UTC me chalta hai jabki
+      // availability.slots ka startTime mentor ki timezone (IST) ke
+      // wall-clock me stored hota hai. Ye mismatch "This slot is not
+      // available" error deta tha chahe slot actually free ho.
+      // Luxon se hamesha template.timezone ke hisaab se hi HH:mm nikalo.
+      const zone = template.timezone || 'Asia/Kolkata';
+      const slotDT = DateTime.fromJSDate(slotDate, { zone });
+
+      const startTime = slotDT.toFormat('HH:mm');
+      const startOfDay = slotDT.startOf('day').toJSDate();
+      const endOfDay = slotDT.endOf('day').toJSDate();
+
 
       const availability = await availabilityRepository.findByMentorAndDate(
         template.mentorId,
