@@ -1061,15 +1061,10 @@ class GroupService {
         throw new BadRequestError('Invalid date format. Use YYYY-MM-DD');
       }
 
-      // ✅ FIX: same timezone-safety as joinBySlot — server local time
-      // se day-boundary compute karne par near-midnight edge cases me
-      // galat din ke slots aa sakte the.
       const zone = template.timezone || 'Asia/Kolkata';
       const targetDT = DateTime.fromISO(date, { zone });
       const startOfDay = targetDT.startOf('day').toJSDate();
       const endOfDay = targetDT.endOf('day').toJSDate();
-
-      
 
       const availability = await availabilityRepository.findByMentorAndDate(
         template.mentorId,
@@ -1088,8 +1083,29 @@ class GroupService {
         scheduledAt: { $gte: startOfDay, $lte: endOfDay },
       }).lean();
 
+      // Collect all free (unbooked & unblocked) slots and sort them
+      const freeSlots = (availability.slots || [])
+        .filter((s: any) => !s.isBooked && !s.isBlocked)
+        .map((s: any) => ({
+          start: this.timeToMinutes(s.startTime),
+          end: this.timeToMinutes(s.endTime),
+        }))
+        .sort((a: any, b: any) => a.start - b.start);
+
+      // Merge continuous adjacent free slots into windows
+      const freeWindows: Array<{ start: number; end: number }> = [];
+      for (const s of freeSlots) {
+        const last = freeWindows[freeWindows.length - 1];
+        if (last && s.start <= last.end) {
+          last.end = Math.max(last.end, s.end);
+        } else {
+          freeWindows.push({ ...s });
+        }
+      }
+
       const results: any[] = [];
 
+      // 1. Process existing open instances for booked slots
       for (const slot of availability.slots || []) {
         if (slot.isBlocked) continue;
 
@@ -1102,27 +1118,38 @@ class GroupService {
           const acceptedCount = (inst.participants || []).filter(
             (p: any) => p.requestStatus === 'accepted'
           ).length;
+          const spotsRemaining = Math.max(0, inst.maxParticipants - acceptedCount);
 
           results.push({
             startTime: slot.startTime,
             endTime: slot.endTime,
-            status: 'joinable',
+            status: spotsRemaining > 0 ? 'joinable' : 'full',
             instanceId: inst.sessionId,
-            spotsRemaining: Math.max(0, inst.maxParticipants - acceptedCount),
+            spotsRemaining,
             maxParticipants: inst.maxParticipants,
           });
-          continue;
         }
-
-        const slotDuration = this.timeToMinutes(slot.endTime) - this.timeToMinutes(slot.startTime);
-        if (slotDuration < template.duration) continue; // too short for this template
-
-        results.push({
-          startTime: slot.startTime,
-          endTime: this.minutesToTime(this.timeToMinutes(slot.startTime) + template.duration),
-          status: 'available',
-        });
       }
+
+      // 2. Generate slots from free continuous windows divided by template.duration
+      for (const w of freeWindows) {
+        for (let start = w.start; start + template.duration <= w.end; start += template.duration) {
+          const startTime = this.minutesToTime(start);
+          const endTime = this.minutesToTime(start + template.duration);
+
+          // Avoid duplicate slot entries if an instance already processed above matches
+          if (!results.some((r) => r.startTime === startTime)) {
+            results.push({
+              startTime,
+              endTime,
+              status: 'available',
+            });
+          }
+        }
+      }
+
+      // Sort final slots chronologically by start time
+      results.sort((a, b) => this.timeToMinutes(a.startTime) - this.timeToMinutes(b.startTime));
 
       return results;
     } catch (error: any) {

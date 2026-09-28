@@ -77,7 +77,9 @@ class AvailabilityController {
         filters.startDate = new Date(startDate);
       }
       if (endDate && typeof endDate === 'string') {
-        filters.endDate = new Date(endDate);
+        const endD = new Date(endDate);
+        endD.setHours(23, 59, 59, 999);
+        filters.endDate = endD;
       }
       if (status) filters.status = status;
 
