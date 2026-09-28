@@ -1212,9 +1212,43 @@ class GroupService {
         throw new BadRequestError('Mentor is not available on this date');
       }
 
-      const slot = availability.slots.find((s: any) => s.startTime === startTime);
-      if (!slot || slot.isBlocked) {
-        throw new BadRequestError('This slot is not available');
+      const reqStart = this.timeToMinutes(startTime);
+      const reqEnd = reqStart + template.duration;
+
+      const exactSlot = availability.slots.find((s: any) => s.startTime === startTime);
+      let slot: any;
+
+      if (exactSlot && exactSlot.isBooked) {
+        // Already-booked slot: only valid if it's an open instance of this template (checked below)
+        slot = exactSlot;
+      } else {
+        // Free path: the requested range must be fully covered by free, unblocked slots
+        const overlapping = (availability.slots || [])
+          .filter((s: any) =>
+            this.timeToMinutes(s.startTime) < reqEnd &&
+            this.timeToMinutes(s.endTime) > reqStart
+          )
+          .sort((a: any, b: any) => this.timeToMinutes(a.startTime) - this.timeToMinutes(b.startTime));
+
+        let cursor = reqStart;
+        let ok = overlapping.length > 0;
+        for (const s of overlapping) {
+          if (s.isBlocked || s.isBooked) { ok = false; break; }
+          const sStart = this.timeToMinutes(s.startTime);
+          const sEnd = this.timeToMinutes(s.endTime);
+          if (sStart > cursor) { ok = false; break; }
+          cursor = Math.max(cursor, sEnd);
+        }
+
+        if (!ok || cursor < reqEnd) {
+          logger.warn(`joinBySlot: no free coverage for ${startTime}-${reqEnd} min`, {
+            requested: startTime,
+            stored: (availability.slots || []).map((s: any) => `${s.startTime}-${s.endTime}`),
+          });
+          throw new BadRequestError('This slot is not available');
+        }
+
+        slot = { isBooked: false };
       }
 
       let instance: any;
