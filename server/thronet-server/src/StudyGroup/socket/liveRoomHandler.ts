@@ -47,35 +47,6 @@ export interface RoomSession {
 }
 const roomSessions = new Map<string, RoomSession>();
 
-// ─── Helper: verify active group membership ───────────────────────────────────
-async function isMember(userId: string, groupId: string): Promise<boolean> {
-  // Allow mock group ID '1' for frontend UI testing
-  if (groupId === '1' || groupId === 1 as any) return true;
-
-  if (!userId || !groupId) {
-    LoggerUtil.warn(`Missing userId or groupId in isMember check`);
-    return false;
-  }
-
-  // StudyGroup room — userId/groupId are UUID strings, matched against GroupMember
-  const member = await GroupMember.findOne({
-    userId: userId,
-    groupId: groupId,
-    status: 'active',
-  }).lean();
-  if (member) return true;
-
-  // Not a StudyGroup member — check if this roomId is actually a mentorship
-  // booking instead (mentor-session rooms reuse the booking's _id as roomId).
-  const mentorship1on1 = await isMentorshipSessionMember(userId, groupId);
-  if (mentorship1on1) return true;
-
-  // ✅ NEW: not a 1:1 booking either — check if this roomId is a group
-  // mentorship session instead (group-session rooms reuse GroupSession.sessionId
-  // as the roomId, mirroring the 1:1 convention above).
-  return await isGroupSessionMember(userId, groupId);
-}
-
 // ─── Helper: verify mentor/mentee membership on a mentorship session room ─────
 async function isMentorshipSessionMember(userId: string, roomId: string): Promise<boolean> {
   try {
@@ -87,11 +58,6 @@ async function isMentorshipSessionMember(userId: string, roomId: string): Promis
 
      // Only allow while the specific booking is actually in progress —
     // blocks joining a room for a session that hasn't started or already ended.
-    // ⚠️ TS2367: this import path's booking-status type is missing 'in_progress'
-    // (and likely 'rescheduled') even though startSession() in
-    // mentorshipSession.service.ts sets exactly this value at runtime. Casting
-    // sidesteps the stale type without weakening the actual check. Send the
-    // ISessionMentor booking type (session.types.ts) to fix the type at its root.
     if ((booking.status as string) !== 'in_progress') return false;
 
     const menteeId = booking.menteeId || booking.bookedBy;
@@ -105,34 +71,65 @@ async function isMentorshipSessionMember(userId: string, roomId: string): Promis
   }
 }
 
-// ─── Helper: verify mentor/accepted-participant membership on a GROUP
-// mentorship session room ─────────────────────────────────────────────────────
-// ✅ NEW. roomId here is GroupSession.sessionId (the frontend passes it as
-// both sessionId and roomId when it opens the live room — see
-// group.service.ts's startGroupSession, which now emits `roomId:
-// session.sessionId` in its 'session:started' payload for exactly this
-// reason). Only allows entry while the session is actually 'in_progress',
-// and only for participants whose join request was ACCEPTED — a PENDING or
-// REJECTED requester, and anyone with no participant row at all, must never
-// get into the live room, no matter what roomId they guess.
-async function isGroupSessionMember(userId: string, roomId: string): Promise<boolean> {
+// ─── Helper: verify room access and determine max capacity ────────────────────
+async function getRoomAccess(userId: string, roomId: string): Promise<{ allowed: boolean, maxCapacity: number }> {
+  // Allow mock group ID '1' for frontend UI testing
+  if (roomId === '1' || roomId === 1 as any) return { allowed: true, maxCapacity: MAX_ROOM_SIZE };
+
+  if (!userId || !roomId) {
+    LoggerUtil.warn(`Missing userId or roomId in getRoomAccess check`);
+    return { allowed: false, maxCapacity: 0 };
+  }
+
+  // 1. StudyGroup room
+  try {
+    const member = await GroupMember.findOne({
+      userId: userId,
+      groupId: roomId,
+      status: 'active',
+    }).lean();
+    if (member) return { allowed: true, maxCapacity: MAX_ROOM_SIZE };
+  } catch (error: any) {
+    LoggerUtil.warn(`StudyGroup check failed: ${error.message}`);
+  }
+
+  // 2. Mentorship 1:1 room (bookingId is used as roomId)
+  try {
+    const mentorship1on1 = await isMentorshipSessionMember(userId, roomId);
+    if (mentorship1on1) return { allowed: true, maxCapacity: 2 };
+  } catch (error: any) {
+    LoggerUtil.warn(`1:1 Mentorship check failed: ${error.message}`);
+  }
+
+  // 3. Mentorship Group Session room (GroupSession.sessionId is used as roomId)
   try {
     const session = await GroupSession.findOne({ sessionId: roomId }).lean();
-    if (!session) return false;
+    if (session) {
+      if ((session as any).status !== 'in_progress') return { allowed: false, maxCapacity: 0 };
 
-    if ((session as any).status !== 'in_progress') return false;
+      let isAllowed = false;
+      const participant = ((session as any).participants || []).find(
+        (p: any) => p.menteeId.toString() === userId && p.requestStatus === 'accepted'
+      );
+      if (participant) {
+        isAllowed = true;
+      } else {
+        const mentor = await Mentor.findOne({ mentorId: (session as any).mentorId, isDeleted: false }).lean();
+        if (mentor && mentor.userId.toString() === userId) {
+          isAllowed = true;
+        }
+      }
 
-    const participant = ((session as any).participants || []).find(
-      (p: any) => p.menteeId.toString() === userId && p.requestStatus === 'accepted'
-    );
-    if (participant) return true;
-
-    const mentor = await Mentor.findOne({ mentorId: (session as any).mentorId, isDeleted: false }).lean();
-    return !!mentor && mentor.userId.toString() === userId;
+      if (isAllowed) {
+        // Capacity is max mentees + 1 mentor
+        return { allowed: true, maxCapacity: session.maxParticipants + 1 };
+      }
+    }
   } catch (error: any) {
-    LoggerUtil.warn(`isGroupSessionMember check failed: ${error.message}`);
-    return false;
+    LoggerUtil.warn(`Group Session check failed: ${error.message}`);
   }
+
+  return { allowed: false, maxCapacity: 0 };
 }
 
 
@@ -149,7 +146,7 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
       if (!roomId) return;
 
       // roomId == groupId in your domain
-      const allowed = await isMember(userId, roomId);
+      const { allowed, maxCapacity } = await getRoomAccess(userId, roomId);
       if (!allowed) {
         socket.emit('error', {
           event: 'join-live-room',
@@ -160,10 +157,10 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
 
       // Enforce room size limit
       const currentSockets = await io.in(`live-room:${roomId}`).fetchSockets();
-      if (currentSockets.length >= MAX_ROOM_SIZE) {
+      if (currentSockets.length >= maxCapacity) {
         socket.emit('error', {
           event: 'join-live-room',
-          message: `Live room is full (max ${MAX_ROOM_SIZE} participants)`,
+          message: `Live room is full (max ${maxCapacity} participants)`,
         });
         return;
       }
@@ -402,9 +399,32 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
   // server-side on connection (see socket/index.ts).
   // ─────────────────────────────────────────────────────────────────────────
 
-  socket.on('webrtc-offer', (data: WebRTCOfferPayload) => {
+  const validateSignaling = async (senderId: string, targetId: string, roomId: string): Promise<boolean> => {
+    // 1. sender is authorized for the provided roomId
+    const { allowed } = await getRoomAccess(senderId, roomId);
+    if (!allowed) {
+      LoggerUtil.warn(`Signaling blocked: sender ${senderId} not allowed in room ${roomId}`);
+      return false;
+    }
+
+    // 2. target user is an active participant of the SAME live room
+    const targetSockets = await io.in(`live-room:${roomId}`).fetchSockets();
+    const isTargetInRoom = targetSockets.some(
+      (s: any) => s.data?.userId === targetId || (s as any).userId === targetId
+    );
+    if (!isTargetInRoom) {
+       LoggerUtil.warn(`Signaling blocked: target ${targetId} not in room ${roomId}`);
+       return false;
+    }
+
+    return true;
+  };
+
+  socket.on('webrtc-offer', async (data: WebRTCOfferPayload) => {
     const { targetUserId, roomId, offer } = data;
-    if (!targetUserId || !offer) return;
+    if (!targetUserId || !offer || !roomId) return;
+
+    if (!(await validateSignaling(userId, targetUserId, roomId))) return;
 
     LoggerUtil.debug(`WebRTC offer from ${userId} to ${targetUserId}`);
 
@@ -416,9 +436,11 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
     });
   });
 
-  socket.on('webrtc-answer', (data: WebRTCAnswerPayload) => {
+  socket.on('webrtc-answer', async (data: WebRTCAnswerPayload) => {
     const { targetUserId, roomId, answer } = data;
-    if (!targetUserId || !answer) return;
+    if (!targetUserId || !answer || !roomId) return;
+
+    if (!(await validateSignaling(userId, targetUserId, roomId))) return;
 
     LoggerUtil.debug(`WebRTC answer from ${userId} to ${targetUserId}`);
 
@@ -429,9 +451,11 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
     });
   });
 
-  socket.on('webrtc-ice-candidate', (data: WebRTCIceCandidatePayload) => {
+  socket.on('webrtc-ice-candidate', async (data: WebRTCIceCandidatePayload) => {
     const { targetUserId, roomId, candidate } = data;
-    if (!targetUserId || !candidate) return;
+    if (!targetUserId || !candidate || !roomId) return;
+
+    if (!(await validateSignaling(userId, targetUserId, roomId))) return;
 
     io.to(`user:${targetUserId}`).emit('webrtc-ice-candidate-received', {
       fromUserId: userId,
