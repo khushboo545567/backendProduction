@@ -1,6 +1,6 @@
 import { User } from '@/shared/models/index.models';
 import Company from '@/company/models/Company.model';
-import { Mentor } from '../models';
+import { Mentor, SessionMentor, GroupSession } from '../models';
 import {
   CreateMentorInput,
   ExperienceLevel,
@@ -393,6 +393,53 @@ class MentorService {
         } catch (error: any) {
           logger.warn(`Failed to fetch company ${mentorObj.companyId}: ${error.message}`);
         }
+      }
+
+      // Compute real session stats from SessionMentor and GroupSession collections
+      try {
+        const mentorIdQuery = [mentorObj.mentorId, mentorObj.userId];
+
+        const [oneToOneSessions, groupSessions] = await Promise.all([
+          SessionMentor.find({ mentorId: { $in: mentorIdQuery } }).select('status').lean(),
+          GroupSession.find({ mentorId: { $in: mentorIdQuery }, isTemplate: false }).select('status participants').lean(),
+        ]);
+
+        const totalOneToOne = oneToOneSessions.length;
+        const completedOneToOne = oneToOneSessions.filter((s: any) => s.status === 'completed').length;
+        const cancelledOneToOne = oneToOneSessions.filter((s: any) => s.status === 'cancelled').length;
+
+        const totalGroup = groupSessions.length;
+        const completedGroup = groupSessions.filter((g: any) => g.status === 'completed').length;
+        const cancelledGroup = groupSessions.filter((g: any) => g.status === 'cancelled').length;
+
+        const totalSessionsCount = (mentorObj.stats?.totalSessions || 0) + totalOneToOne + totalGroup;
+        const completedSessionsCount = (mentorObj.stats?.completedSessions || 0) + completedOneToOne + completedGroup;
+        const cancelledSessionsCount = (mentorObj.stats?.cancelledSessions || 0) + cancelledOneToOne + cancelledGroup;
+
+        const completionRate = totalSessionsCount > 0
+          ? Math.round((completedSessionsCount / totalSessionsCount) * 100)
+          : (mentorObj.stats?.completionRate ?? 100);
+
+        const attempted = completedSessionsCount + cancelledSessionsCount;
+        const successRate = attempted > 0
+          ? Math.round((completedSessionsCount / attempted) * 100)
+          : completionRate;
+
+        const responseTime = mentorObj.stats?.responseTime && mentorObj.stats.responseTime > 0
+          ? mentorObj.stats.responseTime
+          : 1;
+
+        mentorObj.stats = {
+          ...mentorObj.stats,
+          totalSessions: totalSessionsCount,
+          completedSessions: completedSessionsCount,
+          cancelledSessions: cancelledSessionsCount,
+          completionRate,
+          successRate,
+          responseTime,
+        };
+      } catch (statsErr: any) {
+        logger.warn(`Failed to dynamically compute mentor stats: ${statsErr.message}`);
       }
 
       return { ...mentorObj, user, company };

@@ -23,4 +23,22 @@ router.get(
     }
 );
 
+/**
+ * @route   POST /api/v1/mentorship/trust-score/:userId/sync
+ * @desc    Recalculate a user's mentor trust score using real analytics data
+ * @access  Private (Owner/Admin)
+ */
+router.post(
+    '/trust-score/:userId/sync',
+    AuthMiddleware.authenticate as any,
+    rateLimitMiddleware({ maxRequests: 10, windowMs: 60000 }),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            await TrustScoreController.recalculateTrustScore(req as any, res);
+        } catch (error: any) {
+            next(error);
+        }
+    }
+);
+
 export default router;

@@ -5,6 +5,7 @@ import SessionMentor from '../models/SessionMentor';
 import GroupSession from '../models/GroupSession';
 import { TrustScoreCalculator } from '../utils/trustScoreCalculator';
 import { TrustScoreMetrics } from '../interface/trustScore.types';
+import mentorshipanalyticsService from './mentorshipAnalytics.service';
 
 export class TrustScoreService {
   /**
@@ -19,71 +20,22 @@ export class TrustScoreService {
         return null;
       }
 
-      const reviewStats = await MentorshipReview.aggregate([
-        { $match: { mentorId } },
-        {
-          $group: {
-            _id: null,
-            averageRating: { $avg: '$rating' },
-            totalReviews: { $sum: 1 }
-          }
-        }
-      ]);
-
-      const averageRating = reviewStats[0]?.averageRating || 0;
-      const totalReviews = reviewStats[0]?.totalReviews || 0;
-
-      const oneOnOneStats = await SessionMentor.aggregate([
-        { $match: { mentorId } },
-        {
-          $group: {
-            _id: null,
-            totalSessions: { $sum: 1 },
-            completedSessions: {
-              $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
-            },
-            cancelledSessions: {
-              $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
-            }
-          }
-        }
-      ]);
-
-      const groupStats = await GroupSession.aggregate([
-        { $match: { mentorId } },
-        {
-          $group: {
-            _id: null,
-            totalSessions: { $sum: 1 },
-            completedSessions: {
-              $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
-            },
-            cancelledSessions: {
-              $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
-            }
-          }
-        }
-      ]);
-
-      const oneOnOneTotal = oneOnOneStats[0]?.totalSessions || 0;
-      const oneOnOneCompleted = oneOnOneStats[0]?.completedSessions || 0;
-      const oneOnOneCancelled = oneOnOneStats[0]?.cancelledSessions || 0;
-
-      const groupTotal = groupStats[0]?.totalSessions || 0;
-      const groupCompleted = groupStats[0]?.completedSessions || 0;
-      const groupCancelled = groupStats[0]?.cancelledSessions || 0;
+      // Fetch the actual real dashboard stats from the analytics service
+      const dashboardStats = await mentorshipanalyticsService.getMentorDashboardStats(mentorId);
 
       const metrics: TrustScoreMetrics = {
-        totalSessions: oneOnOneTotal + groupTotal,
-        completedSessions: oneOnOneCompleted + groupCompleted,
-        cancelledSessions: oneOnOneCancelled + groupCancelled,
-        averageRating,
-        totalReviews,
+        totalSessions: dashboardStats.cancellationRate.total,
+        completedSessions: dashboardStats.conversion.bookings,
+        cancelledSessions: dashboardStats.cancellationRate.cancelled,
+        averageRating: dashboardStats.reviews.averageRating,
+        totalReviews: dashboardStats.reviews.totalReviews,
         hasTitle: !!mentor.title,
         hasBio: !!mentor.bio && mentor.bio.length >= 50,
         hasDomains: Array.isArray(mentor.domains) && mentor.domains.length > 0,
         hasSkills: Array.isArray(mentor.skills) && mentor.skills.length > 0,
         isVerified: !!mentor.verification?.isVerified,
+        profileViews: dashboardStats.profileViews.value,
+        conversionRate: dashboardStats.conversion.rate,
       };
 
       const newTrustScore = TrustScoreCalculator.calculate(metrics);
