@@ -50,11 +50,12 @@ export class CommunityEventRepository {
     });
   }
 
-  async list(query: CommunityEventListQuery) {
-  // ... unchanged ...
-  const items = await attachUserField(rawItems, 'createdBy', 'userId firstName lastName');
-  return { items, total, page, pages: Math.ceil(total / limit) };
-}
+  async findById(id: string) {
+    const event = await CommunityEvent.findById(id);
+    if (!event) return null;
+    const [withCreator] = await attachUserField([event], 'createdBy');
+    return withCreator;
+  }
 
   async update(id: string, data: UpdateCommunityEventDTO): Promise<ICommunityEvent | null> {
     const updates: Record<string, any> = { ...data };
@@ -96,7 +97,7 @@ export class CommunityEventRepository {
       CommunityEvent.countDocuments(filter),
     ]);
 
-    const items = await attachUserField(rawItems, 'createdBy', 'userId name avatar');
+    const items = await attachUserField(rawItems, 'createdBy');
 
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
@@ -193,7 +194,7 @@ export class CommunityEventRepository {
         .limit(limit),
       EventRSVP.countDocuments({ event: eventId, status: 'going' }),
     ]);
-    const items = await attachUserField(rawItems, 'user', 'userId name avatar headline');
+    const items = await attachUserField(rawItems, 'user');
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
 }

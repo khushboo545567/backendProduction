@@ -88,7 +88,8 @@ class ForumController {
 
   async pinForum(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const forum = await forumService.pinForum(req.params.id, req.body.isPinned);
+      const isAdmin = (req.user as any)?.role === 'admin';
+      const forum = await forumService.pinForum(req.params.id, req.user!.id, isAdmin, req.body.isPinned);
       ResponseHandler.success(res, 'Forum pin status updated', forum);
     } catch (error: any) {
       logger.error('Error pinning forum thread:', error);
@@ -98,7 +99,8 @@ class ForumController {
 
   async lockForum(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const forum = await forumService.lockForum(req.params.id, req.body.isLocked);
+      const isAdmin = (req.user as any)?.role === 'admin';
+      const forum = await forumService.lockForum(req.params.id, req.user!.id, isAdmin, req.body.isLocked);
       ResponseHandler.success(res, 'Forum lock status updated', forum);
     } catch (error: any) {
       logger.error('Error locking forum thread:', error);

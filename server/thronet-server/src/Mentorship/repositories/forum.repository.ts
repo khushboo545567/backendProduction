@@ -89,7 +89,8 @@ export class ForumRepository {
       forum.upvotes.push(userId);
     }
     await forum.save();
-    return forum;
+    const [withAuthor] = await attachAuthors([forum]);
+    return withAuthor;
   }
 
   async delete(id: string) {
@@ -98,14 +99,20 @@ export class ForumRepository {
   }
 
   async pin(id: string, isPinned: boolean) {
-    return Forum.findByIdAndUpdate(id, { isPinned }, { new: true });
+    const forum = await Forum.findByIdAndUpdate(id, { isPinned }, { new: true });
+    if (!forum) return null;
+    const [withAuthor] = await attachAuthors([forum]);
+    return withAuthor;
   }
 
   async lock(id: string, isLocked: boolean) {
-    return Forum.findByIdAndUpdate(id, { isLocked }, { new: true });
+    const forum = await Forum.findByIdAndUpdate(id, { isLocked }, { new: true });
+    if (!forum) return null;
+    const [withAuthor] = await attachAuthors([forum]);
+    return withAuthor;
   }
 
-  async addReply(forumId: string, authorId: string, data: CreateForumReplyDTO): Promise<IForumReply> {
+  async addReply(forumId: string, authorId: string, data: CreateForumReplyDTO): Promise<any> {
     const reply = await ForumReply.create({
       forum: forumId,
       author: authorId,
@@ -113,7 +120,8 @@ export class ForumRepository {
       mentions: data.mentions || [],
     });
     await this.incrementReplyCount(forumId);
-    return reply;
+    const [withAuthor] = await attachAuthors([reply]);
+    return withAuthor;
   }
 
   async listReplies(forumId: string, page = 1, limit = 30) {
