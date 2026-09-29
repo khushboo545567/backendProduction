@@ -46,6 +46,18 @@ export class ForumService {
     return forumRepository.delete(id);
   }
 
+  async updateForum(id: string, requesterId: string, isAdmin: boolean, data: { topic?: string; description?: string }) {
+    const forum = await forumRepository.findById(id);
+    if (!forum) throw new AppError("Forum thread not found", 404);
+    const authorId = typeof forum.author === 'object' && forum.author !== null
+      ? (forum.author as any).userId || String(forum.author)
+      : String(forum.author);
+    if (!isAdmin && authorId !== requesterId) {
+      throw new AppError("Not authorized to edit this thread", 403);
+    }
+    return forumRepository.update(id, data);
+  }
+
   async pinForum(id: string, requesterId: string, isAdmin: boolean, isPinned: boolean) {
     const forum = await forumRepository.findById(id);
     if (!forum) throw new AppError("Forum thread not found", 404);

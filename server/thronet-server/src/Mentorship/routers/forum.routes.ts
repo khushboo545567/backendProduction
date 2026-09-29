@@ -10,6 +10,7 @@ router.get("/", AuthMiddleware.authenticateOptional as any, forumController.list
 router.post("/", AuthMiddleware.authenticate, forumController.createForum);
 router.get("/:id", AuthMiddleware.authenticateOptional as any, forumController.getForum);
 router.delete("/:id", AuthMiddleware.authenticate, forumController.deleteForum);
+router.patch("/:id", AuthMiddleware.authenticate, forumController.updateForum);
 router.patch("/:id/pin", AuthMiddleware.authenticate, forumController.pinForum);
 router.patch("/:id/lock", AuthMiddleware.authenticate, forumController.lockForum);
 router.post("/:id/upvote", AuthMiddleware.authenticate, forumController.toggleUpvote);

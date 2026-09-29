@@ -138,8 +138,16 @@ export class CommunityEventRepository {
 
       await session.commitTransaction();
       return { event, alreadyGoing: false };
-    } catch (error) {
+    } catch (error: any) {
       await session.abortTransaction();
+      // E11000: a truly concurrent second request raced past our findOne check
+      // and hit the unique (event, user) index. Treat as "already going" —
+      // no count was incremented, no state was changed.
+      if (error?.code === 11000) {
+        const event = await CommunityEvent.findById(eventId);
+        if (!event) throw new Error('EVENT_NOT_FOUND');
+        return { event, alreadyGoing: true };
+      }
       throw error;
     } finally {
       session.endSession();

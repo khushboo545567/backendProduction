@@ -17,3 +17,10 @@ export const forumListQuerySchema = z.object({
   page: z.coerce.number().min(1).optional(),
   limit: z.coerce.number().min(1).max(100).optional(),
 });
+
+export const updateForumSchema = z.object({
+  topic: z.string().min(3).max(200).optional(),
+  description: z.string().max(2000).optional(),
+}).refine((d) => d.topic !== undefined || d.description !== undefined, {
+  message: 'At least one of topic or description must be provided',
+});

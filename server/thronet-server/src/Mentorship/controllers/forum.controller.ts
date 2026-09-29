@@ -7,6 +7,7 @@ import {
   createForumSchema,
   createForumReplySchema,
   forumListQuerySchema,
+  updateForumSchema,
 } from '@/Mentorship/validations/forum.validator';
 
 class ForumController {
@@ -71,6 +72,18 @@ class ForumController {
       ResponseHandler.success(res, 'Upvote toggled', forum);
     } catch (error: any) {
       logger.error('Error toggling upvote:', error);
+      next(error);
+    }
+  }
+
+  async updateForum(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = updateForumSchema.parse(req.body);
+      const isAdmin = (req.user as any)?.role === 'admin';
+      const forum = await forumService.updateForum(req.params.id, req.user!.id, isAdmin, data);
+      ResponseHandler.success(res, 'Forum thread updated', forum);
+    } catch (error: any) {
+      logger.error('Error updating forum thread:', error);
       next(error);
     }
   }
