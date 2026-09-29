@@ -170,7 +170,7 @@ try {
       viewer.firstName ||
       'Someone';
   }
-} catch (err) {
+} catch (err: any) {
   logger.error('Failed to resolve profile viewer:', err);
 }
             const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -478,6 +478,24 @@ try {
       ResponseHandler.success(res, 'Report submitted. Our team will review it.');
     } catch (error: any) {
       logger.error('Error reporting mentor:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/v1/mentorship/mentors/:id/dashboard
+   * @desc    Get unified real mentor dashboard data (stats, profile, upcoming sessions)
+   * @access  Private (mentor owner)
+   */
+  async getMentorDashboard(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params; // mentorId or userId
+      const authUserId = req.user!.id;
+
+      const dashboardData = await mentorService.getMentorDashboardData(id, authUserId);
+      ResponseHandler.success(res, 'Mentor dashboard data fetched successfully', dashboardData);
+    } catch (error: any) {
+      logger.error('Error fetching mentor dashboard data:', error);
       next(error);
     }
   }

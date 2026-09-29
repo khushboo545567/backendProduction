@@ -696,6 +696,111 @@ class MentorService {
       throw error;
     }
   }
+
+  /**
+   * Get unified mentor dashboard overview stats and upcoming sessions
+   */
+  async getMentorDashboardData(mentorIdOrUserId: string, authUserId: string): Promise<any> {
+    try {
+      let mentor = await mentorRepository.findByMentorId(mentorIdOrUserId);
+      if (!mentor) {
+        mentor = await mentorRepository.findByUserId(mentorIdOrUserId);
+      }
+      if (!mentor) {
+        throw new NotFoundError('Mentor profile not found.');
+      }
+
+      // Authorization check: Only logged-in mentor owner (or admin) can view their dashboard
+      if (mentor.userId !== authUserId) {
+        throw new ForbiddenError('You are not authorized to access this dashboard.');
+      }
+
+      // Fetch user details for name & profile photo
+      const user = (await User.findOne({ userId: mentor.userId, 'flags.isDeleted': false }).lean()) as any;
+      const firstName = user?.firstName || mentor.user?.firstName || 'Mentor';
+      const lastName = user?.lastName || mentor.user?.lastName || '';
+      const name = `${firstName} ${lastName}`.trim();
+      const profilePic = mentor.profilePic || user?.profilePic || null;
+
+      // Stats calculations
+      const completedSessionsCount = await SessionMentor.countDocuments({
+        mentorId: mentor.mentorId,
+        status: 'completed',
+      });
+
+      const now = new Date();
+      const upcomingCount = await SessionMentor.countDocuments({
+        mentorId: mentor.mentorId,
+        scheduledAt: { $gte: now },
+        status: { $nin: ['cancelled', 'completed', 'no_show', 'refunded'] },
+      });
+
+      const averageRating = mentor.stats?.averageRating ?? 0;
+      const totalReviews = mentor.stats?.totalReviews ?? 0;
+      const trustScore = mentor.trustScore?.score ?? mentor.stats?.trustScore ?? null;
+      const isVerified = Boolean(mentor.verification?.isVerified || mentor.isVerified);
+      const category = (Array.isArray(mentor.domains) && mentor.domains[0]) || mentor.title || 'Web Development';
+
+      // Upcoming 4 sessions list
+      const upcomingDocs = await SessionMentor.find({
+        mentorId: mentor.mentorId,
+        scheduledAt: { $gte: now },
+        status: { $nin: ['cancelled', 'completed', 'no_show', 'refunded'] },
+      })
+        .sort({ scheduledAt: 1 })
+        .limit(4)
+        .lean();
+
+      const upcomingSessions = await Promise.all(
+        upcomingDocs.map(async (s: any) => {
+          let menteeName = s.bookedMenteeName || 'Student';
+          let menteeProfilePhoto = null;
+          if (s.menteeId) {
+            const menteeUser = (await User.findOne({ userId: s.menteeId }).lean()) as any;
+            if (menteeUser) {
+              menteeName = menteeUser.fullName || `${menteeUser.firstName || ''} ${menteeUser.lastName || ''}`.trim() || 'Student';
+              menteeProfilePhoto = menteeUser.profilePic || null;
+            }
+          }
+          return {
+            _id: s._id,
+            sessionId: s.sessionId || String(s._id),
+            menteeName,
+            menteeProfilePhoto,
+            title: s.title || s.sessionType || '1-on-1 Session',
+            sessionType: s.sessionType || 'Session',
+            scheduledAt: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
+            status: s.status || 'pending',
+          };
+        })
+      );
+
+      return {
+        mentorId: mentor.mentorId,
+        userId: mentor.userId,
+        user: {
+          firstName,
+          lastName,
+          name,
+        },
+        profilePic,
+        category,
+        rating: averageRating,
+        totalReviews,
+        stats: {
+          totalSessions: completedSessionsCount,
+          upcoming: upcomingCount,
+          rating: averageRating,
+          trustScore,
+        },
+        isVerified,
+        upcomingSessions,
+      };
+    } catch (error: any) {
+      logger.error(`Error fetching mentor dashboard data: ${error.message}`);
+      throw error;
+    }
+  }
 }
 
 export default new MentorService();
