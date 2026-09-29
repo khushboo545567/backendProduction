@@ -112,6 +112,13 @@ export class ForumRepository {
     return withAuthor;
   }
 
+  async update(id: string, data: { topic?: string; description?: string }) {
+    const forum = await Forum.findByIdAndUpdate(id, { $set: data }, { new: true });
+    if (!forum) return null;
+    const [withAuthor] = await attachAuthors([forum]);
+    return withAuthor;
+  }
+
   async addReply(forumId: string, authorId: string, data: CreateForumReplyDTO): Promise<any> {
     const reply = await ForumReply.create({
       forum: forumId,
