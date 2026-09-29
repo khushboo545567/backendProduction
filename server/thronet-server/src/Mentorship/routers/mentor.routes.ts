@@ -73,6 +73,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/mentors/:id/dashboard
+ * @desc    Get unified real mentor dashboard data (stats, profile, upcoming sessions)
+ * @access  Private (mentor owner)
+ */
+router.get(
+  '/:id/dashboard',
+  AuthMiddleware.authenticate as any,
+  mentorController.getMentorDashboard as any
+);
+
+/**
  * @route   GET /api/mentors/:id
  * @desc    Get mentor profile by ID
  * @access  Public
