@@ -7,6 +7,7 @@ export interface CreateForumDTO {
 export interface CreateForumReplyDTO {
   content: string;
   mentions?: string[];
+  parentReplyId?: string | null;
 }
 
 export interface ForumListQuery {

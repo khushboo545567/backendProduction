@@ -9,6 +9,7 @@ export const createForumSchema = z.object({
 export const createForumReplySchema = z.object({
   content: z.string().min(1).max(3000),
   mentions: z.array(z.string()).optional(),
+  parentReplyId: z.string().optional().nullable(),
 });
 
 export const forumListQuerySchema = z.object({
