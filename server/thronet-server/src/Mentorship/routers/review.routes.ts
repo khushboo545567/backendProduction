@@ -67,6 +67,10 @@ const paginationValidation = [
     .optional()
     .isInt({ min: 1, max: 50 })
     .withMessage('Limit must be between 1 and 50'),
+  query('sort')
+    .optional()
+    .isIn(['newest', 'helpful', 'highest', 'lowest'])
+    .withMessage('Invalid sort option'),
 ];
 
 /**
@@ -123,6 +127,20 @@ router.get(
     param('mentorId').notEmpty().withMessage('Mentor ID is required'),
   ]),
   mentorshipReviewController.getReviewStats
+);
+
+/**
+ * @route   GET /api/v1/reviews/mentor/:mentorId/my-reactions
+ * @desc    Logged-in user ke like/dislike states
+ * @access  Private
+ */
+router.get(
+  '/mentor/:mentorId/my-reactions',
+  AuthMiddleware.authenticate as any,
+  validate([
+    param('mentorId').notEmpty().withMessage('Mentor ID is required'),
+  ]),
+  mentorshipReviewController.getMyReactions
 );
 
 /**
@@ -194,10 +212,40 @@ router.post(
  */
 router.post(
   '/:id/helpful',
+  AuthMiddleware.authenticate as any,
   validate([
     param('id').notEmpty().withMessage('Review ID is required'),
   ]),
   mentorshipReviewController.markHelpful
+);
+
+/**
+ * @route   DELETE /api/v1/reviews/:id/response
+ * @desc    Mentor ka reply hatao
+ * @access  Private (Mentor)
+ */
+router.delete(
+  '/:id/response',
+  AuthMiddleware.authenticate as any,
+  validate([
+    param('id').notEmpty().withMessage('Review ID is required'),
+  ]),
+  mentorshipReviewController.deleteMentorResponse
+);
+
+/**
+ * @route   POST /api/v1/reviews/:id/react
+ * @desc    Like / dislike toggle. body: { type: 'like' | 'dislike' }
+ * @access  Private
+ */
+router.post(
+  '/:id/react',
+  AuthMiddleware.authenticate as any,
+  validate([
+    param('id').notEmpty().withMessage('Review ID is required'),
+    body('type').isIn(['like', 'dislike']).withMessage("type must be 'like' or 'dislike'"),
+  ]),
+  mentorshipReviewController.reactToReview
 );
 
 /**

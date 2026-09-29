@@ -9,7 +9,11 @@ export interface IReview {
   rating: number;
   comment: string;
   helpfulCount: number;
+  helpfulBy: string[];
+  notHelpfulCount: number;
+  notHelpfulBy: string[];
   reportCount: number;
+
   isVerified: boolean;
   mentorResponse?: {
     comment: string;
@@ -92,6 +96,21 @@ reviewId: {
       default: 0,
       min: 0,
     },
+    helpfulBy: {
+      type: [String],
+      default: [],
+      select: false,
+    },
+    notHelpfulCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    notHelpfulBy: {
+      type: [String],
+      default: [],
+      select: false,
+    },
     reportCount: {
       type: Number,
       default: 0,
@@ -148,6 +167,8 @@ toJSON: {
     ret.id = ret.reviewId;
     delete (ret as any)._id;
     delete (ret as any).__v;
+    delete (ret as any).helpfulBy;
+    delete (ret as any).notHelpfulBy;
     return ret;
   }
 },

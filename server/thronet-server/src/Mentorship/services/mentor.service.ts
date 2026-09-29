@@ -753,10 +753,15 @@ class MentorService {
 
       const upcomingSessions = await Promise.all(
         upcomingDocs.map(async (s: any) => {
+          const effectiveMenteeId =
+            s.menteeId ||
+            s.bookedBy ||
+            (Array.isArray(s.bookings) && s.bookings[0]?.bookedBy) ||
+            null;
           let menteeName = s.bookedMenteeName || 'Student';
           let menteeProfilePhoto = null;
-          if (s.menteeId) {
-            const menteeUser = (await User.findOne({ userId: s.menteeId })
+          if (effectiveMenteeId) {
+            const menteeUser = (await User.findOne({ userId: effectiveMenteeId })
               .select('userId firstName lastName fullName profilePhotoId')
               .lean()) as any;
             if (menteeUser) {
@@ -764,7 +769,7 @@ class MentorService {
               if (menteeUser.profilePic) {
                 menteeProfilePhoto = menteeUser.profilePic;
               } else {
-                const activePhoto = await ProfilePhoto.findActivePhoto(s.menteeId);
+                const activePhoto = await ProfilePhoto.findActivePhoto(effectiveMenteeId);
                 if (activePhoto?.cloudinarySecureUrl || activePhoto?.cloudinaryUrl) {
                   menteeProfilePhoto = activePhoto.cloudinarySecureUrl || activePhoto.cloudinaryUrl;
                 } else if (menteeUser.profilePhotoId) {
@@ -779,7 +784,7 @@ class MentorService {
           return {
             _id: s._id,
             sessionId: s.sessionId || String(s._id),
-            menteeId: s.menteeId || null,
+            menteeId: effectiveMenteeId,
             menteeName,
             menteeProfilePhoto,
             title: s.title || s.sessionType || '1-on-1 Session',

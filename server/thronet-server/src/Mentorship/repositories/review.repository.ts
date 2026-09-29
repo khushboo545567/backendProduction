@@ -1,6 +1,16 @@
 import MentorshipReview from '../models/MentorshipReview';
 import mongoose from 'mongoose';
 
+export type ReviewSort = 'newest' | 'helpful' | 'highest' | 'lowest';
+export type ReviewReaction = 'like' | 'dislike';
+
+const SORT_MAP: Record<ReviewSort, Record<string, 1 | -1>> = {
+    newest: { createdAt: -1 },
+    helpful: { helpfulCount: -1, createdAt: -1 },
+    highest: { rating: -1, createdAt: -1 },
+    lowest: { rating: 1, createdAt: -1 },
+};
+
 // ✅ FIX: mongoose.model('User') / .model('Mentor') / .model('ProfilePhoto')
 // are called without a generic type, so TS treats every .lean() result as
 // FlattenMaps<any> — it has no idea these documents carry firstName,
@@ -72,13 +82,14 @@ class ReviewRepository {
         mentorId: string,
         skip: number,
         limit: number,
-        includePrivate: boolean = false
+        includePrivate: boolean = false,
+        sort: ReviewSort = 'newest'
     ): Promise<any[]> {
         const query: any = { mentorId, isDeleted: false };
         if (!includePrivate) query.isPublic = true;
 
         const reviews: EnrichedReview[] = await MentorshipReview.find(query)
-            .sort({ createdAt: -1 })
+            .sort(SORT_MAP[sort] || SORT_MAP.newest)
             .skip(skip)
             .limit(limit)
             .lean();
@@ -169,6 +180,7 @@ class ReviewRepository {
                 const user = rawMenteeId ? userMap.get(rawMenteeId as unknown as string) : undefined;
                 
                 if (user) {
+                    review.menteeUserId = user.userId || (user._id ? user._id.toString() : undefined);
                     const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
                     const profilePic = user.profilePhotoId ? (photoMap.get(user.profilePhotoId) || user.profilePhotoId) : null;
                     
@@ -189,6 +201,8 @@ class ReviewRepository {
                         title: user.title,
                     } as any;
                 }
+
+                if (mentor?.userId) review.mentorUserId = mentor.userId;
 
                 if (mentorUser) {
                     review.mentorId = {
@@ -244,6 +258,95 @@ class ReviewRepository {
         return await MentorshipReview.findOneAndUpdate(
             { reviewId, isDeleted: false },
             { $inc: { reportCount: 1 } },
+            { new: true }
+        );
+    }
+
+    /**
+     * Like/dislike toggle. Ek user ka ek hi reaction:
+     *  - same reaction dobara  -> remove
+     *  - opposite reaction     -> switch
+     * Har write filter se guarded hai, isliye parallel clicks double count nahi karte.
+     * Race lost hone par null return hota hai.
+     */
+    async toggleReactionAtomic(
+        reviewId: string,
+        userId: string,
+        type: ReviewReaction
+    ): Promise<{ helpfulCount: number; notHelpfulCount: number; userReaction: ReviewReaction | null } | null> {
+        const base = { reviewId, isDeleted: false };
+
+        const current: any = await MentorshipReview.findOne(base)
+            .select('+helpfulBy +notHelpfulBy')
+            .lean();
+        if (!current) return null;
+
+        const liked = (current.helpfulBy || []).includes(userId);
+        const disliked = (current.notHelpfulBy || []).includes(userId);
+
+        const [mainBy, mainCount, otherBy, otherCount] =
+            type === 'like'
+                ? (['helpfulBy', 'helpfulCount', 'notHelpfulBy', 'notHelpfulCount'] as const)
+                : (['notHelpfulBy', 'notHelpfulCount', 'helpfulBy', 'helpfulCount'] as const);
+        const hadMain = type === 'like' ? liked : disliked;
+        const hadOther = type === 'like' ? disliked : liked;
+
+        let filter: any;
+        let update: any;
+
+        if (hadMain) {
+            filter = { ...base, [mainBy]: userId };
+            update = { $pull: { [mainBy]: userId }, $inc: { [mainCount]: -1 } };
+        } else {
+            filter = {
+                ...base,
+                [mainBy]: { $ne: userId },
+                [otherBy]: hadOther ? userId : { $ne: userId },
+            };
+            update = { $addToSet: { [mainBy]: userId }, $inc: { [mainCount]: 1 } };
+            if (hadOther) {
+                update.$pull = { [otherBy]: userId };
+                update.$inc[otherCount] = -1;
+            }
+        }
+
+        const updated: any = await MentorshipReview.findOneAndUpdate(filter, update, { new: true })
+            .select('+helpfulBy +notHelpfulBy')
+            .lean();
+        if (!updated) return null;
+
+        return {
+            helpfulCount: Math.max(0, updated.helpfulCount || 0),
+            notHelpfulCount: Math.max(0, updated.notHelpfulCount || 0),
+            userReaction: (updated.helpfulBy || []).includes(userId)
+                ? 'like'
+                : (updated.notHelpfulBy || []).includes(userId)
+                ? 'dislike'
+                : null,
+        };
+    }
+
+    /** { [reviewId]: 'like' | 'dislike' } is user ke liye ek mentor ke reviews par */
+    async getUserReactions(mentorId: string, userId: string): Promise<Record<string, ReviewReaction>> {
+        const docs: any[] = await MentorshipReview.find({
+            mentorId,
+            isDeleted: false,
+            $or: [{ helpfulBy: userId }, { notHelpfulBy: userId }],
+        })
+            .select('reviewId +helpfulBy +notHelpfulBy')
+            .lean();
+
+        const result: Record<string, ReviewReaction> = {};
+        docs.forEach((d) => {
+            result[d.reviewId] = (d.helpfulBy || []).includes(userId) ? 'like' : 'dislike';
+        });
+        return result;
+    }
+
+    async removeMentorResponse(reviewId: string): Promise<any> {
+        return await MentorshipReview.findOneAndUpdate(
+            { reviewId, isDeleted: false },
+            { $unset: { mentorResponse: 1 } },
             { new: true }
         );
     }

@@ -45,14 +45,18 @@ class MentorshipReviewController {
   async getMentorReviews(req: Request, res: Response): Promise<void> {
     try {
       const { mentorId } = req.params;
-      const { page = 1, limit = 10 } = req.query;
+      const { page = 1, limit = 10, sort = 'newest' } = req.query;
+      const allowedSorts = ['newest', 'helpful', 'highest', 'lowest'];
+      const safeSort = (allowedSorts.includes(String(sort)) ? String(sort) : 'newest') as any;
 
       logger.info(`📋 Fetching reviews for mentor: ${mentorId}`);
 
       const result = await mentorshipReviewService.getMentorReviews(
         mentorId,
         Number(page),
-        Number(limit)
+        Number(limit),
+        false,
+        safeSort
       );
 
       ResponseHandler.paginated(
@@ -190,16 +194,99 @@ class MentorshipReviewController {
   async markHelpful(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
 
-      logger.info(`👍 Marking review as helpful: ${id}`);
+      logger.info(`👍 Toggling like on review: ${id}`);
 
-      const review = await mentorshipReviewService.markHelpful(id);
+      const result = await mentorshipReviewService.reactToReview(id, userId, 'like');
 
-      ResponseHandler.success(res, 'Review marked as helpful', review);
+      ResponseHandler.success(res, 'Review reaction updated', result);
     } catch (error: any) {
       logger.error('❌ Failed to mark review as helpful:', error);
       if (!res.headersSent) {
         ResponseHandler.error(res, error.message || 'Failed to mark as helpful', 400);
+      }
+    }
+  }
+
+  /**
+   * Remove mentor response
+   * DELETE /api/v1/reviews/:id/response
+   */
+  async deleteMentorResponse(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      await mentorshipReviewService.deleteMentorResponse(id, userId);
+
+      ResponseHandler.success(res, 'Response removed successfully');
+    } catch (error: any) {
+      logger.error('❌ Failed to delete response:', error);
+      if (!res.headersSent) {
+        ResponseHandler.error(res, error.message || 'Failed to delete response', 400);
+      }
+    }
+  }
+
+  /**
+   * Like / dislike a review (toggle)
+   * POST /api/v1/reviews/:id/react   body: { type: 'like' | 'dislike' }
+   */
+  async reactToReview(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { type } = req.body;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      if (type !== 'like' && type !== 'dislike') {
+        ResponseHandler.badRequest(res, "type must be 'like' or 'dislike'");
+        return;
+      }
+
+      const result = await mentorshipReviewService.reactToReview(id, userId, type);
+
+      ResponseHandler.success(res, 'Reaction updated', result);
+    } catch (error: any) {
+      logger.error('❌ Failed to react to review:', error);
+      if (!res.headersSent) {
+        ResponseHandler.error(res, error.message || 'Failed to update reaction', 400);
+      }
+    }
+  }
+
+  /**
+   * Logged-in user ke reactions ek mentor ke reviews par
+   * GET /api/v1/reviews/mentor/:mentorId/my-reactions
+   */
+  async getMyReactions(req: Request, res: Response): Promise<void> {
+    try {
+      const { mentorId } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const reactions = await mentorshipReviewService.getUserReactions(mentorId, userId);
+
+      ResponseHandler.success(res, 'Reactions retrieved successfully', reactions);
+    } catch (error: any) {
+      logger.error('❌ Failed to fetch reactions:', error);
+      if (!res.headersSent) {
+        ResponseHandler.error(res, error.message || 'Failed to fetch reactions', 500);
       }
     }
   }

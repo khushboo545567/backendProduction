@@ -2,7 +2,7 @@ import { BookingStatus } from "@/shared/constants/bookingStatus";
 // import { Mentor, MentorshipReview, SessionMentor } from "../models";
 import { logger } from "@/shared/logger.util";
 import { Mentor, MentorshipReview, SessionMentor } from "../models";
-import reviewRepository from "../repositories/review.repository";
+import reviewRepository, { ReviewSort, ReviewReaction } from "../repositories/review.repository";
 import { generateSecureId } from "@/shared/security";
 import { TrustScoreEvents } from '../events/trustScore.events';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
@@ -138,7 +138,8 @@ class ReviewService {
     mentorId: string,
     page: number = 1,
     limit: number = 10,
-    includePrivate: boolean = false
+    includePrivate: boolean = false,
+    sort: ReviewSort = 'newest'
   ): Promise<{ reviews: any[]; total: number; stats: any }> {
     try {
       const skip = (page - 1) * limit;
@@ -163,7 +164,7 @@ class ReviewService {
       // ]);
 
       const [reviews, total, stats] = await Promise.all([
-        reviewRepository.findByMentorId(mentorId, skip, limit, includePrivate),
+        reviewRepository.findByMentorId(mentorId, skip, limit, includePrivate, sort),        
         reviewRepository.countByMentorId(mentorId, includePrivate),
         reviewRepository.getAverageRating(mentorId),
       ]);
@@ -302,19 +303,92 @@ class ReviewService {
         throw new Error('Review not found');
       }
 
-      // Verify mentor owns the review
-      if (review.mentorId !== mentorId) {
-        throw new Error('You can only respond to your own reviews');
+      const text = (response || '').trim();
+      if (text.length < 10) {
+        throw new Error('Response must be at least 10 characters');
+      }
+      if (text.length > 500) {
+        throw new Error('Response cannot exceed 500 characters');
       }
 
-      // Call the instance method - now properly typed
-      await review.addMentorResponse(response);
+      // review.mentorId = Mentor.mentorId, jabki yahan `mentorId` param asal me
+      // logged-in userId hai. Isliye Mentor resolve karke userId compare karte hain.
+      await this.assertReviewBelongsToMentorUser(review.mentorId, mentorId);
+
+      await review.addMentorResponse(text);
 
       logger.info(`✅ Mentor response added: ${reviewId}`);
 
       return review;
     } catch (error: any) {
       logger.error('❌ Failed to add response:', error);
+      throw error;
+    }
+  }
+
+  private async assertReviewBelongsToMentorUser(reviewMentorId: string, userId: string): Promise<void> {
+    const mentor = await Mentor.findOne({ mentorId: reviewMentorId, isDeleted: false });
+    if (!mentor || String(mentor.userId) !== String(userId)) {
+      throw new Error('You can only respond to your own reviews');
+    }
+  }
+
+  /**
+   * Mentor ka reply hatao
+   */
+  async deleteMentorResponse(reviewId: string, userId: string): Promise<any> {
+    try {
+      const review = await reviewRepository.findByReviewId(reviewId);
+      if (!review) {
+        throw new Error('Review not found');
+      }
+      await this.assertReviewBelongsToMentorUser(review.mentorId, userId);
+
+      return await reviewRepository.removeMentorResponse(reviewId);
+    } catch (error: any) {
+      logger.error('❌ Failed to delete mentor response:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Like / dislike toggle. Apne review par react karna blocked hai.
+   */
+  async reactToReview(
+    reviewId: string,
+    userId: string,
+    type: ReviewReaction
+  ): Promise<{ reviewId: string; helpfulCount: number; notHelpfulCount: number; userReaction: ReviewReaction | null }> {
+    try {
+      if (type !== 'like' && type !== 'dislike') {
+        throw new Error("Reaction type must be 'like' or 'dislike'");
+      }
+
+      const review = await reviewRepository.findByReviewId(reviewId);
+      if (!review) {
+        throw new Error('Review not found');
+      }
+      if (review.menteeId === userId) {
+        throw new Error('You cannot react to your own review');
+      }
+
+      const result = await reviewRepository.toggleReactionAtomic(reviewId, userId, type);
+      if (!result) {
+        throw new Error('Could not update reaction, please try again');
+      }
+
+      return { reviewId, ...result };
+    } catch (error: any) {
+      logger.error('❌ Failed to react to review:', error);
+      throw error;
+    }
+  }
+
+  async getUserReactions(mentorId: string, userId: string): Promise<Record<string, ReviewReaction>> {
+    try {
+      return await reviewRepository.getUserReactions(mentorId, userId);
+    } catch (error: any) {
+      logger.error('❌ Failed to get user reactions:', error);
       throw error;
     }
   }
