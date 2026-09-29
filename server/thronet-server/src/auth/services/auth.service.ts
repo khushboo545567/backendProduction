@@ -1108,6 +1108,7 @@ class AuthService {
                     ? `${user.firstName} ${user.lastName}`
                     : user.firstName,
                 location: user.location || null,
+                profilePhotoId: user.profilePhotoId || null,
                 userType: user.onboarding?.userType || 'not-set',
                 role: user.role,
                 status: user.status,
