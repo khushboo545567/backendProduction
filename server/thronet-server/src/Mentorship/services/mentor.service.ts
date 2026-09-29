@@ -1,4 +1,5 @@
 import { User, ProfilePhoto } from '@/shared/models/index.models';
+import mongoose from 'mongoose';
 import Company from '@/company/models/Company.model';
 import { Mentor, SessionMentor, GroupSession } from '../models';
 import {
@@ -751,49 +752,102 @@ class MentorService {
         .limit(4)
         .lean();
 
-      const upcomingSessions = await Promise.all(
-        upcomingDocs.map(async (s: any) => {
-          const effectiveMenteeId =
+      // Bulk resolve mentee Users and ProfilePhotos (No N+1)
+      const userMap = new Map<string, any>();
+      const photoMap = new Map<string, string>();
+
+      try {
+        const rawMenteeIds = upcomingDocs
+          .map((s: any) =>
+            (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
+            (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
             s.menteeId ||
             s.bookedBy ||
-            (Array.isArray(s.bookings) && s.bookings[0]?.bookedBy) ||
-            null;
-          let menteeName = s.bookedMenteeName || 'Student';
-          let menteeProfilePhoto = null;
-          if (effectiveMenteeId) {
-            const menteeUser = (await User.findOne({ userId: effectiveMenteeId })
-              .select('userId firstName lastName fullName profilePhotoId')
-              .lean()) as any;
-            if (menteeUser) {
-              menteeName = menteeUser.fullName || `${menteeUser.firstName || ''} ${menteeUser.lastName || ''}`.trim() || 'Student';
-              if (menteeUser.profilePic) {
-                menteeProfilePhoto = menteeUser.profilePic;
-              } else {
-                const activePhoto = await ProfilePhoto.findActivePhoto(effectiveMenteeId);
-                if (activePhoto?.cloudinarySecureUrl || activePhoto?.cloudinaryUrl) {
-                  menteeProfilePhoto = activePhoto.cloudinarySecureUrl || activePhoto.cloudinaryUrl;
-                } else if (menteeUser.profilePhotoId) {
-                  const photoDoc = await ProfilePhoto.findOne({ photoId: menteeUser.profilePhotoId }).lean();
-                  if (photoDoc?.cloudinarySecureUrl || photoDoc?.cloudinaryUrl) {
-                    menteeProfilePhoto = photoDoc.cloudinarySecureUrl || photoDoc.cloudinaryUrl;
-                  }
+            null
+          )
+          .filter((id): id is string => Boolean(id) && typeof id === 'string');
+
+        const uniqueMenteeIds = [...new Set(rawMenteeIds)];
+
+        if (uniqueMenteeIds.length > 0) {
+          const objectIds = uniqueMenteeIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+          const uuids = uniqueMenteeIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+
+          const orConditions: any[] = [];
+          if (objectIds.length > 0) orConditions.push({ _id: { $in: objectIds } });
+          if (uuids.length > 0) orConditions.push({ userId: { $in: uuids } });
+
+          if (orConditions.length > 0) {
+            const users = await User.find(
+              { $or: orConditions },
+              { _id: 1, userId: 1, firstName: 1, lastName: 1, fullName: 1, profilePhotoId: 1, profilePic: 1 }
+            ).lean();
+
+            users.forEach((u: any) => {
+              if (u.userId) userMap.set(String(u.userId), u);
+              if (u._id) userMap.set(String(u._id), u);
+            });
+
+            const photoIds = users
+              .map((u: any) => u.profilePhotoId)
+              .filter((id): id is string => Boolean(id));
+
+            if (photoIds.length > 0) {
+              const photos = await ProfilePhoto.find(
+                { photoId: { $in: photoIds }, isDeleted: false },
+                { photoId: 1, cloudinarySecureUrl: 1, cloudinaryUrl: 1 }
+              ).lean();
+
+              photos.forEach((p: any) => {
+                const url = p.cloudinarySecureUrl || p.cloudinaryUrl || null;
+                if (url && p.photoId) {
+                  photoMap.set(String(p.photoId), url);
                 }
-              }
+              });
             }
           }
-          return {
-            _id: s._id,
-            sessionId: s.sessionId || String(s._id),
-            menteeId: effectiveMenteeId,
-            menteeName,
-            menteeProfilePhoto,
-            title: s.title || s.sessionType || '1-on-1 Session',
-            sessionType: s.sessionType || 'Session',
-            scheduledAt: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
-            status: s.status || 'pending',
-          };
-        })
-      );
+        }
+      } catch (err: any) {
+        logger.warn(`Failed to bulk resolve mentee profile photos for dashboard: ${err?.message || err}`);
+      }
+
+      const upcomingSessions = upcomingDocs.map((s: any) => {
+        const rawId =
+          (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
+          (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
+          s.menteeId ||
+          s.bookedBy ||
+          null;
+
+        const menteeUser = rawId ? userMap.get(String(rawId)) : null;
+
+        let menteeId = menteeUser?.userId || rawId || null;
+        let menteeName = s.bookedMenteeName || 'Student';
+        let menteeProfilePhoto: string | null = null;
+
+        if (menteeUser) {
+          const directName = `${menteeUser.firstName || ''} ${menteeUser.lastName || ''}`.trim();
+          menteeName = directName || menteeUser.fullName || s.bookedMenteeName || 'Student';
+
+          if (menteeUser.profilePic) {
+            menteeProfilePhoto = menteeUser.profilePic;
+          } else if (menteeUser.profilePhotoId) {
+            menteeProfilePhoto = photoMap.get(String(menteeUser.profilePhotoId)) || null;
+          }
+        }
+
+        return {
+          _id: s._id,
+          sessionId: s.sessionId || String(s._id),
+          menteeId,
+          menteeName,
+          menteeProfilePhoto,
+          title: s.title || s.sessionType || '1-on-1 Session',
+          sessionType: s.sessionType || 'Session',
+          scheduledAt: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
+          status: s.status || 'pending',
+        };
+      });
 
       return {
         mentorId: mentor.mentorId,
