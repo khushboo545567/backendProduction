@@ -1,4 +1,4 @@
-import { User } from '@/shared/models/index.models';
+import { User, ProfilePhoto } from '@/shared/models/index.models';
 import Company from '@/company/models/Company.model';
 import { Mentor, SessionMentor, GroupSession } from '../models';
 import {
@@ -756,15 +756,30 @@ class MentorService {
           let menteeName = s.bookedMenteeName || 'Student';
           let menteeProfilePhoto = null;
           if (s.menteeId) {
-            const menteeUser = (await User.findOne({ userId: s.menteeId }).lean()) as any;
+            const menteeUser = (await User.findOne({ userId: s.menteeId })
+              .select('userId firstName lastName fullName profilePhotoId')
+              .lean()) as any;
             if (menteeUser) {
               menteeName = menteeUser.fullName || `${menteeUser.firstName || ''} ${menteeUser.lastName || ''}`.trim() || 'Student';
-              menteeProfilePhoto = menteeUser.profilePic || null;
+              if (menteeUser.profilePic) {
+                menteeProfilePhoto = menteeUser.profilePic;
+              } else {
+                const activePhoto = await ProfilePhoto.findActivePhoto(s.menteeId);
+                if (activePhoto?.cloudinarySecureUrl || activePhoto?.cloudinaryUrl) {
+                  menteeProfilePhoto = activePhoto.cloudinarySecureUrl || activePhoto.cloudinaryUrl;
+                } else if (menteeUser.profilePhotoId) {
+                  const photoDoc = await ProfilePhoto.findOne({ photoId: menteeUser.profilePhotoId }).lean();
+                  if (photoDoc?.cloudinarySecureUrl || photoDoc?.cloudinaryUrl) {
+                    menteeProfilePhoto = photoDoc.cloudinarySecureUrl || photoDoc.cloudinaryUrl;
+                  }
+                }
+              }
             }
           }
           return {
             _id: s._id,
             sessionId: s.sessionId || String(s._id),
+            menteeId: s.menteeId || null,
             menteeName,
             menteeProfilePhoto,
             title: s.title || s.sessionType || '1-on-1 Session',

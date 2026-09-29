@@ -247,7 +247,7 @@ try {
         return;
       }
 
-      let trustScore = mentor.trustScore;
+      let trustScore: any = mentor.trustScore;
 
       const isUncalculated =
         !trustScore ||
@@ -271,7 +271,7 @@ try {
             hasDomains: Array.isArray(mentor.domains) && mentor.domains.length > 0,
             hasSkills: Array.isArray(mentor.skills) && mentor.skills.length > 0,
             isVerified: !!mentor.verification?.isVerified,
-          });
+          } as any);
         }
       }
 
