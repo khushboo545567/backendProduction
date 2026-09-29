@@ -27,7 +27,10 @@ class CommunityEventService {
   async updateEvent(id: string, requesterId: string, isAdmin: boolean, data: UpdateCommunityEventDTO) {
     const event = await communityEventRepository.findById(id);
     if (!event) throw new AppError('Community event not found', 404);
-    if (!isAdmin && event.createdBy.toString() !== requesterId) {
+    const creatorIdUpdate = typeof event.createdBy === 'object' && event.createdBy !== null
+      ? (event.createdBy as any).userId || String(event.createdBy)
+      : String(event.createdBy);
+    if (!isAdmin && creatorIdUpdate !== requesterId) {
       throw new AppError('Not authorized to update this event', 403);
     }
     return communityEventRepository.update(id, data);
@@ -36,7 +39,10 @@ class CommunityEventService {
   async cancelEvent(id: string, requesterId: string, isAdmin: boolean) {
     const event = await communityEventRepository.findById(id);
     if (!event) throw new AppError('Community event not found', 404);
-    if (!isAdmin && event.createdBy.toString() !== requesterId) {
+    const creatorIdCancel = typeof event.createdBy === 'object' && event.createdBy !== null
+      ? (event.createdBy as any).userId || String(event.createdBy)
+      : String(event.createdBy);
+    if (!isAdmin && creatorIdCancel !== requesterId) {
       throw new AppError('Not authorized to cancel this event', 403);
     }
     const cancelled = await communityEventRepository.cancel(id);
@@ -51,7 +57,10 @@ class CommunityEventService {
   async deleteEvent(id: string, requesterId: string, isAdmin: boolean) {
     const event = await communityEventRepository.findById(id);
     if (!event) throw new AppError('Community event not found', 404);
-    if (!isAdmin && event.createdBy.toString() !== requesterId) {
+    const creatorIdDelete = typeof event.createdBy === 'object' && event.createdBy !== null
+      ? (event.createdBy as any).userId || String(event.createdBy)
+      : String(event.createdBy);
+    if (!isAdmin && creatorIdDelete !== requesterId) {
       throw new AppError('Not authorized to delete this event', 403);
     }
     return communityEventRepository.delete(id);
