@@ -2,7 +2,7 @@ console.log('TRACE_START reminderCron.ts');
 // src/jobs/reminderCron.ts
 import cron from 'node-cron';
 import { SessionMentor, Mentor } from '@/Mentorship/models';
-import { emitToUser } from '@/socket';
+import { emitToUser } from '@/socket/emitter';
 import { User } from '@/auth/models';
 import { BookingStatus } from '../shared/constants/bookingStatus';
 import { logger } from '@/shared/logger.util';

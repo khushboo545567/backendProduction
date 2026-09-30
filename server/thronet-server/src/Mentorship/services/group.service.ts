@@ -15,8 +15,7 @@ import { DateTime } from 'luxon';
 import { TrustScoreEvents } from '../events/trustScore.events';
 import { User } from '@/shared/models/index.models';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
-import { emitToUser } from '@/socket';
-
+import { emitToUser } from '@/socket/emitter';
 
 
 interface CreateGroupSessionInput {

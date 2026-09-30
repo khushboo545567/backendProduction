@@ -1,7 +1,8 @@
 // src/socket/handlers/mentorshipHandler.ts
 
 import { Server } from 'socket.io';
-import { AuthenticatedSocket, emitToUser } from '../index';
+import type { AuthenticatedSocket } from '../types';
+import { emitToUser } from '../emitter';
 import { SessionMentor, Mentor } from '@/Mentorship/models';
 import notificationService, {
   NotificationType,

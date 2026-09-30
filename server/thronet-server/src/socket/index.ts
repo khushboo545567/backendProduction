@@ -24,6 +24,7 @@ import { handlePresenceEvents } from '@/StudyGroup/socket/presenceHandler';
 // upar baaki imports ke saath:
 import { setupMentorshipHandlers } from './handlers/mentorshipHandler';
 import { AuthenticatedSocket } from './types';
+export type { AuthenticatedSocket } from './types';
 import { setIO } from './emitter';
 
 

@@ -9,7 +9,7 @@ import { logger } from '@/shared/logger.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
 import { TrustScoreEvents } from '../events/trustScore.events';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
-import { emitToUser } from '@/socket';
+import { emitToUser } from '@/socket/emitter';
 import { User } from '@/shared/models/index.models';
 import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus';
 import sessionRepository from '../repositories/session.repository';

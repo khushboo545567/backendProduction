@@ -245,32 +245,46 @@ class NotificationService {
     try {
       const notificationId = generateSecureId();
 
-      // ✅ Auto-enrich menteeName & menteePhoto if menteeId is provided in data
-      if (input.data && input.data.menteeId) {
+      // ✅ Auto-enrich actor/mentee details if menteeId, viewerId, replierId or actorId is provided in data
+      const actorUserId = input.data?.menteeId || input.data?.viewerId || input.data?.replierId || input.data?.actorId;
+      if (input.data && actorUserId) {
         try {
-          if (!input.data.menteeName || !input.data.menteePhoto) {
-            const menteeUser = await User.findByUserId(input.data.menteeId);
-            if (menteeUser) {
-              if (!input.data.menteeName) {
-                input.data.menteeName =
-                  (menteeUser as any).fullName ||
-                  `${(menteeUser as any).firstName || ''} ${(menteeUser as any).lastName || ''}`.trim() ||
-                  (menteeUser as any).username ||
-                  (menteeUser as any).email ||
-                  'Mentee';
+          if (!input.data.menteeId) input.data.menteeId = actorUserId;
+          const currentName = input.data.menteeName || input.data.actorName || input.data.viewerName || input.data.replierName;
+          const currentPhoto = input.data.menteePhoto || input.data.actorPhoto || input.data.viewerPhoto || input.data.replierPhoto;
+
+          if (!currentName || !currentPhoto) {
+            const actorUser = await User.findByUserId(actorUserId);
+            if (actorUser) {
+              if (!currentName) {
+                const resolvedName =
+                  (actorUser as any).fullName ||
+                  `${(actorUser as any).firstName || ''} ${(actorUser as any).lastName || ''}`.trim() ||
+                  (actorUser as any).username ||
+                  (actorUser as any).email ||
+                  'User';
+                input.data.menteeName = resolvedName;
+                input.data.actorName = resolvedName;
+              } else {
+                if (!input.data.menteeName) input.data.menteeName = currentName;
               }
-              if (!input.data.menteePhoto) {
+
+              if (!currentPhoto) {
                 try {
-                  const profile: any = await UserProfile.findByUserIdCached(input.data.menteeId);
-                  input.data.menteePhoto = profile?.avatar?.url || null;
+                  const profile: any = await UserProfile.findByUserIdCached(actorUserId);
+                  const resolvedPhoto = profile?.avatar?.url || profile?.avatar || null;
+                  input.data.menteePhoto = resolvedPhoto;
+                  input.data.actorPhoto = resolvedPhoto;
                 } catch {
                   input.data.menteePhoto = null;
                 }
+              } else {
+                if (!input.data.menteePhoto) input.data.menteePhoto = currentPhoto;
               }
             }
           }
         } catch (enrichErr: any) {
-          logger.warn(`Mentee enrichment skipped silently: ${enrichErr.message}`);
+          logger.warn(`Actor enrichment skipped silently: ${enrichErr.message}`);
         }
       }
 
