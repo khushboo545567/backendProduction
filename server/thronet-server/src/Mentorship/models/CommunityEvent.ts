@@ -8,6 +8,7 @@ export interface ICommunityEvent extends Document {
   createdBy: string;
   participantsCount: number;
   resourceLink?: string;
+  imageUrl?: string;
   isCancelled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -26,6 +27,7 @@ const CommunityEventSchema = new Schema<ICommunityEvent>(
     createdBy: { type: String, required: true, index: true },
     participantsCount: { type: Number, default: 0 },
     resourceLink: { type: String, trim: true },
+    imageUrl: { type: String, trim: true },
     isCancelled: { type: Boolean, default: false },
   },
   { timestamps: true }

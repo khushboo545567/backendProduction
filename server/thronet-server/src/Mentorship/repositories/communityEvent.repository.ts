@@ -46,6 +46,7 @@ export class CommunityEventRepository {
       type: data.type,
       resourceLink: data.resourceLink,
       capacity: data.capacity,
+      imageUrl: data.imageUrl,
       createdBy,
     });
   }

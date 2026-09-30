@@ -5,6 +5,7 @@ export interface CreateCommunityEventDTO {
   type: 'meetup' | 'webinar' | 'workshop' | 'networking';
   resourceLink?: string;
   capacity?: number;
+  imageUrl?: string;
 }
 
 export interface UpdateCommunityEventDTO {
@@ -14,6 +15,7 @@ export interface UpdateCommunityEventDTO {
   type?: 'meetup' | 'webinar' | 'workshop' | 'networking';
   resourceLink?: string;
   capacity?: number;
+  imageUrl?: string;
 }
 
 export interface CommunityEventListQuery {

@@ -4,8 +4,31 @@ import { AppError } from '@/shared/errors/app.error';
 import { logger } from '@/shared/logger.util';
 import notificationService, { NotificationType, NotificationChannel } from '@/Mentorship/services/notification.service';
 import EventRSVP from '@/Mentorship/models/EventRSVP';
+import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 
 class CommunityEventService {
+  async uploadImageToCloudinary(buffer: Buffer, identifier: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'community-events',
+          public_id: `event_${identifier}_${Date.now()}`,
+          resource_type: 'image',
+          transformation: [
+            { width: 1200, height: 800, crop: 'limit' },
+            { quality: 'auto:good' },
+          ],
+          overwrite: true,
+        },
+        (error: any, result: any) => {
+          if (error) return reject(error);
+          resolve(result.secure_url);
+        }
+      );
+      uploadStream.end(buffer);
+    });
+  }
+
   async createEvent(userId: string, data: CreateCommunityEventDTO) {
     const eventDate = new Date(data.date);
     if (eventDate.getTime() < Date.now()) {

@@ -3,13 +3,14 @@
 import { Router } from 'express';
 import communityEventController from '@/Mentorship/controllers/communityEvent.controller';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
+import { uploadSingle } from '@/shared/upload/upload';
 
 const router = Router();
 
 router.get('/', communityEventController.listEvents);
-router.post('/', AuthMiddleware.authenticate, communityEventController.createEvent);
+router.post('/', AuthMiddleware.authenticate, uploadSingle('image', 'image', false), communityEventController.createEvent);
 router.get('/:id', communityEventController.getEvent);
-router.put('/:id', AuthMiddleware.authenticate, communityEventController.updateEvent);
+router.put('/:id', AuthMiddleware.authenticate, uploadSingle('image', 'image', false), communityEventController.updateEvent);
 router.patch('/:id/cancel', AuthMiddleware.authenticate, communityEventController.cancelEvent);
 router.delete('/:id', AuthMiddleware.authenticate, communityEventController.deleteEvent);
 

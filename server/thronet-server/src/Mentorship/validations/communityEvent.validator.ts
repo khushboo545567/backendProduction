@@ -9,6 +9,7 @@ export const createCommunityEventSchema = z.object({
   type: z.enum(['meetup', 'webinar', 'workshop', 'networking']),
   resourceLink: z.string().url().optional(),
   capacity: z.number().int().positive().optional(),
+  imageUrl: z.string().url().optional().or(z.literal('')),
 });
 
 export const updateCommunityEventSchema = createCommunityEventSchema.partial();

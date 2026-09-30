@@ -1,4 +1,4 @@
-﻿import { Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import { AuthRequest } from '@/shared/middlewares/auth.middleware';
 import { logger } from '@/shared/logger.util';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
@@ -12,7 +12,14 @@ import {
 class CommunityEventController {
   async createEvent(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const data = createCommunityEventSchema.parse(req.body);
+      let imageUrl: string | undefined = req.body.imageUrl;
+      if (req.file) {
+        imageUrl = await communityEventService.uploadImageToCloudinary(req.file.buffer, req.user!.id);
+      }
+      const data = createCommunityEventSchema.parse({
+        ...req.body,
+        ...(imageUrl ? { imageUrl } : {}),
+      });
       const event = await communityEventService.createEvent(req.user!.id, data);
       logger.info(`Community event created: ${event._id}`);
       ResponseHandler.created(res, 'Community event created', event);
@@ -49,7 +56,14 @@ class CommunityEventController {
 
   async updateEvent(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const data = updateCommunityEventSchema.parse(req.body);
+      let imageUrl: string | undefined = req.body.imageUrl;
+      if (req.file) {
+        imageUrl = await communityEventService.uploadImageToCloudinary(req.file.buffer, req.user!.id);
+      }
+      const data = updateCommunityEventSchema.parse({
+        ...req.body,
+        ...(imageUrl !== undefined ? { imageUrl } : {}),
+      });
       const isAdmin = (req.user as any)?.role === 'admin';
       const event = await communityEventService.updateEvent(req.params.id, req.user!.id, isAdmin, data);
       ResponseHandler.success(res, 'Community event updated', event);
