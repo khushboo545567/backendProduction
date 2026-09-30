@@ -23,24 +23,16 @@ import { liveRoomHandler } from '@/StudyGroup/socket/liveRoomHandler';
 import { handlePresenceEvents } from '@/StudyGroup/socket/presenceHandler';
 // upar baaki imports ke saath:
 import { setupMentorshipHandlers } from './handlers/mentorshipHandler';
+import { AuthenticatedSocket } from './types';
+import { setIO } from './emitter';
 
-
-// ─── Single canonical type ────────────────────────────────────────────────────
-// All handlers must read userId from socket.data.userId — never socket.userId
-export interface AuthenticatedSocket extends Socket {
-  data: {
-    userId: string;
-    email?: string;
-    userName?: string;
-  };
-}
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
-let io: Server | null = null;
+// Now managed in emitter.ts
 
 // ─── Initialize ───────────────────────────────────────────────────────────────
 export const initializeSocketIO = (httpServer: HTTPServer): Server => {
-  io = new Server(httpServer, {
+  const io = new Server(httpServer, {
     cors: {
       origin: (origin, callback) => {
         const allowed = (process.env['ALLOWED_ORIGINS'] || 'http://localhost:3000,http://localhost:3001')
@@ -128,25 +120,6 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
   });
 
   LoggerUtil.info('Socket.IO initialized successfully');
+  setIO(io);
   return io;
-};
-
-// ─── Accessor ─────────────────────────────────────────────────────────────────
-export const getIO = (): Server => {
-  if (!io) {
-    throw new Error('Socket.IO not initialized. Call initializeSocketIO first.');
-  }
-  return io;
-};
-
-/**
- * Send a notification to a specific user from anywhere in the server codebase.
- * Use this instead of exposing raw io — it enforces the room convention.
- */
-export const emitToUser = (
-  userId: string,
-  event: string,
-  payload: Record<string, unknown>
-): void => {
-  getIO().to(`user:${userId}`).emit(event, payload);
 };

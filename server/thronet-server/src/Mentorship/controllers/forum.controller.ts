@@ -9,7 +9,12 @@ import {
   forumListQuerySchema,
   updateForumSchema,
   updateForumReplySchema,
+  reportContentSchema,
+  reportListQuerySchema,
+  updateReportStatusSchema,
 } from '@/Mentorship/validations/forum.validator';
+
+
 
 class ForumController {
   async createForum(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
@@ -144,6 +149,72 @@ class ForumController {
       next(error);
     }
   }
+
+  async reportForum(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = reportContentSchema.parse(req.body);
+      const report = await forumService.reportForum(
+        req.params.id,
+        req.user!.id,
+        data.reason,
+        data.note
+      );
+      ResponseHandler.created(res, 'Report submitted successfully. Our team will review it.', report);
+    } catch (error: any) {
+      logger.error('Error reporting forum thread:', error);
+      next(error);
+    }
+  }
+
+  async reportReply(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = reportContentSchema.parse(req.body);
+      const report = await forumService.reportReply(
+        req.params.id,
+        req.params.replyId,
+        req.user!.id,
+        data.reason,
+        data.note
+      );
+      ResponseHandler.created(res, 'Report submitted successfully. Our team will review it.', report);
+    } catch (error: any) {
+      logger.error('Error reporting reply:', error);
+      next(error);
+    }
+  }
+
+  async listReports(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const isAdmin = (req.user as any)?.role === 'admin';
+      if (!isAdmin) {
+        ResponseHandler.forbidden(res, 'Admin access required');
+        return;
+      }
+      const query = reportListQuerySchema.parse(req.query);
+      const result = await forumService.listReports(query as any);
+      ResponseHandler.success(res, 'Community reports retrieved successfully', result);
+    } catch (error: any) {
+      logger.error('Error listing community reports:', error);
+      next(error);
+    }
+  }
+
+  async updateReportStatus(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const isAdmin = (req.user as any)?.role === 'admin';
+      if (!isAdmin) {
+        ResponseHandler.forbidden(res, 'Admin access required');
+        return;
+      }
+      const { status } = updateReportStatusSchema.parse(req.body);
+      const updated = await forumService.updateReportStatus(req.params.reportId, status);
+      ResponseHandler.success(res, 'Report status updated successfully', updated);
+    } catch (error: any) {
+      logger.error('Error updating report status:', error);
+      next(error);
+    }
+  }
 }
 
 export default new ForumController();
+

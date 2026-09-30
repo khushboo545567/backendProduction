@@ -13,11 +13,13 @@ export const createForumReplySchema = z.object({
 });
 
 export const forumListQuerySchema = z.object({
+  search: z.string().optional(),
   category: z.string().optional(),
   sort: z.enum(["recent", "trending"]).optional(),
   page: z.coerce.number().min(1).optional(),
   limit: z.coerce.number().min(1).max(100).optional(),
 });
+
 
 export const updateForumSchema = z.object({
   topic: z.string().min(3).max(200).optional(),
@@ -28,4 +30,22 @@ export const updateForumSchema = z.object({
 
 export const updateForumReplySchema = z.object({
   content: z.string().min(1).max(3000),
-});
+});
+
+export const reportContentSchema = z.object({
+  reason: z.enum(['spam', 'harassment', 'inappropriate', 'other']),
+  note: z.string().max(1000).optional(),
+});
+
+export const reportListQuerySchema = z.object({
+  status: z.enum(['pending', 'resolved', 'dismissed']).optional(),
+  targetType: z.enum(['forum', 'forumReply']).optional(),
+  page: z.coerce.number().min(1).optional(),
+  limit: z.coerce.number().min(1).max(100).optional(),
+});
+
+export const updateReportStatusSchema = z.object({
+  status: z.enum(['resolved', 'dismissed']),
+});
+
+

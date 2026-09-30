@@ -4,6 +4,8 @@ import { AppError } from "../../shared/errors/app.error";
 import notificationService, { NotificationType, NotificationChannel } from "./notification.service";
 import { User } from "@/auth/models";
 import { logger } from "@/shared/logger.util";
+import { ReportReason } from "../models/CommunityReport";
+
 
 export class ForumService {
   async createForum(userId: string, data: CreateForumDTO) {
@@ -55,8 +57,42 @@ export class ForumService {
       const forumId = String(forum._id || forum.id);
       const notifiedUserIds = new Set<string>();
 
-      // 1. Send FORUM_REPLY to thread author (skip if replier IS thread author)
-      if (threadAuthorId && threadAuthorId !== replierId) {
+      // 1. Send FORUM_REPLY to parent reply's author (if this is a nested reply)
+      if (data.parentReplyId) {
+        try {
+          const parentReply = await forumRepository.findReplyById(data.parentReplyId);
+          const parentAuthorId = parentReply?.author
+            ? (typeof parentReply.author === "object" && parentReply.author !== null
+                ? (parentReply.author as any).userId || String(parentReply.author)
+                : String(parentReply.author))
+            : null;
+
+          if (parentAuthorId && parentAuthorId !== replierId && !notifiedUserIds.has(parentAuthorId)) {
+            await notificationService.sendNotification({
+              userId: parentAuthorId,
+              type: NotificationType.FORUM_REPLY,
+              channels: [NotificationChannel.IN_APP],
+              priority: "normal",
+              data: {
+                title: "New Reply to Your Comment",
+                message: `${replierName} replied to your comment in: "${threadTopic}"`,
+                threadId: forumId,
+                threadTopic,
+                replierId,
+                replierName,
+                parentReplyId: data.parentReplyId,
+                isReplyToComment: true,
+              },
+            });
+            notifiedUserIds.add(parentAuthorId);
+          }
+        } catch (parentErr: any) {
+          logger.error("Failed to send FORUM_REPLY notification to parent reply author:", parentErr);
+        }
+      }
+
+      // 2. Send FORUM_REPLY to thread author (skip if replier IS thread author, or already notified above)
+      if (threadAuthorId && threadAuthorId !== replierId && !notifiedUserIds.has(threadAuthorId)) {
         try {
           await notificationService.sendNotification({
             userId: threadAuthorId,
@@ -78,8 +114,8 @@ export class ForumService {
         }
       }
 
-      // 2. Send FORUM_MENTION to each mentioned user
-      // (skip self-mentions, and skip thread author if they already received FORUM_REPLY)
+      // 3. Send FORUM_MENTION to each mentioned user
+      // (skip self-mentions, and skip users already notified above)
       const rawMentions = Array.isArray(data.mentions) ? data.mentions : [];
       const uniqueMentions = Array.from(new Set(rawMentions.map((m) => String(m).trim()))).filter(Boolean);
 
@@ -193,6 +229,87 @@ export class ForumService {
     }
     return forumRepository.deleteReply(replyId);
   }
+
+  async reportForum(
+    forumId: string,
+    reporterId: string,
+    reason: ReportReason,
+    note?: string
+  ) {
+    const forum = await forumRepository.findById(forumId);
+    if (!forum) throw new AppError("Forum thread not found", 404);
+
+    const existing = await forumRepository.findReport(reporterId, "forum", forumId);
+    if (existing) {
+      throw new AppError("You have already reported this forum thread", 409);
+    }
+
+    try {
+      return await forumRepository.createReport({
+        reporterId,
+        targetType: "forum",
+        targetId: forumId,
+        forumId,
+        reason,
+        note,
+      });
+    } catch (err: any) {
+      if (err.code === 11000) {
+        throw new AppError("You have already reported this forum thread", 409);
+      }
+      throw err;
+    }
+  }
+
+  async reportReply(
+    forumId: string,
+    replyId: string,
+    reporterId: string,
+    reason: ReportReason,
+    note?: string
+  ) {
+    const reply = await forumRepository.findReplyById(replyId);
+    if (!reply) throw new AppError("Reply not found", 404);
+
+    const existing = await forumRepository.findReport(reporterId, "forumReply", replyId);
+    if (existing) {
+      throw new AppError("You have already reported this reply", 409);
+    }
+
+    try {
+      return await forumRepository.createReport({
+        reporterId,
+        targetType: "forumReply",
+        targetId: replyId,
+        forumId,
+        reason,
+        note,
+      });
+    } catch (err: any) {
+      if (err.code === 11000) {
+        throw new AppError("You have already reported this reply", 409);
+      }
+      throw err;
+    }
+  }
+
+  async listReports(query: {
+    status?: "pending" | "resolved" | "dismissed";
+    targetType?: "forum" | "forumReply";
+    page?: number;
+    limit?: number;
+  }) {
+    return forumRepository.listReports(query);
+  }
+
+  async updateReportStatus(reportId: string, status: "resolved" | "dismissed") {
+    const updated = await forumRepository.updateReportStatus(reportId, status);
+    if (!updated) {
+      throw new AppError("Report not found", 404);
+    }
+    return updated;
+  }
 }
 
 export default new ForumService();
+

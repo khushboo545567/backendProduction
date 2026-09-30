@@ -14,6 +14,7 @@ export const createCommunityEventSchema = z.object({
 export const updateCommunityEventSchema = createCommunityEventSchema.partial();
 
 export const communityEventListQuerySchema = z.object({
+  search: z.string().optional(),
   type: z.string().optional(),
   upcoming: z
     .string()
@@ -21,4 +22,4 @@ export const communityEventListQuerySchema = z.object({
     .transform((v) => v === 'true'),
   page: z.coerce.number().min(1).optional(),
   limit: z.coerce.number().min(1).max(100).optional(),
-});
+});

@@ -445,16 +445,20 @@ class NotificationService {
           `,
         };
 
-      case NotificationType.FORUM_REPLY:
+      case NotificationType.FORUM_REPLY: {
+        const isCommentReply = Boolean(data.isReplyToComment || data.isReplyToReply);
+        const heading = isCommentReply ? 'New Reply to Your Comment' : 'New Reply on Your Thread';
+        const actionText = isCommentReply ? 'replied to your comment in' : 'replied to your thread:';
         return {
           subject: `💬 New Reply on "${data.threadTopic || 'Forum Thread'}"`,
           html: `
-            <h2>New Reply on Your Thread</h2>
+            <h2>${heading}</h2>
             <p>Hi ${userName},</p>
-            <p><strong>${data.replierName || 'Someone'}</strong> replied to your thread: <em>"${data.threadTopic || ''}"</em>.</p>
+            <p><strong>${data.replierName || 'Someone'}</strong> ${actionText} <em>"${data.threadTopic || ''}"</em>.</p>
             <p>Log in to view the reply.</p>
           `,
         };
+      }
 
       case NotificationType.FORUM_MENTION:
         return {
@@ -504,8 +508,11 @@ class NotificationService {
       case NotificationType.QUERY_ANSWERED:
         return `✅ ${data.mentorName || 'Your mentor'} answered your query. Check your dashboard.`;
 
-      case NotificationType.FORUM_REPLY:
-        return `💬 ${data.replierName || 'Someone'} replied to your thread "${data.threadTopic || ''}". Check it out!`;
+      case NotificationType.FORUM_REPLY: {
+        const isCommentReply = Boolean(data.isReplyToComment || data.isReplyToReply);
+        const target = isCommentReply ? 'your comment in' : 'your thread';
+        return `💬 ${data.replierName || 'Someone'} replied to ${target} "${data.threadTopic || ''}". Check it out!`;
+      }
 
       case NotificationType.FORUM_MENTION:
         return `💬 ${data.replierName || 'Someone'} mentioned you in thread "${data.threadTopic || ''}". Check it out!`;

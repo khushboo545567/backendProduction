@@ -11,8 +11,9 @@ export interface CreateForumReplyDTO {
 }
 
 export interface ForumListQuery {
+  search?: string;
   category?: string;
   sort?: "recent" | "trending";
   page?: number;
   limit?: number;
-}
+}

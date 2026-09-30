@@ -17,8 +17,9 @@ export interface UpdateCommunityEventDTO {
 }
 
 export interface CommunityEventListQuery {
+  search?: string;
   type?: string;
   upcoming?: boolean;
   page?: number;
   limit?: number;
-}
+}
