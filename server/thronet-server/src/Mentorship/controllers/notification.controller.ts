@@ -44,6 +44,44 @@ class NotificationController {
         notificationRepository.countByUserId(userId, unreadOnly === 'true'),
       ]);
 
+      const uniqueActorIds = Array.from(
+        new Set(
+          (notifications || [])
+            .map((n: any) => n?.data?.menteeId || n?.data?.viewerId || n?.data?.replierId || n?.data?.actorId)
+            .filter(Boolean)
+        )
+      ) as string[];
+
+      if (uniqueActorIds.length > 0) {
+        try {
+          const resolvedActorsMap: Record<string, { name: string; photoUrl: string | null }> = {};
+          await Promise.all(
+            uniqueActorIds.map(async (actorId) => {
+              resolvedActorsMap[actorId] = await notificationService.resolveActorDisplay(actorId);
+            })
+          );
+
+          notifications.forEach((n: any) => {
+            if (!n.data) n.data = {};
+            const actorId = n.data.menteeId || n.data.viewerId || n.data.replierId || n.data.actorId;
+            if (actorId && resolvedActorsMap[actorId]) {
+              const info = resolvedActorsMap[actorId];
+              if (!n.data.menteeId) n.data.menteeId = actorId;
+              if (!n.data.menteeName && !n.data.actorName && !n.data.viewerName && !n.data.replierName) {
+                n.data.menteeName = info.name;
+                n.data.actorName = info.name;
+              }
+              if (!n.data.menteePhoto && !n.data.actorPhoto && !n.data.viewerPhoto && !n.data.replierPhoto) {
+                n.data.menteePhoto = info.photoUrl;
+                n.data.actorPhoto = info.photoUrl;
+              }
+            }
+          });
+        } catch (enrichErr: any) {
+          logger.warn('Batch notification actor enrichment skipped:', enrichErr?.message);
+        }
+      }
+
       ResponseHandler.paginated(
         res,
         'Notifications retrieved successfully',

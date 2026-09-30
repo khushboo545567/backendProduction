@@ -2,6 +2,7 @@
 
 import { User } from '@/auth/models';
 import { UserProfile } from '@/shared/models/index.models';
+import ProfilePhoto from '@/Profile/models/ProfilePhoto.model';
 import emailService from './email.service';
 import smsService from './sms.service';
 import logger from '@/config/logging/logger.config';
@@ -239,6 +240,66 @@ class NotificationService {
   }
 
   /**
+   * Helper to resolve actor's name and photo URL safely across User, ProfilePhoto, and UserProfile.
+   */
+  public async resolveActorDisplay(userId: string): Promise<{ name: string; photoUrl: string | null }> {
+    try {
+      if (!userId) return { name: 'User', photoUrl: null };
+      const actorUser = await User.findByUserId(userId);
+      if (!actorUser) return { name: 'User', photoUrl: null };
+
+      const name =
+        (actorUser as any).fullName ||
+        `${(actorUser as any).firstName || ''} ${(actorUser as any).lastName || ''}`.trim() ||
+        (actorUser as any).username ||
+        (actorUser as any).email ||
+        'User';
+
+      let photoUrl: string | null = null;
+
+      if ((actorUser as any).profilePhotoId) {
+        try {
+          const photoDoc: any = await ProfilePhoto.findOne({ photoId: (actorUser as any).profilePhotoId }).lean();
+          if (photoDoc) {
+            photoUrl = photoDoc.cloudinarySecureUrl || photoDoc.cloudinaryUrl || null;
+          }
+        } catch {
+          // ignore lookup error
+        }
+      }
+
+      if (!photoUrl) {
+        try {
+          const activePhoto: any = await ProfilePhoto.findActivePhoto(userId);
+          if (activePhoto) {
+            photoUrl = activePhoto.cloudinarySecureUrl || activePhoto.cloudinaryUrl || null;
+          }
+        } catch {
+          // ignore lookup error
+        }
+      }
+
+      if (!photoUrl) {
+        try {
+          const profile: any = await UserProfile.findByUserIdCached(userId);
+          photoUrl = profile?.avatar?.url || profile?.avatar || null;
+        } catch {
+          // ignore lookup error
+        }
+      }
+
+      if (!photoUrl && typeof (actorUser as any).profilePhotoId === 'string' && (actorUser as any).profilePhotoId.startsWith('http')) {
+        photoUrl = (actorUser as any).profilePhotoId;
+      }
+
+      return { name, photoUrl };
+    } catch (err: any) {
+      logger.warn(`resolveActorDisplay failed for ${userId}: ${err?.message}`);
+      return { name: 'User', photoUrl: null };
+    }
+  }
+
+  /**
    * Create in-app (DB) notification.
    */
   private async sendInAppNotification(_user: any, input: NotificationInput): Promise<boolean> {
@@ -250,38 +311,23 @@ class NotificationService {
       if (input.data && actorUserId) {
         try {
           if (!input.data.menteeId) input.data.menteeId = actorUserId;
+          const { name, photoUrl } = await this.resolveActorDisplay(actorUserId);
+
           const currentName = input.data.menteeName || input.data.actorName || input.data.viewerName || input.data.replierName;
           const currentPhoto = input.data.menteePhoto || input.data.actorPhoto || input.data.viewerPhoto || input.data.replierPhoto;
 
-          if (!currentName || !currentPhoto) {
-            const actorUser = await User.findByUserId(actorUserId);
-            if (actorUser) {
-              if (!currentName) {
-                const resolvedName =
-                  (actorUser as any).fullName ||
-                  `${(actorUser as any).firstName || ''} ${(actorUser as any).lastName || ''}`.trim() ||
-                  (actorUser as any).username ||
-                  (actorUser as any).email ||
-                  'User';
-                input.data.menteeName = resolvedName;
-                input.data.actorName = resolvedName;
-              } else {
-                if (!input.data.menteeName) input.data.menteeName = currentName;
-              }
+          if (!currentName) {
+            input.data.menteeName = name;
+            input.data.actorName = name;
+          } else if (!input.data.menteeName) {
+            input.data.menteeName = currentName;
+          }
 
-              if (!currentPhoto) {
-                try {
-                  const profile: any = await UserProfile.findByUserIdCached(actorUserId);
-                  const resolvedPhoto = profile?.avatar?.url || profile?.avatar || null;
-                  input.data.menteePhoto = resolvedPhoto;
-                  input.data.actorPhoto = resolvedPhoto;
-                } catch {
-                  input.data.menteePhoto = null;
-                }
-              } else {
-                if (!input.data.menteePhoto) input.data.menteePhoto = currentPhoto;
-              }
-            }
+          if (!currentPhoto) {
+            input.data.menteePhoto = photoUrl;
+            input.data.actorPhoto = photoUrl;
+          } else if (!input.data.menteePhoto) {
+            input.data.menteePhoto = currentPhoto;
           }
         } catch (enrichErr: any) {
           logger.warn(`Actor enrichment skipped silently: ${enrichErr.message}`);
