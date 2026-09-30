@@ -125,6 +125,7 @@ export class ForumRepository {
       author: authorId,
       content: data.content,
       mentions: data.mentions || [],
+      parentReplyId: data.parentReplyId || null,
     });
     await this.incrementReplyCount(forumId);
     const [withAuthor] = await attachAuthors([reply]);

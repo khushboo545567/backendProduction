@@ -6,6 +6,7 @@ export interface IForumReply extends Document {
   content: string;
   mentions: string[];
   upvotes: string[];
+  parentReplyId?: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -17,6 +18,7 @@ const ForumReplySchema = new Schema<IForumReply>(
     content: { type: String, required: true, trim: true, maxlength: 3000 },
     mentions: [{ type: String }],
     upvotes: [{ type: String }],
+    parentReplyId: { type: Schema.Types.ObjectId, ref: "ForumReply", default: null },
   },
   { timestamps: true }
 );

@@ -187,7 +187,7 @@ export class UserRepository {
                     userId email firstName lastName location
                     onboarding.userType role status emailVerified
                     phoneVerified phoneNumber lastLoginAt
-                    metadata.totalLogins createdAt updatedAt
+                    metadata.totalLogins createdAt updatedAt profilePhotoId
                 `)
                 .sort(sort)
                 .skip(skip)
