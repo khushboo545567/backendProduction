@@ -189,6 +189,7 @@ class WaitlistService {
           type: NotificationType.WAITLIST_JOINED,
           channels: [NotificationChannel.IN_APP],
           data: {
+            menteeId: input.userId,
             title: 'New Waitlist Join',
             message: `${student?.fullName || student?.email || 'A student'} joined the waitlist for ${input.serviceTitle || input.sessionType}`,
             menteeName: student?.fullName || student?.email,

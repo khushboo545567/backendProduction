@@ -1016,6 +1016,7 @@ class MentorshipSessionService {
             type: NotificationType.SESSION_CANCELLED,
             channels: [NotificationChannel.IN_APP],
             data: {
+              ...(isCancelledByMentee && cancellingMenteeId ? { menteeId: cancellingMenteeId } : {}),
               title: 'Session Cancelled',
               message: `Session "${session.title}" has been cancelled. Reason: ${reason}`,
             },
@@ -1164,6 +1165,7 @@ class MentorshipSessionService {
             type: NotificationType.REVIEW_RECEIVED,
             channels: [NotificationChannel.IN_APP],
             data: {
+              ...(reviewerType === 'mentee' ? { menteeId: userId } : {}),
               title: 'New Review',
               message: `You received a new review with a rating of ${rating}★.`,
             },

@@ -337,6 +337,8 @@ class GroupService {
             type: NotificationType.NEW_BOOKING_REQUEST,
             channels: [NotificationChannel.IN_APP],
             data: {
+              menteeId,
+              menteeName,
               title: 'New Group Session Join Request',
               message: `${menteeName} requested to join "${session.title}". ${acceptedCount}/${session.maxParticipants} seats filled. Review and accept/reject in your dashboard.`,
             },
@@ -609,6 +611,7 @@ class GroupService {
               type: NotificationType.SESSION_CANCELLED,
               channels: [NotificationChannel.IN_APP],
               data: {
+                menteeId,
                 title: 'Group Session Seat Freed',
                 message: `A mentee left "${session.title}". ${session.currentParticipants}/${session.maxParticipants} seats filled.`,
               },

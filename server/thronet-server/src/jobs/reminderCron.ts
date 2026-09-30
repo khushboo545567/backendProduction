@@ -316,6 +316,11 @@ class ReminderCron {
                 priority: 'high',
                 data: {
                   ...base,
+                  ...(!isMentee && menteeId ? {
+                    menteeId,
+                    menteeName,
+                    menteePhoto: (menteeUser as any)?.profilePhotoUrl || (menteeUser as any)?.profilePhoto || (menteeUser as any)?.avatar || null
+                  } : {}),
                   title: `Session starts in ${w.label}`,
                   message: `Your session "${session.title}" with ${otherName} starts in ${w.label}.${
                     isMentee ? ' Be ready to join!' : ' Start it when you are ready.'

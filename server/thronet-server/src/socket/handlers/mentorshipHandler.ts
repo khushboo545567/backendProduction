@@ -63,6 +63,7 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
         channels: [NotificationChannel.IN_APP],
         priority: 'high',
         data: {
+          ...(joinerRole === 'mentee' && menteeUserId ? { menteeId: menteeUserId } : {}),
           title: `${joinerRole === 'mentor' ? 'Mentor' : 'Mentee'} joined the session`,
           message: `${joinerRole === 'mentor' ? 'Your mentor' : 'Your mentee'} has joined "${session.title || 'the session'}". Join now to start the call.`,
           sessionId,
