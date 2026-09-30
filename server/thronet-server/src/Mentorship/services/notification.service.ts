@@ -6,7 +6,7 @@ import logger from '@/config/logging/logger.config';
 import { Notification } from '../models';
 import { generateSecureId } from '@/shared/security';
 // ✅ NEW — for realtime push after DB save
-import { emitToUser } from '@/socket';
+import { emitToUser } from '@/socket/emitter';
 
 
 
@@ -43,6 +43,8 @@ export enum NotificationType {
   QUERY_RECEIVED = 'query_received',
   QUERY_ANSWERED = 'query_answered',
   PROFILE_VIEWED = 'profile_viewed',
+  FORUM_REPLY = 'forum_reply',
+  FORUM_MENTION = 'forum_mention',
 }
 
 export enum NotificationChannel {
@@ -409,6 +411,28 @@ class NotificationService {
           `,
         };
 
+      case NotificationType.FORUM_REPLY:
+        return {
+          subject: `💬 New Reply on "${data.threadTopic || 'Forum Thread'}"`,
+          html: `
+            <h2>New Reply on Your Thread</h2>
+            <p>Hi ${userName},</p>
+            <p><strong>${data.replierName || 'Someone'}</strong> replied to your thread: <em>"${data.threadTopic || ''}"</em>.</p>
+            <p>Log in to view the reply.</p>
+          `,
+        };
+
+      case NotificationType.FORUM_MENTION:
+        return {
+          subject: `💬 You Were Mentioned in "${data.threadTopic || 'Forum Thread'}"`,
+          html: `
+            <h2>You Were Mentioned in a Forum Reply</h2>
+            <p>Hi ${userName},</p>
+            <p><strong>${data.replierName || 'Someone'}</strong> mentioned you in a reply to: <em>"${data.threadTopic || ''}"</em>.</p>
+            <p>Log in to join the conversation.</p>
+          `,
+        };
+
       default:
         return {
           subject: 'Notification from Mentorship Platform',
@@ -446,6 +470,12 @@ class NotificationService {
       case NotificationType.QUERY_ANSWERED:
         return `✅ ${data.mentorName || 'Your mentor'} answered your query. Check your dashboard.`;
 
+      case NotificationType.FORUM_REPLY:
+        return `💬 ${data.replierName || 'Someone'} replied to your thread "${data.threadTopic || ''}". Check it out!`;
+
+      case NotificationType.FORUM_MENTION:
+        return `💬 ${data.replierName || 'Someone'} mentioned you in thread "${data.threadTopic || ''}". Check it out!`;
+
       default:
         return 'You have a new notification from Mentorship Platform';
     }
@@ -482,6 +512,8 @@ class NotificationService {
       // simple text question). Callers can still pass explicit channels.
       case NotificationType.QUERY_RECEIVED:
       case NotificationType.QUERY_ANSWERED:
+      case NotificationType.FORUM_REPLY:
+      case NotificationType.FORUM_MENTION:
         return [NotificationChannel.IN_APP];
 
       default:

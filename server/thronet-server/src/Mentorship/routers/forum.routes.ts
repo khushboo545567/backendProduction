@@ -17,5 +17,7 @@ router.post("/:id/upvote", AuthMiddleware.authenticate, forumController.toggleUp
 
 router.get("/:id/replies", AuthMiddleware.authenticateOptional as any, forumController.listReplies);
 router.post("/:id/replies", AuthMiddleware.authenticate, forumController.addReply);
+router.patch("/:id/replies/:replyId", AuthMiddleware.authenticate, forumController.updateReply);
+router.delete("/:id/replies/:replyId", AuthMiddleware.authenticate, forumController.deleteReply);
 
 export default router;

@@ -108,6 +108,10 @@ const NotificationSchema = new Schema<INotification>(
         'promotion',
         'achievement_unlocked',
 
+        // Forum notifications
+        'forum_reply',
+        'forum_mention',
+
         // Other
         'custom',
       ],

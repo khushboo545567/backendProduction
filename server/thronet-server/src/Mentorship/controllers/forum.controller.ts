@@ -8,6 +8,7 @@ import {
   createForumReplySchema,
   forumListQuerySchema,
   updateForumSchema,
+  updateForumReplySchema,
 } from '@/Mentorship/validations/forum.validator';
 
 class ForumController {
@@ -117,6 +118,29 @@ class ForumController {
       ResponseHandler.success(res, 'Forum lock status updated', forum);
     } catch (error: any) {
       logger.error('Error locking forum thread:', error);
+      next(error);
+    }
+  }
+
+  async updateReply(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = updateForumReplySchema.parse(req.body);
+      const isAdmin = (req.user as any)?.role === 'admin';
+      const reply = await forumService.updateReply(req.params.replyId, req.user!.id, isAdmin, data.content);
+      ResponseHandler.success(res, 'Reply updated', reply);
+    } catch (error: any) {
+      logger.error('Error updating reply:', error);
+      next(error);
+    }
+  }
+
+  async deleteReply(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const isAdmin = (req.user as any)?.role === 'admin';
+      await forumService.deleteReply(req.params.replyId, req.user!.id, isAdmin);
+      ResponseHandler.success(res, 'Reply deleted');
+    } catch (error: any) {
+      logger.error('Error deleting reply:', error);
       next(error);
     }
   }

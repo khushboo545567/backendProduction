@@ -25,3 +25,7 @@ export const updateForumSchema = z.object({
 }).refine((d) => d.topic !== undefined || d.description !== undefined, {
   message: 'At least one of topic or description must be provided',
 });
+
+export const updateForumReplySchema = z.object({
+  content: z.string().min(1).max(3000),
+});

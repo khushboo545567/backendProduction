@@ -143,6 +143,44 @@ export class ForumRepository {
     const items = await attachAuthors(rawItems);
     return { items, total, page, pages: Math.ceil(total / limit) };
   }
+
+  async findReplyById(replyId: string) {
+    return ForumReply.findById(replyId);
+  }
+
+  async updateReply(replyId: string, content: string) {
+    const updated = await ForumReply.findByIdAndUpdate(
+      replyId,
+      { $set: { content } },
+      { new: true }
+    );
+    if (!updated) return null;
+    const [withAuthor] = await attachAuthors([updated]);
+    return withAuthor;
+  }
+
+  async deleteReply(replyId: string) {
+    const reply = await ForumReply.findById(replyId);
+    if (!reply) return null;
+
+    // Cascade delete: delete this reply and any nested child replies
+    const deleteResult = await ForumReply.deleteMany({
+      $or: [{ _id: replyId }, { parentReplyId: replyId }],
+    });
+    const deletedCount = deleteResult.deletedCount || 1;
+
+    if (reply.forum) {
+      await Forum.findByIdAndUpdate(reply.forum, {
+        $inc: { replyCount: -deletedCount },
+      });
+      await Forum.updateOne(
+        { _id: reply.forum, replyCount: { $lt: 0 } },
+        { $set: { replyCount: 0 } }
+      );
+    }
+
+    return { deletedCount };
+  }
 }
 
 export default new ForumRepository();
