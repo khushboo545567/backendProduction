@@ -84,12 +84,21 @@ export class CommunityEventRepository {
   }
 
   async list(query: CommunityEventListQuery) {
-    const { type, upcoming, page = 1, limit = 20 } = query;
+    const { type, upcoming, page = 1, limit = 20, search } = query;
     const filter: Record<string, any> = { isCancelled: false };
     if (type) filter.type = type;
     if (upcoming) filter.date = { $gte: new Date() };
 
+    if (search && search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      filter.$or = [
+        { title: searchRegex },
+        { description: searchRegex },
+      ];
+    }
+
     const [rawItems, total] = await Promise.all([
+
       CommunityEvent.find(filter)
         .sort({ date: upcoming ? 1 : -1 })
         .skip((page - 1) * limit)
