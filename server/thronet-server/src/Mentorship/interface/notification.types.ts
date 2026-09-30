@@ -11,6 +11,7 @@ export enum NotificationType {
   PAYMENT_FAILED = 'payment_failed',
   REFUND_PROCESSED = 'refund_processed',
   REVIEW_RECEIVED = 'review_received',
+  REVIEW_REPLIED = 'review_replied',
   PACKAGE_PURCHASED = 'package_purchased',
   PACKAGE_EXPIRING = 'package_expiring',
   WAITLIST_AVAILABLE = 'waitlist_available',

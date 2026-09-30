@@ -6,6 +6,7 @@ import reviewRepository, { ReviewSort, ReviewReaction } from "../repositories/re
 import { generateSecureId } from "@/shared/security";
 import { TrustScoreEvents } from '../events/trustScore.events';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
+import { User } from '@/auth/models';
 
 
 
@@ -315,7 +316,43 @@ class ReviewService {
       // logged-in userId hai. Isliye Mentor resolve karke userId compare karte hain.
       await this.assertReviewBelongsToMentorUser(review.mentorId, mentorId);
 
+      const previousRespondedAt = review.mentorResponse?.respondedAt;
+      const isRecentEdit = !!(
+        previousRespondedAt &&
+        (Date.now() - new Date(previousRespondedAt).getTime() < 5 * 60 * 1000)
+      );
+
       await review.addMentorResponse(text);
+
+      if (!isRecentEdit && review.menteeId) {
+        try {
+          const mentorDoc = await Mentor.findOne({ mentorId: review.mentorId, isDeleted: false });
+          let mentorName = 'Your mentor';
+          if (mentorDoc && mentorDoc.userId) {
+            const mentorUser = await User.findByUserId(mentorDoc.userId);
+            if (mentorUser) {
+              mentorName =
+                mentorUser.fullName ||
+                `${mentorUser.firstName || ''} ${mentorUser.lastName || ''}`.trim() ||
+                'Your mentor';
+            }
+          }
+
+          NotificationService.sendNotification({
+            userId: review.menteeId,
+            type: NotificationType.REVIEW_REPLIED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              title: 'Mentor Replied to Your Review',
+              message: `${mentorName} replied to your review: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`,
+              reviewId: review.reviewId,
+              mentorId: review.mentorId,
+            },
+          }).catch((e) => logger.error('Notification failed (addMentorResponse):', e));
+        } catch (notifErr: any) {
+          logger.warn(`⚠️ Failed to send review reply notification: ${notifErr.message}`);
+        }
+      }
 
       logger.info(`✅ Mentor response added: ${reviewId}`);
 

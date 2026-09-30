@@ -37,6 +37,7 @@ export enum NotificationType {
   PAYMENT_FAILED = 'payment_failed',
   REFUND_PROCESSED = 'refund_processed',
   REVIEW_RECEIVED = 'review_received',
+  REVIEW_REPLIED = 'review_replied',
   SESSION_COMPLETED = 'session_completed',
   // ✅ NEW — query flow had no notification at all before this
   QUERY_RECEIVED = 'query_received',

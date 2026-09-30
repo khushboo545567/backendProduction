@@ -78,6 +78,7 @@ const NotificationSchema = new Schema<INotification>(
         'new_booking_request',
         'booking_cancelled_by_mentee',
         'review_received',
+        'review_replied',
         'query_received',
 
         // User notifications
