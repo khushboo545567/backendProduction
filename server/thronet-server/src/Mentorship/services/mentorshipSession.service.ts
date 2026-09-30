@@ -381,6 +381,9 @@ class MentorshipSessionService {
             type: NotificationType.NEW_BOOKING_REQUEST,
             channels: [NotificationChannel.IN_APP],
             data: {
+              menteeId: input.menteeId,
+              menteeName,
+            
               title: 'New Booking Request',
               message: `${menteeName} sent a new booking request for "${session.title}".`,
             },

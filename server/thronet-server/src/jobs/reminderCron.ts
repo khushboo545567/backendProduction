@@ -1,4 +1,4 @@
-﻿console.log('TRACE_START reminderCron.ts');
+console.log('TRACE_START reminderCron.ts');
 // src/jobs/reminderCron.ts
 import cron from 'node-cron';
 import { SessionMentor, Mentor } from '@/Mentorship/models';
@@ -144,8 +144,11 @@ class ReminderCron {
               type: NotificationType.SESSION_REMINDER,
               channels: [NotificationChannel.IN_APP],
               data: {
+                menteeId: user.userId,
+                menteeName: user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email,
+                menteePhoto: (user as any).profilePhotoUrl || (user as any).profilePhoto || (user as any).avatar || null,
                 title: opts.label,
-                message: `Your session with ${user.fullName || user.email} — ${opts.label.toLowerCase()}.`,
+                message: `Your session "${session.title || 'Session'}" with ${user.fullName || user.email} ${opts.label.toLowerCase()}. Start it when you are ready.`,
               },
             }).catch((e) => logger.error(`In-app reminder failed (${opts.flagKey} → mentor):`, e));
 

@@ -140,6 +140,7 @@ class QueryService {
           type: NotificationType.QUERY_RECEIVED,
           channels: [NotificationChannel.IN_APP],
           data: {
+            menteeId: input.menteeId || (mentee as any).userId,
             title: 'New Query',
             message: `${menteeName} asked you a query`,
             menteeName,

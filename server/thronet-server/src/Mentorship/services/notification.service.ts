@@ -1,5 +1,7 @@
 // src/Mentorship/services/notification.service.ts
+
 import { User } from '@/auth/models';
+import { UserProfile } from '@/shared/models/index.models';
 import emailService from './email.service';
 import smsService from './sms.service';
 import logger from '@/config/logging/logger.config';
@@ -242,6 +244,36 @@ class NotificationService {
   private async sendInAppNotification(_user: any, input: NotificationInput): Promise<boolean> {
     try {
       const notificationId = generateSecureId();
+
+      // ✅ Auto-enrich menteeName & menteePhoto if menteeId is provided in data
+      if (input.data && input.data.menteeId) {
+        try {
+          if (!input.data.menteeName || !input.data.menteePhoto) {
+            const menteeUser = await User.findByUserId(input.data.menteeId);
+            if (menteeUser) {
+              if (!input.data.menteeName) {
+                input.data.menteeName =
+                  (menteeUser as any).fullName ||
+                  `${(menteeUser as any).firstName || ''} ${(menteeUser as any).lastName || ''}`.trim() ||
+                  (menteeUser as any).username ||
+                  (menteeUser as any).email ||
+                  'Mentee';
+              }
+              if (!input.data.menteePhoto) {
+                try {
+                  const profile: any = await UserProfile.findByUserIdCached(input.data.menteeId);
+                  input.data.menteePhoto = profile?.avatar?.url || null;
+                } catch {
+                  input.data.menteePhoto = null;
+                }
+              }
+            }
+          }
+        } catch (enrichErr: any) {
+          logger.warn(`Mentee enrichment skipped silently: ${enrichErr.message}`);
+        }
+      }
+
       const title = input.data.title || input.type;
       const message = input.data.message || '';
 
@@ -283,8 +315,10 @@ class NotificationService {
         emitToUser(input.userId, 'notification:new', {
           notificationId,
           type: input.type,
+
           title,
           message,
+          data: input.data,
           isRead: false,
           createdAt: new Date().toISOString(),
         });

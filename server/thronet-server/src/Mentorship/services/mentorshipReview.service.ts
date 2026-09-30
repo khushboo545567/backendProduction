@@ -92,6 +92,7 @@ class ReviewService {
             type: NotificationType.REVIEW_RECEIVED,
             channels: [NotificationChannel.IN_APP],
             data: {
+              menteeId: input.menteeId,
               title: 'New Review',
               message: `You received a new review with a rating of ${input.rating}★.`,
             },

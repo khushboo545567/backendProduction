@@ -225,6 +225,9 @@ class BookingService {
       type: NotificationType.BOOKING_CONFIRMED,
       channels: [NotificationChannel.IN_APP],
       data: {
+        menteeId: mentee.userId,
+        menteeName: mentee.name || mentee.email,
+        menteePhoto: (mentee as any).profilePhotoUrl || (mentee as any).profilePhoto || (mentee as any).avatar || null,
         title: 'New Booking',
         message: `${mentee.name || mentee.email} booked a session with you on ${scheduledAtFormatted}.`,
       },
