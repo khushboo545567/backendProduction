@@ -28,14 +28,19 @@ class MentorshipAnalyticsService {
         SessionMentor.aggregate([
           { $match: { mentorId } },
           {
-            $unwind: { path: '$bookings', preserveNullAndEmptyArrays: false }
+            $unwind: { path: '$bookings', preserveNullAndEmptyArrays: true }
           },
           {
             $addFields: {
               bookingDate: { $ifNull: ['$bookings.bookedAt', '$scheduledAt'] },
               bookingTotalAmount: { $ifNull: ['$bookings.pricing.totalAmount', '$pricing.totalAmount'] },
+              bookingStatus: { $ifNull: ['$bookings.status', '$status'] }
+            }
+          },
+          {
+            $addFields: {
               isValidBooking: {
-                $in: ['$bookings.status', ['confirmed', 'rescheduled', 'in_progress', 'completed']]
+                $in: ['$bookingStatus', ['confirmed', 'rescheduled', 'in_progress', 'completed']]
               }
             }
           },
@@ -49,8 +54,8 @@ class MentorshipAnalyticsService {
             $group: {
               _id: null,
               totalSessions: { $sum: { $cond: ['$isValidBooking', 1, 0] } },
-              completedSessions: { $sum: { $cond: [{ $eq: ['$bookings.status', 'completed'] }, 1, 0] } },
-              cancelledSessions: { $sum: { $cond: [{ $eq: ['$bookings.status', 'cancelled'] }, 1, 0] } },
+              completedSessions: { $sum: { $cond: [{ $eq: ['$bookingStatus', 'completed'] }, 1, 0] } },
+              cancelledSessions: { $sum: { $cond: [{ $eq: ['$bookingStatus', 'cancelled'] }, 1, 0] } },
               totalEarnings: { $sum: { $cond: ['$isValidBooking', '$bookingTotalAmount', 0] } },
               averageSessionPrice: { $avg: { $cond: ['$isValidBooking', '$bookingTotalAmount', null] } },
             },
@@ -58,13 +63,18 @@ class MentorshipAnalyticsService {
         ]),
         SessionMentor.aggregate([
           { $match: { mentorId } },
-          { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: false } },
+          { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: true } },
           {
             $addFields: {
               bookingDate: { $ifNull: ['$bookings.bookedAt', '$scheduledAt'] },
               bookingTotalAmount: { $ifNull: ['$bookings.pricing.totalAmount', '$pricing.totalAmount'] },
+              bookingStatus: { $ifNull: ['$bookings.status', '$status'] }
+            }
+          },
+          {
+            $addFields: {
               isValidBooking: {
-                $in: ['$bookings.status', ['confirmed', 'rescheduled', 'in_progress', 'completed']]
+                $in: ['$bookingStatus', ['confirmed', 'rescheduled', 'in_progress', 'completed']]
               }
             }
           },
@@ -91,9 +101,9 @@ class MentorshipAnalyticsService {
       ]);
 
       const stats = sessionStats[0] || {
-        totalBookings: 0,
-        completedBookings: 0,
-        cancelledBookings: 0,
+        totalSessions: 0,
+        completedSessions: 0,
+        cancelledSessions: 0,
         totalEarnings: 0,
         averageSessionPrice: 0,
       };
@@ -113,11 +123,11 @@ class MentorshipAnalyticsService {
           status: mentor.status,
         },
         sessions: {
-          total: stats.totalBookings,
-          completed: stats.completedBookings,
-          cancelled: stats.cancelledBookings,
-          completionRate: stats.totalBookings > 0
-            ? Math.round((stats.completedBookings / stats.totalBookings) * 100)
+          total: stats.totalSessions || 0,
+          completed: stats.completedSessions || 0,
+          cancelled: stats.cancelledSessions || 0,
+          completionRate: (stats.totalSessions || 0) > 0
+            ? Math.round(((stats.completedSessions || 0) / stats.totalSessions) * 100)
             : 0,
           byType: sessionTypeBreakdown,
         },
@@ -161,7 +171,7 @@ class MentorshipAnalyticsService {
         baseStats,
         viewsThisMonthAgg,
         viewsLastMonthAgg,
-        viewsAllTimeAgg,
+        viewsAllTimeAgg,  
         durationAgg,
         monthlyEarnings,
         cancellationAgg,
@@ -181,16 +191,17 @@ class MentorshipAnalyticsService {
 
         SessionMentor.aggregate([
           { $match: { mentorId } },
-          { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: false } },
+          { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: true } },
           {
             $addFields: {
               bookingDate: { $ifNull: ['$bookings.bookedAt', '$scheduledAt'] },
-              bookingTotalAmount: { $ifNull: ['$bookings.pricing.totalAmount', '$pricing.totalAmount'] }
+              bookingTotalAmount: { $ifNull: ['$bookings.pricing.totalAmount', '$pricing.totalAmount'] },
+              bookingStatus: { $ifNull: ['$bookings.status', '$status'] }
             }
           },
           {
             $match: {
-              'bookings.status': { $in: ['confirmed', 'rescheduled', 'in_progress', 'completed'] },
+              'bookingStatus': { $in: ['confirmed', 'rescheduled', 'in_progress', 'completed'] },
               bookingDate: { $gte: fourMonthsAgo },
             },
           },
@@ -198,6 +209,7 @@ class MentorshipAnalyticsService {
             $group: {
               _id: { $dateToString: { format: '%Y-%m', date: '$bookingDate' } },
               amount: { $sum: '$bookingTotalAmount' },
+              bookings: { $sum: 1 },
             },
           },
           { $sort: { _id: -1 } },
@@ -209,13 +221,18 @@ class MentorshipAnalyticsService {
         // never match and noShow will stay 0 — safe no-op, doesn't break anything.
         SessionMentor.aggregate([
           { $match: { mentorId } },
-          { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: false } },
+          { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: true } },
+          {
+            $addFields: {
+              bookingStatus: { $ifNull: ['$bookings.status', '$status'] }
+            }
+          },
           {
             $group: {
               _id: null,
               total: { $sum: 1 },
-              cancelled: { $sum: { $cond: [{ $eq: ['$bookings.status', 'cancelled'] }, 1, 0] } },
-              noShow: { $sum: { $cond: [{ $eq: ['$bookings.status', 'no_show'] }, 1, 0] } },
+              cancelled: { $sum: { $cond: [{ $eq: ['$bookingStatus', 'cancelled'] }, 1, 0] } },
+              noShow: { $sum: { $cond: [{ $eq: ['$bookingStatus', 'no_show'] }, 1, 0] } },
             },
           },
         ]),
@@ -287,6 +304,7 @@ class MentorshipAnalyticsService {
         monthlyEarnings: monthlyEarnings.map((m: any) => ({
           month: m._id,
           amount: m.amount,
+          bookings: m.bookings,
         })),
         // ✅ NEW
         ratingTrend: ratingTrendAgg.map((r: any) => ({

@@ -174,6 +174,12 @@ const SeniorSessionSchema = new Schema<SeniorSessionDocument>(
       maxlength: [2000, 'Description cannot exceed 2000 characters'],
     },
 
+    category: {
+      type: String,
+      trim: true,
+      maxlength: [100, 'Category cannot exceed 100 characters'],
+    },
+
     thumbnailImage: {
       type: String,
       trim: true,

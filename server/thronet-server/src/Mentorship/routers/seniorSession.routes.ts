@@ -8,8 +8,19 @@ import {
   updateSeniorSessionValidator,
   seniorSessionIdValidator,
 } from '../validations/seniorSession.validator';
+import { uploadSingle } from '@/shared/upload/upload';
 
 const router = Router();
+
+/**
+ * Get all active 1-to-1 Senior Sessions for discovery
+ * GET /senior-sessions
+ * Public route
+ */
+router.get(
+  '/',
+  SeniorSessionController.getDiscoverySessions
+);
 
 /**
  * All Senior Session routes require authentication.
@@ -22,9 +33,12 @@ router.use(AuthMiddleware.authenticate);
  */
 router.post(
   '/',
+  uploadSingle('thumbnailImage', 'image', false),
   createSeniorSessionValidator,
   SeniorSessionController.createSession
 );
+
+
 
 /**
  * Get all sessions owned by the authenticated Senior Mentor
@@ -46,11 +60,22 @@ router.get(
 );
 
 /**
+ * Book a Senior Session
+ * POST /senior-sessions/:sessionId/book
+ */
+router.post(
+  '/:sessionId/book',
+  seniorSessionIdValidator,
+  SeniorSessionController.bookSession
+);
+
+/**
  * Update a Senior Session
  * PUT /senior-sessions/:sessionId
  */
 router.put(
   '/:sessionId',
+  uploadSingle('thumbnailImage', 'image', false),
   updateSeniorSessionValidator,
   SeniorSessionController.updateSession
 );
