@@ -171,7 +171,7 @@ class MentorshipAnalyticsService {
         baseStats,
         viewsThisMonthAgg,
         viewsLastMonthAgg,
-        viewsAllTimeAgg,
+        viewsAllTimeAgg,  
         durationAgg,
         monthlyEarnings,
         cancellationAgg,
