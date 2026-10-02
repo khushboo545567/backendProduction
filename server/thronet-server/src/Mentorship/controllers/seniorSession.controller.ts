@@ -14,7 +14,8 @@ class SeniorSessionController {
 
       const session = await SeniorSessionService.createSession(
         userId,
-        req.body
+        req.body,
+        (req as any).file
       );
 
       return ResponseHandler.success(
@@ -22,8 +23,10 @@ class SeniorSessionController {
         'Senior session created successfully',
         session
       );
-    } catch (error) {
-      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
+    } catch (error: any) {
+      console.error('CREATE SESSION ERROR:', error);
+      const statusCode = error.statusCode || (error.name === 'ValidationError' ? 400 : 500);
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', statusCode, error.stack);
     }
   }
 
@@ -42,8 +45,52 @@ class SeniorSessionController {
         'Senior sessions retrieved successfully',
         sessions
       );
-    } catch (error) {
-      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Get all active one-to-one sessions for the discovery page
+   * GET /senior-sessions/discovery
+   */
+  async getDiscoverySessions(req: AuthRequest, res: Response) {
+    try {
+      const sessions = await SeniorSessionService.getDiscoverySessions();
+
+      return ResponseHandler.success(
+        res,
+        'Senior sessions retrieved successfully',
+        sessions
+      );
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Book a Senior Session
+   * POST /senior-sessions/:sessionId/book
+   */
+  async bookSession(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { sessionId } = req.params;
+
+      const session = await SeniorSessionService.bookSession(
+        userId,
+        sessionId,
+        req.body
+      );
+
+      return ResponseHandler.success(
+        res,
+        'Senior session booked successfully',
+        session
+      );
+    } catch (error: any) {
+      console.log('>>> [BOOKING_ERROR] catch block triggered in seniorSession controller:', error);
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
     }
   }
 
@@ -57,8 +104,8 @@ class SeniorSessionController {
       const { sessionId } = req.params;
 
       const session = await SeniorSessionService.getSessionById(
-        sessionId,
-        userId
+        userId,
+        sessionId
       );
 
       return ResponseHandler.success(
@@ -66,8 +113,8 @@ class SeniorSessionController {
         'Senior session retrieved successfully',
         session
       );
-    } catch (error) {
-      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
     }
   }
 
@@ -80,10 +127,15 @@ class SeniorSessionController {
       const userId = req.user!.id;
       const { sessionId } = req.params;
 
+      console.log('--- UPDATE SESSION CONTROLLER ---');
+      console.log('userId:', userId);
+      console.log('sessionId:', sessionId);
+
       const session = await SeniorSessionService.updateSession(
-        sessionId,
         userId,
-        req.body
+        sessionId,
+        req.body,
+        req.file as Express.Multer.File | undefined
       );
 
       return ResponseHandler.success(
@@ -91,8 +143,8 @@ class SeniorSessionController {
         'Senior session updated successfully',
         session
       );
-    } catch (error) {
-      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
     }
   }
 
@@ -105,9 +157,13 @@ class SeniorSessionController {
       const userId = req.user!.id;
       const { sessionId } = req.params;
 
+      console.log('--- CANCEL SESSION CONTROLLER ---');
+      console.log('Extracted userId:', userId);
+      console.log('Extracted sessionId:', sessionId);
+
       const session = await SeniorSessionService.cancelSession(
-        sessionId,
-        userId
+        userId,
+        sessionId
       );
 
       return ResponseHandler.success(
@@ -115,8 +171,9 @@ class SeniorSessionController {
         'Senior session cancelled successfully',
         session
       );
-    } catch (error) {
-      return ResponseHandler.error(res, error instanceof Error ? error.message : 'Internal Server Error', 500, error);
+    } catch (error: any) {
+      console.error('CANCEL SESSION ERROR:', error);
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
     }
   }
 }

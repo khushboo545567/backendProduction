@@ -280,6 +280,19 @@ class SeniorSessionRepository {
 
     return session?.bookings?.length ?? 0;
   }
+
+  /**
+   * Find all active (non-cancelled) one-to-one sessions
+   * for the public discovery page.
+   */
+  async findAllActiveOneToOneSessions(): Promise<SeniorSessionDocument[]> {
+    return await SeniorSession.find({
+      sessionType: { $ne: 'group' },
+      status: { $ne: 'cancelled' }
+    })
+      .sort({ createdAt: -1 })
+      .lean<SeniorSessionDocument[]>();
+  }
 }
 
 export default new SeniorSessionRepository();

@@ -72,6 +72,8 @@ export interface ISeniorSession {
 
   description?: string;
 
+  category?: string;
+
   thumbnailImage?: string;
 
   /**

@@ -21,6 +21,7 @@ import seniorSessionRoutes from './seniorSession.routes';
 import forumRoutes from './forum.routes';
 import communityRoutes from './community.routes';
 import communityEventRoutes from './communityEvent.routes';
+import seniorAvailabilityRoutes from './seniorAvailability.routes';
 
 const router = Router();
 
@@ -72,5 +73,6 @@ router.use('/senior-sessions', seniorSessionRoutes);
 router.use('/forums', forumRoutes);
 router.use('/community', communityRoutes);
 router.use('/community/events', communityEventRoutes);
+router.use('/senior-availability', seniorAvailabilityRoutes);
 
 export default router;

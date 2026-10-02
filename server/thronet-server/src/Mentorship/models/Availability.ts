@@ -162,7 +162,7 @@ AvailabilitySchema.pre('validate', function (next) {
 AvailabilitySchema.methods.getAvailableSlots = function () {
   return this.slots
     .filter((s: SlotType) => !s.isBooked && !s.isBlocked)
-    .map((s: SlotType) => ({ startTime: s.startTime, endTime: s.endTime }));
+    .map((s: SlotType) => ({ startTime: s.startTime, endTime: s.endTime, availabilityId: this.availabilityId }));
 };
 
 AvailabilitySchema.methods.bookSlot = async function (startTime: string, sessionId: string) {
