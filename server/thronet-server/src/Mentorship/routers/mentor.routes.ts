@@ -130,6 +130,17 @@ router.put(
 );
 
 /**
+ * @route   DELETE /api/mentors/:id/profile-photo
+ * @desc    Remove mentor profile photo
+ * @access  Private (mentor owner only)
+ */
+router.delete(
+  '/:id/profile-photo',
+  AuthMiddleware.authenticate as any,
+  mentorController.removeProfilePhoto as any
+);
+
+/**
  * @route   DELETE /api/mentors/:id
  * @desc    Delete mentor profile (soft delete)
  * @access  Private (mentor owner only)

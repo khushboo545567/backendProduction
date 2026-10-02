@@ -265,6 +265,48 @@ class MentorService {
     }
   }
 
+   /**
+   * Remove mentor profile photo (DB + Cloudinary)
+   */
+   async removeProfilePhoto(
+    mentorId: string,
+    userId: string,
+    authToken?: string
+  ): Promise<MentorWithRelations> {
+    try {
+      const mentor = await mentorRepository.findByMentorId(mentorId);
+      if (!mentor) {
+        throw new NotFoundError('MENTOR_NOT_FOUND');
+      }
+      if (mentor.userId !== userId) {
+        throw new ForbiddenError('Not authorized to update this profile');
+      }
+
+      // Cloudinary se delete (fail ho to bhi DB se hata denge)
+      if (mentor.profilePic) {
+        try {
+          const match = String(mentor.profilePic).match(/\/upload\/(?:v\d+\/)?(.+)\.[a-z0-9]+$/i);
+          if (match?.[1]) {
+            await cloudinary.uploader.destroy(match[1]);
+          }
+        } catch (err: any) {
+          logger.warn(`Cloudinary delete failed for mentor ${mentorId}: ${err?.message}`);
+        }
+      }
+
+      const updated = await mentorRepository.removeProfilePicByMentorId(mentorId);
+      if (!updated) {
+        throw new NotFoundError('MENTOR_NOT_FOUND');
+      }
+
+      logger.info(`Profile photo removed for mentor: ${mentorId}`);
+      return await this.enrichMentorWithRelations(updated, authToken);
+    } catch (error: any) {
+      logger.error(`Failed to remove profile photo ${mentorId}: ${error.message}`);
+      throw error;
+    }
+  }
+
   /**
    * Soft delete mentor profile
    */

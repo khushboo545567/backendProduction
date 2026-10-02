@@ -30,7 +30,20 @@ class MentorRepository {
     return mentor.toObject();
   }
 
-  async softDeleteByMentorId(mentorId: string): Promise<boolean> {
+
+    // Profile photo hatane ke liye $unset
+    async removeProfilePicByMentorId(mentorId: string): Promise<any | null> {
+      const mentor = await Mentor.findOneAndUpdate(
+        { mentorId, isDeleted: false },
+        { $unset: { profilePic: 1 } },
+        { new: true }
+      );
+      if (!mentor) return null;
+      return mentor.toObject();
+    }
+  
+    async softDeleteByMentorId(mentorId: string): Promise<boolean> {
+
     const mentor = await Mentor.findOne({ mentorId, isDeleted: false });
     if (!mentor) return false;
 

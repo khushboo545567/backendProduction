@@ -283,6 +283,25 @@ try {
   }
 
   /**
+   * @route   DELETE /api/v1/mentorship/mentors/:id/profile-photo
+   * @desc    Remove mentor profile photo (DB + Cloudinary)
+   * @access  Private (mentor owner)
+   */
+  async removeProfilePhoto(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const authToken = req.headers.authorization?.split(' ')[1];
+      const mentor = await mentorService.removeProfilePhoto(id, req.user!.id, authToken);
+
+      logger.info(`Mentor profile photo removed: ${id}`);
+      ResponseHandler.success(res, 'Profile photo removed successfully', mentor);
+    } catch (error: any) {
+      logger.error('Error removing mentor profile photo:', error);
+      next(error);
+    }
+  }
+
+  /**
    * @route   DELETE /api/v1/mentorship/mentors/:id
    * @access  Private (mentor owner)
    */
