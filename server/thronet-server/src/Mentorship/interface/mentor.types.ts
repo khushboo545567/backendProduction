@@ -137,6 +137,8 @@ export interface IMentor extends TimeStamps, SoftDelete {
     featuredUntil?: Date;
     featuredOrder?: number;
   };
+  autoOfferWaitlist?: boolean;
+  waitlistCounter?: number;
   trustScore?: ITrustScore;
   // ⭐ NEW: userIds who saved/bookmarked this mentor
   savedBy?: string[];

@@ -90,7 +90,7 @@ class WaitlistService {
           priority: 'high',
           data: {
             title: 'Slot Available!',
-            message: `A spot with ${mentorName} just opened up. Book within 48h.`,
+            message: `A spot with ${mentorName} just opened up. Book within 24h.`,
             mentorName,
             serviceTitle: entry.serviceTitle,
             sessionType: entry.sessionType,
@@ -108,14 +108,14 @@ class WaitlistService {
           <h2>Great news! A slot is now available</h2>
           <p>Hi ${user.fullName || user.email},</p>
           <p>A slot has opened up with <strong>${mentorName}</strong> for <strong>${what}</strong>.</p>
-          <p><strong>You have 48 hours to book.</strong> After that it goes to the next person in line.</p>
+                    <p><strong>You have 24 hours to book.</strong> After that it goes to the next person in line.</p>
         `,
       });
 
       if (user.phoneNumber) {
         await smsService.sendSMS({
           to: user.phoneNumber,
-          message: `🎉 Slot available with ${mentorName} (${what})! Book within 48h.`,
+          message: `🎉 Slot available with ${mentorName} (${what})! Book within 24h.`,
         });
       }
     } catch (error: any) {
@@ -442,6 +442,222 @@ class WaitlistService {
       return summary;
     } catch (error: any) {
       logger.error(`Failed to expire waitlist entries: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ───────────────────────── core process waitlist & claim flow ─────────────────────────
+
+  /**
+   * Called when availability changes or a session is cancelled/rescheduled.
+   * Finds the first waiting candidate (FIFO) and offers the slot if auto-offer is ON.
+   */
+  async processWaitlist(
+    mentorId: string,
+    serviceId?: string,
+    slot?: { date?: Date; startTime?: string; endTime?: string; slotId?: string }
+  ): Promise<IWaitlist | null> {
+    try {
+      const mentor = await this.resolveMentor(mentorId);
+      if (!mentor) return null;
+
+      // Check mentor auto-offer setting (default true)
+      if (mentor.autoOfferWaitlist === false) {
+        logger.info(`Auto-offer is disabled for mentor ${mentor.mentorId}`);
+        return null;
+      }
+
+      const mentorKey = mentor.mentorId || mentor.userId;
+
+      // Find top waiting entry (FIFO: highest priority first, then earliest created)
+      const queryFilter: any = {
+        mentorId: mentorKey,
+        status: { $in: [WaitlistStatus.WAITING, WaitlistStatus.ACTIVE] },
+        expiresAt: { $gt: new Date() },
+      };
+      if (serviceId) {
+        queryFilter.serviceId = serviceId;
+      }
+
+      // Atomic lock via findOneAndUpdate
+      const nextEntry = await Waitlist.findOneAndUpdate(
+        queryFilter,
+        {
+          $set: {
+            status: WaitlistStatus.NOTIFIED,
+            notifiedAt: new Date(),
+            notificationSent: true,
+            offeredSlot: slot || {},
+            bookingWindowExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h window
+          },
+        },
+        { sort: { priority: -1, position: 1, createdAt: 1 }, new: true }
+      );
+
+      if (!nextEntry) {
+        logger.info(`No waiting entries found for mentor ${mentorKey}`);
+        return null;
+      }
+
+      await this.sendSlotAvailableNotification(nextEntry, mentor);
+      logger.info(`✅ Offered slot to waitlisted user: ${nextEntry.userId} for service ${serviceId || 'all'}`);
+      return nextEntry;
+    } catch (error: any) {
+      logger.error(`Failed in processWaitlist: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mentee claims an offered waitlist slot within the 24h window.
+   */
+  async claimWaitlistSlot(waitlistId: string, userId: string, sessionId?: string): Promise<IWaitlist> {
+    try {
+      const entry = await waitlistRepository.findByWaitlistId(waitlistId);
+      if (!entry) throw new NotFoundError('Waitlist entry not found');
+
+      if (entry.userId !== userId) {
+        throw new BadRequestError('Not authorized to claim this waitlist offer');
+      }
+
+      if (entry.status !== WaitlistStatus.NOTIFIED) {
+        throw new BadRequestError(`Cannot claim waitlist entry with status '${entry.status}'`);
+      }
+
+      if (entry.bookingWindowExpiresAt && new Date() > entry.bookingWindowExpiresAt) {
+        entry.status = WaitlistStatus.EXPIRED;
+        await entry.save();
+        // Trigger auto-offer to next in line
+        this.processWaitlist(entry.mentorId, entry.serviceId).catch((e: any) =>
+          logger.warn(`Cascade processWaitlist failed after expiry: ${e.message}`)
+        );
+        throw new BadRequestError('The claim window for this offer has expired.');
+      }
+
+           // Atomic claim: only one concurrent request can flip NOTIFIED -> CONVERTED
+           const claimed = await Waitlist.findOneAndUpdate(
+            {
+              waitlistId,
+              userId,
+              status: WaitlistStatus.NOTIFIED,
+              bookingWindowExpiresAt: { $gt: new Date() },
+            },
+            {
+              $set: {
+                status: WaitlistStatus.CONVERTED,
+                bookedAt: new Date(),
+                ...(sessionId ? { sessionId } : {}),
+              },
+            },
+            { new: true }
+          );
+          if (!claimed) {
+            throw new BadRequestError('Offer is no longer claimable');
+          }
+          entry.status = claimed.status;
+          entry.bookedAt = claimed.bookedAt;
+          entry.sessionId = claimed.sessionId;
+
+      // Notify mentor that waitlist offer was claimed
+      try {
+        const mentor = await this.resolveMentor(entry.mentorId);
+        const mentee = await this.safeUser(userId);
+        if (mentor) {
+          await notificationService.sendNotification({
+            userId: mentor.userId,
+            type: NotificationType.WAITLIST_AVAILABLE,
+            channels: [NotificationChannel.IN_APP],
+            priority: 'normal',
+            data: {
+              title: 'Waitlist Slot Claimed!',
+              message: `${mentee?.fullName || mentee?.email || 'A student'} claimed their offered waitlist slot.`,
+              waitlistId: entry.waitlistId,
+            },
+          });
+        }
+      } catch (e: any) {
+        logger.warn(`Failed to notify mentor of claimed slot: ${e.message}`);
+      }
+
+      logger.info(`🎉 Waitlist entry successfully claimed & converted: ${waitlistId}`);
+      return entry;
+    } catch (error: any) {
+      logger.error(`Failed to claim waitlist slot: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mentee declines an offered waitlist slot.
+   */
+  async declineWaitlistSlot(waitlistId: string, userId: string, reason?: string): Promise<IWaitlist> {
+    try {
+      const entry = await waitlistRepository.findByWaitlistId(waitlistId);
+      if (!entry) throw new NotFoundError('Waitlist entry not found');
+
+      if (entry.userId !== userId) {
+        throw new BadRequestError('Not authorized to decline this waitlist offer');
+      }
+
+      if (entry.status !== WaitlistStatus.NOTIFIED) {
+        throw new BadRequestError(`Cannot decline entry with status '${entry.status}'`);
+      }
+
+      entry.status = WaitlistStatus.DECLINED;
+      entry.cancelReason = reason || 'Declined by mentee';
+      await entry.save();
+
+      await (Waitlist as any).reorderPositions(entry.mentorId);
+
+      // Trigger offer to next candidate in queue
+      this.processWaitlist(entry.mentorId, entry.serviceId).catch((e: any) =>
+        logger.warn(`Cascade processWaitlist failed after decline: ${e.message}`)
+      );
+
+      logger.info(`Waitlist slot declined by user ${userId}, entry: ${waitlistId}`);
+      return entry;
+    } catch (error: any) {
+      logger.error(`Failed to decline waitlist slot: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mentor updates priority of a waitlist entry.
+   */
+  async updatePriority(waitlistId: string, requesterUserId: string, priorityDelta: number): Promise<IWaitlist> {
+    try {
+      const entry = await waitlistRepository.findByWaitlistId(waitlistId);
+      if (!entry) throw new NotFoundError('Waitlist entry not found');
+
+      await this.assertMentorOwner(entry.mentorId, requesterUserId);
+
+      entry.priority = (entry.priority || 0) + priorityDelta;
+      await entry.save();
+
+      await (Waitlist as any).reorderPositions(entry.mentorId);
+
+      return entry;
+    } catch (error: any) {
+      logger.error(`Failed to update waitlist priority: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Mentor toggles auto-offer setting.
+   */
+  async toggleAutoOffer(requesterUserId: string, enabled: boolean): Promise<{ autoOfferWaitlist: boolean }> {
+    try {
+      const mentor = await Mentor.findOne({ userId: requesterUserId });
+      if (!mentor) throw new NotFoundError('Mentor profile not found');
+
+      mentor.autoOfferWaitlist = enabled;
+      await mentor.save();
+
+      return { autoOfferWaitlist: mentor.autoOfferWaitlist };
+    } catch (error: any) {
+      logger.error(`Failed to toggle auto offer: ${error.message}`);
       throw error;
     }
   }
