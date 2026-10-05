@@ -66,5 +66,4 @@ export {
     adminController,
     notificationController,
     // adminController, aiController, mentorshipAnalyticsController,  groupController, notificationController, queryController, mentorshipReviewController, searchController,  getPackagePricing, getSpecificPackagePricing, purchasePackage, getPackageById, getUserPackages, getPackageSummary, usePackageCredit, getAvailableCredits, cancelPackage, joinWaitlist, getUserPosition, getUserWaitlists, getMentorWaitlist, notifyNextInLine, markAsBooked, removeFromWaitlist, getWaitlistStats,
-
 }
