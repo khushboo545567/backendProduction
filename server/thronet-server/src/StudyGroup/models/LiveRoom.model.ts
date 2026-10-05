@@ -2,6 +2,9 @@
  * ====================================
  * LIVE ROOM MODEL
  * ====================================
+ * NOTE: group, host and participants[].user are stored as UUID strings
+ * (not Mongo ObjectIds), matching how the rest of the app identifies
+ * groups and users.
  */
 
 import mongoose, { Schema } from 'mongoose';
@@ -10,8 +13,7 @@ import { ILiveRoomDocument, IParticipant } from '../interfaces/ILiveRoom';
 const participantSchema = new Schema<IParticipant>(
   {
     user: {
-      type: Schema.Types.ObjectId,
-      ref: 'User',
+      type: String,
       required: true,
     },
     joinedAt: {
@@ -46,8 +48,7 @@ const participantSchema = new Schema<IParticipant>(
 const liveRoomSchema = new Schema<ILiveRoomDocument>(
   {
     group: {
-      type: Schema.Types.ObjectId,
-      ref: 'StudyGroup_Group',
+      type: String,
       required: [true, 'Group is required'],
       index: true,
     },
@@ -64,8 +65,7 @@ const liveRoomSchema = new Schema<ILiveRoomDocument>(
       maxlength: [500, 'Description must not exceed 500 characters'],
     },
     host: {
-      type: Schema.Types.ObjectId,
-      ref: 'User',
+      type: String,
       required: [true, 'Host is required'],
       index: true,
     },
@@ -166,7 +166,7 @@ liveRoomSchema.virtual('activeParticipantsCount').get(function () {
 /**
  * Method: Add participant
  */
-liveRoomSchema.methods.addParticipant = async function (userId: mongoose.Types.ObjectId) {
+liveRoomSchema.methods.addParticipant = async function (userId: string) {
   const existingParticipant = this.participants.find(
     (p: IParticipant) => p.user.toString() === userId.toString() && !p.leftAt
   );
@@ -200,7 +200,7 @@ liveRoomSchema.methods.addParticipant = async function (userId: mongoose.Types.O
 /**
  * Method: Remove participant
  */
-liveRoomSchema.methods.removeParticipant = async function (userId: mongoose.Types.ObjectId) {
+liveRoomSchema.methods.removeParticipant = async function (userId: string) {
   const participant = this.participants.find(
     (p: IParticipant) => p.user.toString() === userId.toString() && !p.leftAt
   );
@@ -217,7 +217,7 @@ liveRoomSchema.methods.removeParticipant = async function (userId: mongoose.Type
  * Method: Toggle camera
  */
 liveRoomSchema.methods.toggleCamera = async function (
-  userId: mongoose.Types.ObjectId,
+  userId: string,
   cameraOn: boolean
 ) {
   const participant = this.participants.find(
@@ -240,7 +240,7 @@ liveRoomSchema.methods.toggleCamera = async function (
  * Method: Toggle mic
  */
 liveRoomSchema.methods.toggleMic = async function (
-  userId: mongoose.Types.ObjectId,
+  userId: string,
   micOn: boolean
 ) {
   const participant = this.participants.find(
@@ -263,7 +263,7 @@ liveRoomSchema.methods.toggleMic = async function (
  * Method: Toggle screen share
  */
 liveRoomSchema.methods.toggleScreenShare = async function (
-  userId: mongoose.Types.ObjectId,
+  userId: string,
   sharing: boolean
 ) {
   const participant = this.participants.find(
