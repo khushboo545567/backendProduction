@@ -4,11 +4,15 @@
  * ====================================
  */
 
-import express from 'express';
-import AuthMiddleware from '@/shared/middlewares/auth.middleware';
-import { isMember } from '../middleware/groupAccess.middleware';
-import { uploadSingle, validateUploadedFile } from '@/shared/upload/upload';
-import  {fileController} from '../controllers';
+import express from "express";
+import AuthMiddleware from "@/shared/middlewares/auth.middleware";
+import { isMember } from "../middleware/groupAccess.middleware";
+import {
+  uploadSingle,
+  uploadSingleMedia,
+  validateUploadedFile,
+} from "@/shared/upload/upload";
+import { fileController } from "../controllers";
 
 const router = express.Router();
 
@@ -18,12 +22,13 @@ const router = express.Router();
  * @access  Private (Group Members)
  */
 router.post(
-  '/:groupId/upload',
+  "/:groupId/upload",
   AuthMiddleware.authenticate as any,
   isMember,
-  uploadSingle('file') as any,
+  // uploadSingle('file') as any,
+  uploadSingleMedia("file") as any,
   validateUploadedFile as any,
-  fileController.uploadFile
+  fileController.uploadFile,
 );
 
 /**
@@ -32,10 +37,10 @@ router.post(
  * @access  Private (Group Members)
  */
 router.get(
-  '/:groupId/all',
+  "/:groupId/all",
   AuthMiddleware.authenticate as any,
   isMember,
-  fileController.getGroupFiles
+  fileController.getGroupFiles,
 );
 
 /**
@@ -44,10 +49,10 @@ router.get(
  * @access  Private (Group Members)
  */
 router.get(
-  '/:groupId/pinned',
+  "/:groupId/pinned",
   AuthMiddleware.authenticate as any,
   isMember,
-  fileController.getPinnedFiles
+  fileController.getPinnedFiles,
 );
 
 /**
@@ -56,9 +61,9 @@ router.get(
  * @access  Private
  */
 router.get(
-  '/:fileId',
+  "/:fileId",
   AuthMiddleware.authenticate as any,
-  fileController.getFileById
+  fileController.getFileById,
 );
 
 /**
@@ -67,9 +72,9 @@ router.get(
  * @access  Private
  */
 router.get(
-  '/:fileId/download',
+  "/:fileId/download",
   AuthMiddleware.authenticate as any,
-  fileController.downloadFile
+  fileController.downloadFile,
 );
 
 /**
@@ -78,9 +83,9 @@ router.get(
  * @access  Private (Owner or Leader)
  */
 router.delete(
-  '/:fileId',
+  "/:fileId",
   AuthMiddleware.authenticate as any,
-  fileController.deleteFile
+  fileController.deleteFile,
 );
 
 /**
@@ -89,9 +94,9 @@ router.delete(
  * @access  Private (Leader/Moderator)
  */
 router.patch(
-  '/:fileId/pin',
+  "/:fileId/pin",
   AuthMiddleware.authenticate as any,
-  fileController.togglePinFile
+  fileController.togglePinFile,
 );
 
 export default router;
