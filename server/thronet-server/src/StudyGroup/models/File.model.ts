@@ -4,66 +4,77 @@
  * ====================================
  */
 
-import mongoose, { Schema } from 'mongoose';
-import { IFile } from '../interfaces/IFile';
-import { FileType } from '../enums/FileType.enum';
-import { validId } from '@/shared/security';
+import mongoose, { Schema } from "mongoose";
+import { IFile } from "../interfaces/IFile";
+import { FileType } from "../enums/FileType.enum";
+import { validId } from "@/shared/security";
+import { v4 as uuidv4 } from "uuid";
 
 const fileSchema = new Schema<IFile>(
   {
     // ADD: fileId UUID — external identifier ke liye
-fileId: {
-  type: String,
-  required: true,
-  unique: true,
-  index: true,
-  validate: (v: any) => validId(v),
-},
+    // fileId: {
+    //   type: String,
+    //   required: true,
+    //   unique: true,
+    //   index: true,
+    //   validate: (v: any) => validId(v),
+    // },
+
+    fileId: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      default: () => uuidv4(),
+      validate: (v: any) => validId(v),
+    },
+
     groupId: {
       type: String,
-      ref: 'StudyGroup_Group',
-      required: [true, 'Group ID is required'],
+      ref: "StudyGroup_Group",
+      required: [true, "Group ID is required"],
       validate: (v: any) => validId(v),
       // ✅ REMOVED: index: true
     },
     uploadedBy: {
       type: String,
-      ref: 'User',
-      required: [true, 'Uploader is required'],
+      ref: "User",
+      required: [true, "Uploader is required"],
       validate: (v: any) => validId(v),
       // ✅ REMOVED: index: true
     },
     fileName: {
       type: String,
-      required: [true, 'File name is required'],
+      required: [true, "File name is required"],
       trim: true,
     },
     originalName: {
       type: String,
-      required: [true, 'Original file name is required'],
+      required: [true, "Original file name is required"],
       trim: true,
     },
     fileType: {
       type: String,
       enum: Object.values(FileType),
-      required: [true, 'File type is required'],
+      required: [true, "File type is required"],
       // ✅ REMOVED: index: true
     },
     mimeType: {
       type: String,
-      required: [true, 'MIME type is required'],
+      required: [true, "MIME type is required"],
     },
     fileSize: {
       type: Number,
-      required: [true, 'File size is required'],
+      required: [true, "File size is required"],
     },
     fileUrl: {
       type: String,
-      required: [true, 'File URL is required'],
+      required: [true, "File URL is required"],
     },
     cloudinaryPublicId: {
       type: String,
-      required: [true, 'Cloudinary public ID is required'],
+      required: [true, "Cloudinary public ID is required"],
     },
     isPinned: {
       type: Boolean,
@@ -85,23 +96,24 @@ fileId: {
     },
     deletedBy: {
       type: String,
-      ref: 'User',
+      ref: "User",
       default: null,
     },
   },
   {
     timestamps: true,
     // ADD: toJSON transform
-toJSON: {
-  virtuals: true,
-  transform: function(_doc, ret) {
-    ret.id = ret.fileId;
-    delete (ret as any)._id;
-    delete (ret as any).__v;
-    return ret;
-  }},
+    toJSON: {
+      virtuals: true,
+      transform: function (_doc, ret) {
+        ret.id = ret.fileId;
+        delete (ret as any)._id;
+        delete (ret as any).__v;
+        return ret;
+      },
+    },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 /**
@@ -126,10 +138,10 @@ fileSchema.index({ groupId: 1, isDeleted: 1, createdAt: -1 }); // Active files
 /**
  * Virtual: File size in MB
  */
-fileSchema.virtual('fileSizeMB').get(function () {
+fileSchema.virtual("fileSizeMB").get(function () {
   return (this.fileSize / (1024 * 1024)).toFixed(2);
 });
 
-const File = mongoose.model<IFile>('StudyGroup_File', fileSchema);
+const File = mongoose.model<IFile>("StudyGroup_File", fileSchema);
 
 export default File;
