@@ -64,7 +64,7 @@ export interface IGroupSession {
     bufferTimeMinutes: number;
   };
   meeting: {
-    platform: 'zoom' | 'google_meet' | 'daily_co' | 'custom';
+    platform: 'zoom' | 'google_meet' | 'daily_co' | 'custom' | 'throne8';
     meetingUrl?: string;
     meetingId?: string;
     passcode?: string;
@@ -289,7 +289,7 @@ const GroupSessionSchema = new Schema<GroupSessionDocument>(
     meeting: {
       platform: {
         type: String,
-        enum: ['zoom', 'google_meet', 'daily_co', 'custom'],
+        enum: ['zoom', 'google_meet', 'daily_co', 'custom', 'throne8'],
       },
       meetingUrl: { type: String },
       meetingId: { type: String },
@@ -392,7 +392,7 @@ GroupSessionSchema.virtual('canStart').get(function (this: GroupSessionDocument)
   const latestStart = scheduledTime + 10 * 60 * 1000;   // scheduled time ke 10 min baad tak allowed
   const now = Date.now();
 
-  return this.status === 'open' && now >= earliestStart && now <= latestStart;
+  return (this.status === 'open' || this.status === 'full') && now >= earliestStart && now <= latestStart;
 });
 
 
@@ -525,16 +525,72 @@ GroupSessionSchema.methods.acceptParticipant = async function (
     throw new Error('Session is already full');
   }
 
-  participant.requestStatus = 'accepted';
-  participant.respondedAt = new Date();
+  const updatedSession = await (this.constructor as any).findOneAndUpdate(
+    {
+      _id: this._id,
+      participants: {
+        $elemMatch: {
+          menteeId,
+          requestStatus: 'pending',
+        },
+      },
+      $expr: {
+        $lt: [
+          {
+            $size: {
+              $filter: {
+                input: '$participants',
+                as: 'p',
+                cond: { $eq: ['$$p.requestStatus', 'accepted'] },
+              },
+            },
+          },
+          '$maxParticipants',
+        ],
+      },
+    },
+    {
+      $set: {
+        'participants.$.requestStatus': 'accepted',
+        'participants.$.respondedAt': new Date(),
+      },
+      $inc: { currentParticipants: 1 },
+    },
+    { new: true }
+  );
 
-  this.currentParticipants = acceptedCount + 1;
-
-  if (this.currentParticipants >= this.maxParticipants) {
-    this.status = 'full';
+  if (!updatedSession) {
+    const fresh = await (this.constructor as any).findById(this._id);
+    if (!fresh) {
+      throw new Error('Join request not found for this participant');
+    }
+    const freshParticipant = (fresh.participants || []).find((p: any) => p.menteeId === menteeId);
+    if (!freshParticipant) {
+      throw new Error('Join request not found for this participant');
+    }
+    if (freshParticipant.requestStatus === 'accepted') {
+      throw new Error('This request has already been accepted');
+    }
+    if (freshParticipant.requestStatus === 'rejected') {
+      throw new Error('This request was already rejected. Ask the mentee to request again.');
+    }
+    const freshAcceptedCount = (fresh.participants || []).filter((p: any) => p.requestStatus === 'accepted').length;
+    if (freshAcceptedCount >= fresh.maxParticipants) {
+      throw new Error('Session is already full');
+    }
+    throw new Error('Could not accept participant');
   }
 
-  return await this.save();
+  if (updatedSession.currentParticipants >= updatedSession.maxParticipants && updatedSession.status !== 'full') {
+    updatedSession.status = 'full';
+    await (this.constructor as any).updateOne(
+      { _id: this._id },
+      { $set: { status: 'full' } }
+    );
+  }
+
+  Object.assign(this, updatedSession.toObject ? updatedSession.toObject() : updatedSession);
+  return this;
 };
 
 // ✅ NEW: mentor rejects a pending join request.
@@ -563,10 +619,13 @@ GroupSessionSchema.methods.rejectParticipant = async function (
 GroupSessionSchema.methods.startSession = async function (
   this: GroupSessionDocument
 ): Promise<GroupSessionDocument> {
+  if (!this.scheduledAt) {
+    throw new Error('Cannot start session: session has no scheduled date');
+  }
   // ✅ FIX: start window ab scheduledAt se 5 min pehle se lekar 10 min
-  // baad tak hai.
-  if (this.status !== 'open') {
-    throw new Error(`Cannot start session: session status is "${this.status}", expected "open"`);
+  // baad tak hai. Allow 'open' or 'full'.
+  if (this.status !== 'open' && this.status !== 'full') {
+    throw new Error(`Cannot start session: session status is "${this.status}", expected "open" or "full"`);
   }
 
   const scheduledTime = this.scheduledAt.getTime();
@@ -584,7 +643,7 @@ GroupSessionSchema.methods.startSession = async function (
   }
 
   this.status = 'in_progress';
-  return await this.save();
+  return await this.save({ validateModifiedOnly: true });
 };
 
 
@@ -595,6 +654,9 @@ GroupSessionSchema.methods.completeSession = async function (
   this: GroupSessionDocument,
   actualDuration?: number
 ): Promise<GroupSessionDocument> {
+  if (!this.scheduledAt) {
+    throw new Error('Cannot complete session: session has no scheduled date');
+  }
   this.status = 'completed';
   const attendanceCount = this.participants.filter(
     (p: IParticipant) => p.attendanceStatus === 'attended'
@@ -611,7 +673,7 @@ GroupSessionSchema.methods.completeSession = async function (
     this.chat.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   }
 
-  return await this.save();
+  return await this.save({ validateModifiedOnly: true });
 };
 
 GroupSessionSchema.methods.cancelSession = async function (
