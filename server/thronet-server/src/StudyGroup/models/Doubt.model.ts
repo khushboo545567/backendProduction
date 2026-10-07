@@ -4,9 +4,10 @@
  * ====================================
  */
 
-import mongoose, { Schema, Model } from 'mongoose';
-import { IDoubt } from '../interfaces/IDoubt';
-import { validId } from '@/shared/security';
+import mongoose, { Schema, Model } from "mongoose";
+import { IDoubt } from "../interfaces/IDoubt";
+import { validId } from "@/shared/security";
+import { v4 as uuidv4 } from "uuid";
 
 interface IDoubtMethods {
   markAsSolved(answerId: string): Promise<void>;
@@ -31,71 +32,79 @@ type DoubtModel = Model<IDoubt, {}, IDoubtMethods> & IDoubtStatics;
 
 const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
   {
+    // doubtId: {
+    //   type: String,
+    //   required: true,
+    //   unique: true,
+    //   validate: (v: any) => validId(v),
+    // },
+
     doubtId: {
       type: String,
       required: true,
       unique: true,
+      default: () => uuidv4(),
       validate: (v: any) => validId(v),
     },
     title: {
       type: String,
-      required: [true, 'Doubt title is required'],
+      required: [true, "Doubt title is required"],
       trim: true,
-      minlength: [5, 'Title must be at least 5 characters'],
-      maxlength: [200, 'Title must not exceed 200 characters'],
+      minlength: [5, "Title must be at least 5 characters"],
+      maxlength: [200, "Title must not exceed 200 characters"],
       index: true,
     },
     description: {
       type: String,
       trim: true,
-      maxlength: [2000, 'Description must not exceed 2000 characters'],
+      maxlength: [2000, "Description must not exceed 2000 characters"],
     },
     group: {
       type: String,
-      ref: 'StudyGroup_Group',
-      required: [true, 'Group is required'],
+      ref: "StudyGroup_Group",
+      required: [true, "Group is required"],
       index: true,
     },
     postedBy: {
       type: String,
-      ref: 'User',
-      required: [true, 'Posted by user is required'],
+      ref: "User",
+      required: [true, "Posted by user is required"],
       index: true,
     },
     category: {
       type: String,
       enum: [
-        'Mathematics',
-        'Physics',
-        'Chemistry',
-        'Biology',
-        'Computer Science',
-        'English',
-        'Hindi',
-        'Social Science',
-        'General Knowledge',
-        'Aptitude',
-        'Reasoning',
-        'Current Affairs',
-        'Programming',
-        'Data Structures',
-        'Algorithms',
-        'Web Development',
-        'Mobile Development',
-        'Machine Learning',
-        'Artificial Intelligence',
-        'Database',
-        'Networking',
-        'Operating System',
-        'Other',
+        "Mathematics",
+        "Physics",
+        "Chemistry",
+        "Biology",
+        "Computer Science",
+        "English",
+        "Hindi",
+        "Social Science",
+        "General Knowledge",
+        "Aptitude",
+        "Reasoning",
+        "Current Affairs",
+        "Programming",
+        "Data Structures",
+        "Algorithms",
+        "Web Development",
+        "Mobile Development",
+        "Machine Learning",
+        "Artificial Intelligence",
+        "Database",
+        "Networking",
+        "Operating System",
+        "Other",
       ],
-      default: 'Other',
+      default: "Other",
       index: true,
     },
     subject: {
       type: String,
       trim: true,
-      maxlength: [50, 'Subject must not exceed 50 characters'],
+      maxlength: [50, "Subject must not exceed 50 characters"],
     },
     tags: {
       type: [String],
@@ -104,7 +113,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
         validator: function (tags: string[]) {
           return tags.length <= 10;
         },
-        message: 'Cannot have more than 10 tags',
+        message: "Cannot have more than 10 tags",
       },
     },
     images: {
@@ -129,7 +138,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
         validator: function (images: any[]) {
           return images.length <= 5;
         },
-        message: 'Cannot upload more than 5 images',
+        message: "Cannot upload more than 5 images",
       },
     },
     isUrgent: {
@@ -148,7 +157,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
     },
     bestAnswer: {
       type: String,
-      ref: 'Answer',
+      ref: "Answer",
       default: null,
     },
     answerCount: {
@@ -170,7 +179,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
       type: [
         {
           type: String,
-          ref: 'User',
+          ref: "User",
         },
       ],
       default: [],
@@ -179,7 +188,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
       type: [
         {
           type: String,
-          ref: 'User',
+          ref: "User",
         },
       ],
       default: [],
@@ -187,7 +196,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
         validator: function (members: any[]) {
           return members.length <= 10;
         },
-        message: 'Cannot tag more than 10 members',
+        message: "Cannot tag more than 10 members",
       },
     },
     priority: {
@@ -198,8 +207,8 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
     },
     difficulty: {
       type: String,
-      enum: ['Easy', 'Medium', 'Hard', 'Expert'],
-      default: 'Medium',
+      enum: ["Easy", "Medium", "Hard", "Expert"],
+      default: "Medium",
     },
     isEdited: {
       type: Boolean,
@@ -220,7 +229,7 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
     },
     deletedBy: {
       type: String,
-      ref: 'User',
+      ref: "User",
       default: null,
     },
   },
@@ -233,10 +242,10 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
         delete ret._id;
         delete ret.__v;
         return ret;
-      }
+      },
     },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 /**
@@ -244,12 +253,12 @@ const doubtSchema = new Schema<IDoubt, DoubtModel, IDoubtMethods>(
  * PERFORMANCE INDEXES (100K+ Users)
  * ====================================
  */
-doubtSchema.index({ doubtId: 1}, {unique: true });
+doubtSchema.index({ doubtId: 1 }, { unique: true });
 doubtSchema.index({ group: 1, isSolved: 1 });
 doubtSchema.index({ group: 1, createdAt: -1 });
 doubtSchema.index({ postedBy: 1, createdAt: -1 });
 doubtSchema.index({ category: 1, isSolved: 1 });
-doubtSchema.index({ title: 'text', description: 'text', tags: 'text' });
+doubtSchema.index({ title: "text", description: "text", tags: "text" });
 doubtSchema.index({ isDeleted: 1, createdAt: -1 });
 
 /**
@@ -257,18 +266,18 @@ doubtSchema.index({ isDeleted: 1, createdAt: -1 });
  * VIRTUAL FIELDS
  * ====================================
  */
-doubtSchema.virtual('answers', {
-  ref: 'Answer',
-  localField: '_id',
-  foreignField: 'doubt',
+doubtSchema.virtual("answers", {
+  ref: "Answer",
+  localField: "_id",
+  foreignField: "doubt",
   options: { sort: { upvotes: -1, createdAt: -1 } },
 });
 
-doubtSchema.virtual('isAnswered').get(function (this: any) {
+doubtSchema.virtual("isAnswered").get(function (this: any) {
   return this.answerCount > 0;
 });
 
-doubtSchema.virtual('solvedDuration').get(function (this: any) {
+doubtSchema.virtual("solvedDuration").get(function (this: any) {
   if (this.isSolved && this.solvedAt) {
     const duration = this.solvedAt.getTime() - this.createdAt.getTime();
     return Math.floor(duration / (1000 * 60));
@@ -283,7 +292,7 @@ doubtSchema.virtual('solvedDuration').get(function (this: any) {
  */
 doubtSchema.methods.markAsSolved = async function (
   this: any,
-  answerId: string
+  answerId: string,
 ): Promise<void> {
   this.isSolved = true;
   this.solvedAt = new Date();
@@ -292,21 +301,21 @@ doubtSchema.methods.markAsSolved = async function (
 };
 
 doubtSchema.methods.incrementViewCount = async function (
-  this: any
+  this: any,
 ): Promise<void> {
   this.viewCount += 1;
   await this.save({ validateBeforeSave: false });
 };
 
 doubtSchema.methods.incrementAnswerCount = async function (
-  this: any
+  this: any,
 ): Promise<void> {
   this.answerCount += 1;
   await this.save({ validateBeforeSave: false });
 };
 
 doubtSchema.methods.decrementAnswerCount = async function (
-  this: any
+  this: any,
 ): Promise<void> {
   if (this.answerCount > 0) {
     this.answerCount -= 1;
@@ -327,7 +336,7 @@ doubtSchema.methods.softDelete = async function (this: any): Promise<void> {
  */
 doubtSchema.statics.findByGroup = function (
   groupId: string,
-  options: any = {}
+  options: any = {},
 ) {
   const query: any = { group: groupId, isDeleted: false };
 
@@ -336,21 +345,21 @@ doubtSchema.statics.findByGroup = function (
   }
 
   return this.find(query)
-    .populate('postedBy', 'name email avatar')
+    .populate("postedBy", "name email avatar")
     .sort(options.sort || { createdAt: -1 })
     .limit(options.limit || 50);
 };
 
 doubtSchema.statics.findSolved = function (groupId: string) {
   return this.find({ group: groupId, isSolved: true, isDeleted: false })
-    .populate('postedBy', 'name email avatar')
-    .populate('bestAnswer')
+    .populate("postedBy", "name email avatar")
+    .populate("bestAnswer")
     .sort({ solvedAt: -1 });
 };
 
 doubtSchema.statics.findUnsolved = function (groupId: string) {
   return this.find({ group: groupId, isSolved: false, isDeleted: false })
-    .populate('postedBy', 'name email avatar')
+    .populate("postedBy", "name email avatar")
     .sort({ isUrgent: -1, createdAt: -1 });
 };
 
@@ -361,13 +370,13 @@ doubtSchema.statics.findUrgent = function (groupId: string) {
     isSolved: false,
     isDeleted: false,
   })
-    .populate('postedBy', 'name email avatar')
+    .populate("postedBy", "name email avatar")
     .sort({ createdAt: -1 });
 };
 
 doubtSchema.statics.findByCategory = function (
   category: string,
-  groupId?: string
+  groupId?: string,
 ) {
   const query: any = { category, isDeleted: false };
   if (groupId) {
@@ -375,7 +384,7 @@ doubtSchema.statics.findByCategory = function (
   }
 
   return this.find(query)
-    .populate('postedBy', 'name email avatar')
+    .populate("postedBy", "name email avatar")
     .sort({ createdAt: -1 });
 };
 
@@ -389,9 +398,9 @@ doubtSchema.statics.searchDoubts = function (query: string, groupId?: string) {
     searchQuery.group = groupId;
   }
 
-  return this.find(searchQuery, { score: { $meta: 'textScore' } })
-    .populate('postedBy', 'name email avatar')
-    .sort({ score: { $meta: 'textScore' } });
+  return this.find(searchQuery, { score: { $meta: "textScore" } })
+    .populate("postedBy", "name email avatar")
+    .sort({ score: { $meta: "textScore" } });
 };
 
 doubtSchema.statics.getDoubtStatsByGroup = async function (groupId: string) {
@@ -407,18 +416,18 @@ doubtSchema.statics.getDoubtStatsByGroup = async function (groupId: string) {
         _id: null,
         totalDoubts: { $sum: 1 },
         solvedDoubts: {
-          $sum: { $cond: [{ $eq: ['$isSolved', true] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isSolved", true] }, 1, 0] },
         },
         unsolvedDoubts: {
-          $sum: { $cond: [{ $eq: ['$isSolved', false] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isSolved", false] }, 1, 0] },
         },
         urgentDoubts: {
-          $sum: { $cond: [{ $eq: ['$isUrgent', true] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isUrgent", true] }, 1, 0] },
         },
-        totalAnswers: { $sum: '$answerCount' },
-        totalViews: { $sum: '$viewCount' },
-        avgAnswersPerDoubt: { $avg: '$answerCount' },
-        avgViewsPerDoubt: { $avg: '$viewCount' },
+        totalAnswers: { $sum: "$answerCount" },
+        totalViews: { $sum: "$viewCount" },
+        avgAnswersPerDoubt: { $avg: "$answerCount" },
+        avgViewsPerDoubt: { $avg: "$viewCount" },
       },
     },
   ]);
@@ -439,13 +448,13 @@ doubtSchema.statics.getDoubtStatsByUser = async function (userId: string) {
         _id: null,
         totalDoubtsPosted: { $sum: 1 },
         solvedDoubts: {
-          $sum: { $cond: [{ $eq: ['$isSolved', true] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isSolved", true] }, 1, 0] },
         },
         unsolvedDoubts: {
-          $sum: { $cond: [{ $eq: ['$isSolved', false] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isSolved", false] }, 1, 0] },
         },
-        totalAnswersReceived: { $sum: '$answerCount' },
-        totalViews: { $sum: '$viewCount' },
+        totalAnswersReceived: { $sum: "$answerCount" },
+        totalViews: { $sum: "$viewCount" },
       },
     },
   ]);
@@ -458,12 +467,12 @@ doubtSchema.statics.getDoubtStatsByUser = async function (userId: string) {
  * PRE-SAVE MIDDLEWARE
  * ====================================
  */
-doubtSchema.pre('save', function (this: any, next) {
-  if (this.isModified('isSolved') && this.isSolved && !this.solvedAt) {
+doubtSchema.pre("save", function (this: any, next) {
+  if (this.isModified("isSolved") && this.isSolved && !this.solvedAt) {
     this.solvedAt = new Date();
   }
 
-  if (this.isModified('title') || this.isModified('description')) {
+  if (this.isModified("title") || this.isModified("description")) {
     if (!this.isNew) {
       this.isEdited = true;
       this.editedAt = new Date();
@@ -486,27 +495,30 @@ doubtSchema.pre('save', function (this: any, next) {
  * PRE-FIND MIDDLEWARE (FIXED)
  * ====================================
  */
-doubtSchema.pre('find', function (next) {
+doubtSchema.pre("find", function (next) {
   if (!(this.getOptions() as any).includeDeleted) {
     this.where({ isDeleted: false });
   }
   next();
 });
 
-doubtSchema.pre('findOne', function (next) {
+doubtSchema.pre("findOne", function (next) {
   if (!(this.getOptions() as any).includeDeleted) {
     this.where({ isDeleted: false });
   }
   next();
 });
 
-doubtSchema.pre('findOneAndUpdate', function (next) {
+doubtSchema.pre("findOneAndUpdate", function (next) {
   if (!(this.getOptions() as any).includeDeleted) {
     this.where({ isDeleted: false });
   }
   next();
 });
 
-const Doubt = mongoose.model<IDoubt, DoubtModel>('StudyGroup_Doubt', doubtSchema);
+const Doubt = mongoose.model<IDoubt, DoubtModel>(
+  "StudyGroup_Doubt",
+  doubtSchema,
+);
 
 export default Doubt;

@@ -4,13 +4,13 @@
  * ====================================
  */
 
-import { Request, Response } from 'express';
-import { asyncHandler } from '@/shared/utils/helpers.util';
-import ResponseUtil from '@/shared/response.util';
-import { BadRequestError } from '@/shared/errors/app.error';
-import doubtService from '../services/doubt.service';
-import { HttpStatus } from '../enums/HttpStatus.enum';
-import { AuthRequest } from '@/shared/middlewares/auth.middleware';
+import { Request, Response } from "express";
+import { asyncHandler } from "@/shared/utils/helpers.util";
+import ResponseUtil from "@/shared/response.util";
+import { BadRequestError } from "@/shared/errors/app.error";
+import doubtService from "../services/doubt.service";
+import { HttpStatus } from "../enums/HttpStatus.enum";
+import { AuthRequest } from "@/shared/middlewares/auth.middleware";
 
 /**
  * @route   POST /api/doubts/:groupId/post
@@ -32,7 +32,7 @@ export const postDoubt = asyncHandler(async (req: Request, res: Response) => {
   } = req.body;
 
   if (!groupId) {
-    throw new BadRequestError('Group ID is required');
+    throw new BadRequestError("Group ID is required");
   }
 
   // Handle image uploads (if any)
@@ -45,7 +45,7 @@ export const postDoubt = asyncHandler(async (req: Request, res: Response) => {
     subject,
     tags: tags ? (Array.isArray(tags) ? tags : JSON.parse(tags)) : [],
     images,
-    isUrgent: isUrgent === 'true' || isUrgent === true,
+    isUrgent: isUrgent === "true" || isUrgent === true,
     difficulty,
     taggedMembers: taggedMembers
       ? Array.isArray(taggedMembers)
@@ -57,7 +57,7 @@ export const postDoubt = asyncHandler(async (req: Request, res: Response) => {
 
   const doubt = await doubtService.createDoubt(userId!, groupId, doubtData);
 
-  return ResponseUtil.created(res, doubt, 'Doubt posted successfully');
+  return ResponseUtil.created(res, doubt, "Doubt posted successfully");
 });
 
 /**
@@ -70,12 +70,12 @@ export const getDoubt = asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as AuthRequest).user?.id;
 
   if (!doubtId) {
-    throw new BadRequestError('Doubt ID is required');
+    throw new BadRequestError("Doubt ID is required");
   }
 
   const doubt = await doubtService.getDoubtById(doubtId, userId!);
 
-  return ResponseUtil.success(res, doubt, 'Doubt retrieved successfully');
+  return ResponseUtil.success(res, doubt, "Doubt retrieved successfully");
 });
 
 /**
@@ -86,28 +86,23 @@ export const getDoubt = asyncHandler(async (req: Request, res: Response) => {
 export const getAllDoubts = asyncHandler(
   async (req: Request, res: Response) => {
     const { groupId } = req.params;
-    const {
-      category,
-      isSolved,
-      isUrgent,
-      page,
-      limit,
-      sort,
-      search,
-    } = req.query;
+    const { category, isSolved, isUrgent, page, limit, sort, search } =
+      req.query;
 
     if (!groupId) {
-      throw new BadRequestError('Group ID is required');
+      throw new BadRequestError("Group ID is required");
     }
 
     const params = {
       groupId,
       category: category as string,
-      isSolved: isSolved === 'true' ? true : isSolved === 'false' ? false : undefined,
-      isUrgent: isUrgent === 'true' ? true : isUrgent === 'false' ? false : undefined,
+      isSolved:
+        isSolved === "true" ? true : isSolved === "false" ? false : undefined,
+      isUrgent:
+        isUrgent === "true" ? true : isUrgent === "false" ? false : undefined,
       page: page ? parseInt(page as string) : 1,
       limit: limit ? parseInt(limit as string) : 20,
-      sort: (sort as string) || 'recent',
+      sort: (sort as string) || "recent",
       search: search as string,
     };
 
@@ -116,10 +111,10 @@ export const getAllDoubts = asyncHandler(
     return ResponseUtil.success(
       res,
       result,
-      'Doubts retrieved successfully',
+      "Doubts retrieved successfully",
       // result.pagination
     );
-  }
+  },
 );
 
 /**
@@ -127,28 +122,27 @@ export const getAllDoubts = asyncHandler(
  * @desc    Get current user's doubts
  * @access  Private
  */
-export const getMyDoubts = asyncHandler(
-  async (req: Request, res: Response) => {
-    const userId = (req as AuthRequest).user?.id;
-    const { page, limit, isSolved } = req.query;
+export const getMyDoubts = asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as AuthRequest).user?.id;
+  const { page, limit, isSolved } = req.query;
 
-    const params = {
-      page: page ? parseInt(page as string) : 1,
-      limit: limit ? parseInt(limit as string) : 20,
-      isSolved: isSolved === 'true' ? true : isSolved === 'false' ? false : undefined,
-    };
+  const params = {
+    page: page ? parseInt(page as string) : 1,
+    limit: limit ? parseInt(limit as string) : 20,
+    isSolved:
+      isSolved === "true" ? true : isSolved === "false" ? false : undefined,
+  };
 
-    const result = await doubtService.getMyDoubts(userId!, params);
+  const result = await doubtService.getMyDoubts(userId!, params);
 
-    return ResponseUtil.success(
-      res,
-      result,
-      'Your doubts retrieved successfully',
-      HttpStatus.OK,
-      // result.pagination
-    );
-  }
-);
+  return ResponseUtil.success(
+    res,
+    result,
+    "Your doubts retrieved successfully",
+    HttpStatus.OK,
+    // result.pagination
+  );
+});
 
 /**
  * @route   GET /api/doubts/:groupId/solved
@@ -161,13 +155,13 @@ export const getSolvedDoubts = asyncHandler(
     const { page, limit, sort } = req.query;
 
     if (!groupId) {
-      throw new BadRequestError('Group ID is required');
+      throw new BadRequestError("Group ID is required");
     }
 
     const params = {
       page: page ? parseInt(page as string) : 1,
       limit: limit ? parseInt(limit as string) : 20,
-      sort: (sort as string) || 'recent',
+      sort: (sort as string) || "recent",
     };
 
     const result = await doubtService.getSolvedDoubts(groupId, params);
@@ -175,11 +169,11 @@ export const getSolvedDoubts = asyncHandler(
     return ResponseUtil.success(
       res,
       result,
-      'Solved doubts retrieved successfully',
+      "Solved doubts retrieved successfully",
       HttpStatus.OK,
       // result.pagination
     );
-  }
+  },
 );
 
 /**
@@ -193,13 +187,13 @@ export const getUnsolvedDoubts = asyncHandler(
     const { page, limit, sort } = req.query;
 
     if (!groupId) {
-      throw new BadRequestError('Group ID is required');
+      throw new BadRequestError("Group ID is required");
     }
 
     const params = {
       page: page ? parseInt(page as string) : 1,
       limit: limit ? parseInt(limit as string) : 20,
-      sort: (sort as string) || 'recent',
+      sort: (sort as string) || "recent",
     };
 
     const result = await doubtService.getUnsolvedDoubts(groupId, params);
@@ -207,11 +201,11 @@ export const getUnsolvedDoubts = asyncHandler(
     return ResponseUtil.success(
       res,
       result,
-      'Unsolved doubts retrieved successfully',
+      "Unsolved doubts retrieved successfully",
       HttpStatus.OK,
       // result.pagination
     );
-  }
+  },
 );
 
 /**
@@ -224,13 +218,17 @@ export const getUrgentDoubts = asyncHandler(
     const { groupId } = req.params;
 
     if (!groupId) {
-      throw new BadRequestError('Group ID is required');
+      throw new BadRequestError("Group ID is required");
     }
 
     const doubts = await doubtService.getUrgentDoubts(groupId);
 
-    return ResponseUtil.success(res, doubts, 'Urgent doubts retrieved successfully');
-  }
+    return ResponseUtil.success(
+      res,
+      doubts,
+      "Urgent doubts retrieved successfully",
+    );
+  },
 );
 
 /**
@@ -238,60 +236,56 @@ export const getUrgentDoubts = asyncHandler(
  * @desc    Update a doubt (only by owner)
  * @access  Private
  */
-export const updateDoubt = asyncHandler(
-  async (req: Request, res: Response) => {
-    const { doubtId } = req.params;
-    const userId = (req as AuthRequest).user?.id;
-    const { title, description, category, subject, tags, isUrgent, difficulty } =
-      req.body;
+export const updateDoubt = asyncHandler(async (req: Request, res: Response) => {
+  const { doubtId } = req.params;
+  const userId = (req as AuthRequest).user?.id;
+  const { title, description, category, subject, tags, isUrgent, difficulty } =
+    req.body;
 
-    if (!doubtId) {
-      throw new BadRequestError('Doubt ID is required');
-    }
-
-    const updateData = {
-      title,
-      description,
-      category,
-      subject,
-      tags,
-      isUrgent,
-      difficulty,
-    };
-
-    // Remove undefined fields
-    Object.keys(updateData).forEach(
-      (key) =>
-        updateData[key as keyof typeof updateData] === undefined &&
-        delete updateData[key as keyof typeof updateData]
-    );
-
-    const doubt = await doubtService.updateDoubt(doubtId, userId!, updateData);
-
-    return ResponseUtil.success(res, doubt, 'Doubt updated successfully');
+  if (!doubtId) {
+    throw new BadRequestError("Doubt ID is required");
   }
-);
+
+  const updateData = {
+    title,
+    description,
+    category,
+    subject,
+    tags,
+    isUrgent,
+    difficulty,
+  };
+
+  // Remove undefined fields
+  Object.keys(updateData).forEach(
+    (key) =>
+      updateData[key as keyof typeof updateData] === undefined &&
+      delete updateData[key as keyof typeof updateData],
+  );
+
+  const doubt = await doubtService.updateDoubt(doubtId, userId!, updateData);
+
+  return ResponseUtil.success(res, doubt, "Doubt updated successfully");
+});
 
 /**
  * @route   DELETE /api/doubts/:doubtId
  * @desc    Delete a doubt (only by owner or group leader)
  * @access  Private
  */
-export const deleteDoubt = asyncHandler(
-  async (req: Request, res: Response) => {
-    const { doubtId } = req.params;
-    const userId = (req as AuthRequest).user?.id;
-    const isLeader = (req as any).isLeader || false;
+export const deleteDoubt = asyncHandler(async (req: Request, res: Response) => {
+  const { doubtId } = req.params;
+  const userId = (req as AuthRequest).user?.id;
+  const isLeader = (req as any).isLeader || false;
 
-    if (!doubtId) {
-      throw new BadRequestError('Doubt ID is required');
-    }
-
-    const result = await doubtService.deleteDoubt(doubtId, userId!, isLeader);
-
-    return ResponseUtil.success(res, result, 'Doubt deleted successfully');
+  if (!doubtId) {
+    throw new BadRequestError("Doubt ID is required");
   }
-);
+
+  const result = await doubtService.deleteDoubt(doubtId, userId!, isLeader);
+
+  return ResponseUtil.success(res, result, "Doubt deleted successfully");
+});
 
 /**
  * @route   PATCH /api/doubts/:doubtId/mark-solved
@@ -305,25 +299,25 @@ export const markAsSolved = asyncHandler(
     const { bestAnswerId } = req.body;
 
     if (!doubtId) {
-      throw new BadRequestError('Doubt ID is required');
+      throw new BadRequestError("Doubt ID is required");
     }
 
     if (!bestAnswerId) {
-      throw new BadRequestError('Best answer ID is required');
+      throw new BadRequestError("Best answer ID is required");
     }
 
     const doubt = await doubtService.markAsSolved(
       doubtId,
       userId!,
-      bestAnswerId
+      bestAnswerId,
     );
 
     return ResponseUtil.success(
       res,
       doubt,
-      'Doubt marked as solved successfully'
+      "Doubt marked as solved successfully",
     );
-  }
+  },
 );
 
 /**
@@ -336,20 +330,20 @@ export const searchDoubts = asyncHandler(
     const { query, groupId } = req.query;
 
     if (!query) {
-      throw new BadRequestError('Search query is required');
+      throw new BadRequestError("Search query is required");
     }
 
     const doubts = await doubtService.searchDoubts(
       query as string,
-      groupId as string
+      groupId as string,
     );
 
     return ResponseUtil.success(
       res,
       doubts,
-      `Found ${doubts.length} doubts matching your search`
+      `Found ${doubts.length} doubts matching your search`,
     );
-  }
+  },
 );
 
 /**
@@ -363,20 +357,20 @@ export const getDoubtsByCategory = asyncHandler(
     const { groupId } = req.query;
 
     if (!category) {
-      throw new BadRequestError('Category is required');
+      throw new BadRequestError("Category is required");
     }
 
     const doubts = await doubtService.getDoubtsByCategory(
       category,
-      groupId as string
+      groupId as string,
     );
 
     return ResponseUtil.success(
       res,
       doubts,
-      `Doubts in ${category} category retrieved successfully`
+      `Doubts in ${category} category retrieved successfully`,
     );
-  }
+  },
 );
 
 /**
@@ -390,11 +384,11 @@ export const tagMember = asyncHandler(async (req: Request, res: Response) => {
   const { memberIds } = req.body;
 
   if (!doubtId) {
-    throw new BadRequestError('Doubt ID is required');
+    throw new BadRequestError("Doubt ID is required");
   }
 
   if (!memberIds || !Array.isArray(memberIds) || memberIds.length === 0) {
-    throw new BadRequestError('Member IDs array is required');
+    throw new BadRequestError("Member IDs array is required");
   }
 
   const doubt = await doubtService.tagMembers(doubtId, userId!, memberIds);
@@ -402,7 +396,7 @@ export const tagMember = asyncHandler(async (req: Request, res: Response) => {
   return ResponseUtil.success(
     res,
     doubt,
-    `${memberIds.length} member(s) tagged successfully`
+    `${memberIds.length} member(s) tagged successfully`,
   );
 });
 
@@ -416,7 +410,7 @@ export const getGroupDoubtStats = asyncHandler(
     const { groupId } = req.params;
 
     if (!groupId) {
-      throw new BadRequestError('Group ID is required');
+      throw new BadRequestError("Group ID is required");
     }
 
     const stats = await doubtService.getGroupDoubtStats(groupId);
@@ -424,9 +418,9 @@ export const getGroupDoubtStats = asyncHandler(
     return ResponseUtil.success(
       res,
       stats,
-      'Group doubt statistics retrieved successfully'
+      "Group doubt statistics retrieved successfully",
     );
-  }
+  },
 );
 
 /**
@@ -439,7 +433,7 @@ export const getUserDoubtStats = asyncHandler(
     const { userId } = req.params;
 
     if (!userId) {
-      throw new BadRequestError('User ID is required');
+      throw new BadRequestError("User ID is required");
     }
 
     const stats = await doubtService.getUserDoubtStats(userId);
@@ -447,9 +441,9 @@ export const getUserDoubtStats = asyncHandler(
     return ResponseUtil.success(
       res,
       stats,
-      'User doubt statistics retrieved successfully'
+      "User doubt statistics retrieved successfully",
     );
-  }
+  },
 );
 
 /**
@@ -463,39 +457,37 @@ export const getUserDoubtStats = asyncHandler(
  * @desc    Answer a doubt
  * @access  Private (Group Members)
  */
-export const answerDoubt = asyncHandler(
-  async (req: Request, res: Response) => {
-    const { doubtId } = req.params;
-    const userId = (req as AuthRequest).user?.id;
-    const { content, links } = req.body;
+export const answerDoubt = asyncHandler(async (req: Request, res: Response) => {
+  const { doubtId } = req.params;
+  const userId = (req as AuthRequest).user?.id;
+  const { content, links } = req.body;
 
-    if (!doubtId) {
-      throw new BadRequestError('Doubt ID is required');
-    }
-
-    if (!content || content.trim().length === 0) {
-      throw new BadRequestError('Answer content is required');
-    }
-
-    // Handle image uploads (if any)
-    const images = (req as any).uploadedFiles || [];
-
-    const answer = await doubtService.answerDoubt(
-      doubtId,
-      userId!,
-      content,
-      links
-    );
-
-    // If images were uploaded, update the answer
-    if (images.length > 0) {
-      answer.images = images;
-      await answer.save();
-    }
-
-    return ResponseUtil.created(res, answer, 'Answer posted successfully');
+  if (!doubtId) {
+    throw new BadRequestError("Doubt ID is required");
   }
-);
+
+  if (!content || content.trim().length === 0) {
+    throw new BadRequestError("Answer content is required");
+  }
+
+  // Handle image uploads (if any)
+  const images = (req as any).uploadedFiles || [];
+
+  const answer = await doubtService.answerDoubt(
+    doubtId,
+    userId!,
+    content,
+    links,
+  );
+
+  // If images were uploaded, update the answer
+  if (images.length > 0) {
+    answer.images = images;
+    await answer.save();
+  }
+
+  return ResponseUtil.created(res, answer, "Answer posted successfully");
+});
 
 /**
  * @route   GET /api/doubts/:doubtId/answers
@@ -508,23 +500,23 @@ export const getDoubtAnswers = asyncHandler(
     const { page, limit } = req.query;
 
     if (!doubtId) {
-      throw new BadRequestError('Doubt ID is required');
+      throw new BadRequestError("Doubt ID is required");
     }
 
     const result = await doubtService.getDoubtAnswers(
       doubtId,
       page ? parseInt(page as string) : 1,
-      limit ? parseInt(limit as string) : 20
+      limit ? parseInt(limit as string) : 20,
     );
 
     return ResponseUtil.success(
       res,
       result,
-      'Answers retrieved successfully',
+      "Answers retrieved successfully",
       HttpStatus.OK,
       // result.pagination
     );
-  }
+  },
 );
 
 /**
@@ -539,22 +531,22 @@ export const updateAnswer = asyncHandler(
     const { content, links } = req.body;
 
     if (!answerId) {
-      throw new BadRequestError('Answer ID is required');
+      throw new BadRequestError("Answer ID is required");
     }
 
     if (!content || content.trim().length === 0) {
-      throw new BadRequestError('Answer content is required');
+      throw new BadRequestError("Answer content is required");
     }
 
     const answer = await doubtService.updateAnswer(
       answerId,
       userId!,
       content,
-      links
+      links,
     );
 
-    return ResponseUtil.success(res, answer, 'Answer updated successfully');
-  }
+    return ResponseUtil.success(res, answer, "Answer updated successfully");
+  },
 );
 
 /**
@@ -569,13 +561,13 @@ export const deleteAnswer = asyncHandler(
     const isLeader = (req as any).isLeader || false;
 
     if (!answerId) {
-      throw new BadRequestError('Answer ID is required');
+      throw new BadRequestError("Answer ID is required");
     }
 
     const result = await doubtService.deleteAnswer(answerId, userId!, isLeader);
 
-    return ResponseUtil.success(res, result, 'Answer deleted successfully');
-  }
+    return ResponseUtil.success(res, result, "Answer deleted successfully");
+  },
 );
 
 /**
@@ -589,7 +581,7 @@ export const upvoteAnswer = asyncHandler(
     const userId = (req as AuthRequest).user?.id;
 
     if (!answerId) {
-      throw new BadRequestError('Answer ID is required');
+      throw new BadRequestError("Answer ID is required");
     }
 
     const answer = await doubtService.upvoteAnswer(answerId, userId!);
@@ -602,9 +594,9 @@ export const upvoteAnswer = asyncHandler(
         downvotes: answer.downvotes,
         voteScore: answer.upvotes - answer.downvotes,
       },
-      'Answer upvoted successfully'
+      "Answer upvoted successfully",
     );
-  }
+  },
 );
 
 /**
@@ -618,7 +610,7 @@ export const downvoteAnswer = asyncHandler(
     const userId = (req as AuthRequest).user?.id;
 
     if (!answerId) {
-      throw new BadRequestError('Answer ID is required');
+      throw new BadRequestError("Answer ID is required");
     }
 
     const answer = await doubtService.downvoteAnswer(answerId, userId!);
@@ -631,9 +623,9 @@ export const downvoteAnswer = asyncHandler(
         downvotes: answer.downvotes,
         voteScore: answer.upvotes - answer.downvotes,
       },
-      'Answer downvoted successfully'
+      "Answer downvoted successfully",
     );
-  }
+  },
 );
 
 /**
@@ -642,7 +634,7 @@ export const downvoteAnswer = asyncHandler(
  * @access  Private
  */
 export const removeVote = asyncHandler(async (_req: Request, res: Response) => {
-  return ResponseUtil.success(res, null, 'Vote removed successfully');
+  return ResponseUtil.success(res, null, "Vote removed successfully");
 });
 
 /**
@@ -661,9 +653,9 @@ export const getTopAnswerers = asyncHandler(
     return ResponseUtil.success(
       res,
       [],
-      'Top answerers retrieved successfully'
+      "Top answerers retrieved successfully",
     );
-  }
+  },
 );
 
 /**
@@ -673,12 +665,8 @@ export const getTopAnswerers = asyncHandler(
  */
 export const getBestAnswers = asyncHandler(
   async (_req: Request, res: Response) => {
-    return ResponseUtil.success(
-      res,
-      [],
-      'Best answers retrieved successfully'
-    );
-  }
+    return ResponseUtil.success(res, [], "Best answers retrieved successfully");
+  },
 );
 
 /**
@@ -696,9 +684,9 @@ export const getUserAnswerStats = asyncHandler(
         totalUpvotes: 0,
         avgUpvotes: 0,
       },
-      'User answer statistics retrieved successfully'
+      "User answer statistics retrieved successfully",
     );
-  }
+  },
 );
 
 export default {

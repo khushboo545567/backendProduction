@@ -6,11 +6,11 @@
  * Features: Caching, Indexing, Performance optimization
  */
 
-import mongoose, { Schema, Model } from 'mongoose';
-import { IAnswer } from '../interfaces/IAnswer';
-import Doubt from './Doubt.model';
-import { validId } from '@/shared/security';
-
+import mongoose, { Schema, Model } from "mongoose";
+import { IAnswer } from "../interfaces/IAnswer";
+import Doubt from "./Doubt.model";
+import { validId } from "@/shared/security";
+import { v4 as uuidv4 } from "uuid";
 interface IAnswerMethods {
   upvote(userId: string): Promise<void>;
   downvote(userId: string): Promise<void>;
@@ -39,26 +39,27 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
       required: true,
       unique: true,
       index: true,
+      default: () => uuidv4(),
       validate: (v: any) => validId(v),
     },
     doubt: {
       type: String,
-      ref: 'StudyGroup_Doubt',
-      required: [true, 'Doubt reference is required'],
+      ref: "StudyGroup_Doubt",
+      required: [true, "Doubt reference is required"],
       index: true,
     },
     answeredBy: {
       type: String,
-      ref: 'User',
-      required: [true, 'Answered by user is required'],
+      ref: "User",
+      required: [true, "Answered by user is required"],
       index: true,
     },
     content: {
       type: String,
-      required: [true, 'Answer content is required'],
+      required: [true, "Answer content is required"],
       trim: true,
-      minlength: [10, 'Answer must be at least 10 characters'],
-      maxlength: [5000, 'Answer must not exceed 5000 characters'],
+      minlength: [10, "Answer must be at least 10 characters"],
+      maxlength: [5000, "Answer must not exceed 5000 characters"],
     },
     images: {
       type: [
@@ -82,7 +83,7 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
         validator: function (images: any[]) {
           return images.length <= 3;
         },
-        message: 'Cannot upload more than 3 images',
+        message: "Cannot upload more than 3 images",
       },
     },
     links: {
@@ -93,13 +94,13 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
             required: true,
             match: [
               /^https?:\/\/.+/,
-              'Please provide a valid URL starting with http:// or https://',
+              "Please provide a valid URL starting with http:// or https://",
             ],
           },
           title: {
             type: String,
             trim: true,
-            maxlength: [100, 'Link title must not exceed 100 characters'],
+            maxlength: [100, "Link title must not exceed 100 characters"],
           },
         },
       ],
@@ -108,7 +109,7 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
         validator: function (links: any[]) {
           return links.length <= 5;
         },
-        message: 'Cannot add more than 5 reference links',
+        message: "Cannot add more than 5 reference links",
       },
     },
     upvotes: {
@@ -126,7 +127,7 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
       type: [
         {
           type: String,
-          ref: 'User',
+          ref: "User",
         },
       ],
       default: [],
@@ -135,14 +136,14 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
         validator: function (arr: any[]) {
           return arr.length <= 10000; // Max 10K upvotes tracking
         },
-        message: 'Upvote limit reached',
+        message: "Upvote limit reached",
       },
     },
     downvotedBy: {
       type: [
         {
           type: String,
-          ref: 'User',
+          ref: "User",
         },
       ],
       default: [],
@@ -150,7 +151,7 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
         validator: function (arr: any[]) {
           return arr.length <= 10000;
         },
-        message: 'Downvote limit reached',
+        message: "Downvote limit reached",
       },
     },
     isBestAnswer: {
@@ -186,7 +187,7 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
         validator: function (history: any[]) {
           return history.length <= 10;
         },
-        message: 'Edit history limit reached (max 10 edits)',
+        message: "Edit history limit reached (max 10 edits)",
       },
     },
     isDeleted: {
@@ -200,7 +201,7 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
     },
     deletedBy: {
       type: String,
-      ref: 'User',
+      ref: "User",
       default: null,
     },
   },
@@ -213,10 +214,10 @@ const answerSchema = new Schema<IAnswer, AnswerModel, IAnswerMethods>(
         delete ret._id;
         delete ret.__v;
         return ret;
-      }
+      },
     },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 /**
@@ -247,15 +248,15 @@ answerSchema.index({ doubt: 1, isDeleted: 1, isBestAnswer: 1 });
  * VIRTUAL FIELDS
  * ====================================
  */
-answerSchema.virtual('voteScore').get(function (this: any) {
+answerSchema.virtual("voteScore").get(function (this: any) {
   return this.upvotes - this.downvotes;
 });
 
-answerSchema.virtual('hasBeenEdited').get(function (this: any) {
+answerSchema.virtual("hasBeenEdited").get(function (this: any) {
   return this.editHistory.length > 0;
 });
 
-answerSchema.virtual('upvotePercentage').get(function (this: any) {
+answerSchema.virtual("upvotePercentage").get(function (this: any) {
   const total = this.upvotes + this.downvotes;
   if (total === 0) return 0;
   return Math.round((this.upvotes / total) * 100);
@@ -271,8 +272,11 @@ answerSchema.virtual('upvotePercentage').get(function (this: any) {
  * Upvote an answer (Optimized for performance) - FIXED
  */
 
-answerSchema.methods.upvote = async function(this: any, userId: string): Promise<void> {
-  if (this.upvotedBy.includes(userId)) return;       // string comparison ✅
+answerSchema.methods.upvote = async function (
+  this: any,
+  userId: string,
+): Promise<void> {
+  if (this.upvotedBy.includes(userId)) return; // string comparison ✅
 
   if (this.downvotedBy.includes(userId)) {
     this.downvotes = Math.max(0, this.downvotes - 1);
@@ -318,8 +322,11 @@ answerSchema.methods.upvote = async function(this: any, userId: string): Promise
 /**
  * Downvote an answer (Optimized for performance)
  */
-answerSchema.methods.downvote = async function(this: any, userId: string): Promise<void> {
-  if (this.downvotedBy.includes(userId)) return;     // string comparison ✅
+answerSchema.methods.downvote = async function (
+  this: any,
+  userId: string,
+): Promise<void> {
+  if (this.downvotedBy.includes(userId)) return; // string comparison ✅
 
   if (this.upvotedBy.includes(userId)) {
     this.upvotes = Math.max(0, this.upvotes - 1);
@@ -364,7 +371,10 @@ answerSchema.methods.downvote = async function(this: any, userId: string): Promi
 /**
  * Remove vote from answer
  */
-answerSchema.methods.removeVote = async function(this: any, userId: string): Promise<void> {
+answerSchema.methods.removeVote = async function (
+  this: any,
+  userId: string,
+): Promise<void> {
   const wasUpvoted = this.upvotedBy.includes(userId);
   const wasDownvoted = this.downvotedBy.includes(userId);
 
@@ -407,24 +417,25 @@ answerSchema.methods.removeVote = async function(this: any, userId: string): Pro
 /**
  * Mark answer as best (Atomic operation)
  */
-answerSchema.methods.markAsBest = async function(this: any): Promise<void> {
+answerSchema.methods.markAsBest = async function (this: any): Promise<void> {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
     await Answer.updateMany(
-      { doubt: this.doubt },                         // string comparison ✅
+      { doubt: this.doubt }, // string comparison ✅
       { isBestAnswer: false, markedBestAt: null },
-      { session }
+      { session },
     );
 
     this.isBestAnswer = true;
     this.markedBestAt = new Date();
     await this.save({ session });
 
-    await Doubt.findOneAndUpdate(                    // findById → findOne with doubtId
-      { doubtId: this.doubt },                       // doubt field is now UUID string
+    await Doubt.findOneAndUpdate(
+      // findById → findOne with doubtId
+      { doubtId: this.doubt }, // doubt field is now UUID string
       { isSolved: true, solvedAt: new Date(), bestAnswer: this.answerId },
-      { session }
+      { session },
     );
 
     await session.commitTransaction();
@@ -478,9 +489,7 @@ answerSchema.methods.markAsBest = async function(this: any): Promise<void> {
 /**
  * Soft delete answer
  */
-answerSchema.methods.softDelete = async function (
-  this: any
-): Promise<void> {
+answerSchema.methods.softDelete = async function (this: any): Promise<void> {
   this.isDeleted = true;
   this.deletedAt = new Date();
   await this.save();
@@ -496,7 +505,7 @@ answerSchema.methods.softDelete = async function (
  * Add to edit history
  */
 answerSchema.methods.addEditHistory = async function (
-  this: any
+  this: any,
 ): Promise<void> {
   if (this.editHistory.length < 10) {
     this.editHistory.push({
@@ -525,14 +534,14 @@ answerSchema.methods.addEditHistory = async function (
  */
 answerSchema.statics.findByDoubt = function (
   doubtId: string,
-  options: any = {}
+  options: any = {},
 ) {
   const page = options.page || 1;
   const limit = options.limit || 20;
   const skip = (page - 1) * limit;
 
   return this.find({ doubt: doubtId, isDeleted: false })
-    .populate('answeredBy', 'name email avatar')
+    .populate("answeredBy", "name email avatar")
     .sort({ isBestAnswer: -1, upvotes: -1, createdAt: -1 })
     .skip(skip)
     .limit(limit)
@@ -542,16 +551,13 @@ answerSchema.statics.findByDoubt = function (
 /**
  * Find answers by user
  */
-answerSchema.statics.findByUser = function (
-  userId: string,
-  options: any = {}
-) {
+answerSchema.statics.findByUser = function (userId: string, options: any = {}) {
   const page = options.page || 1;
   const limit = options.limit || 20;
   const skip = (page - 1) * limit;
 
   return this.find({ answeredBy: userId, isDeleted: false })
-    .populate('doubt', 'title group category')
+    .populate("doubt", "title group category")
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
@@ -563,7 +569,7 @@ answerSchema.statics.findByUser = function (
  */
 answerSchema.statics.findBestAnswers = function (
   userId?: string,
-  limit: number = 50
+  limit: number = 50,
 ) {
   const query: any = { isBestAnswer: true, isDeleted: false };
   if (userId) {
@@ -571,8 +577,8 @@ answerSchema.statics.findBestAnswers = function (
   }
 
   return this.find(query)
-    .populate('answeredBy', 'name email avatar')
-    .populate('doubt', 'title category')
+    .populate("answeredBy", "name email avatar")
+    .populate("doubt", "title category")
     .sort({ markedBestAt: -1 })
     .limit(limit)
     .lean();
@@ -583,78 +589,73 @@ answerSchema.statics.findBestAnswers = function (
  */
 answerSchema.statics.getTopAnswerers = async function (
   groupId?: string,
-  limit: number = 10
+  limit: number = 10,
 ) {
-  const pipeline: any[] = [
-    { $match: { isDeleted: false } },
-  ];
+  const pipeline: any[] = [{ $match: { isDeleted: false } }];
 
   // Filter by group if provided
   if (groupId) {
     pipeline.push(
       {
         $lookup: {
-          from: 'doubts',
-          localField: 'doubt',
-          foreignField: '_id',
-          as: 'doubtInfo',
+          from: "doubts",
+          localField: "doubt",
+          foreignField: "_id",
+          as: "doubtInfo",
         },
       },
       {
-        $unwind: '$doubtInfo',
+        $unwind: "$doubtInfo",
       },
       {
         $match: {
-          'doubtInfo.group': groupId,
+          "doubtInfo.group": groupId,
         },
-      }
+      },
     );
   }
 
   pipeline.push(
     {
       $group: {
-        _id: '$answeredBy',
+        _id: "$answeredBy",
         totalAnswers: { $sum: 1 },
         bestAnswers: {
-          $sum: { $cond: [{ $eq: ['$isBestAnswer', true] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isBestAnswer", true] }, 1, 0] },
         },
-        totalUpvotes: { $sum: '$upvotes' },
-        totalDownvotes: { $sum: '$downvotes' },
-        avgUpvotes: { $avg: '$upvotes' },
+        totalUpvotes: { $sum: "$upvotes" },
+        totalDownvotes: { $sum: "$downvotes" },
+        avgUpvotes: { $avg: "$upvotes" },
         voteScore: {
-          $sum: { $subtract: ['$upvotes', '$downvotes'] },
+          $sum: { $subtract: ["$upvotes", "$downvotes"] },
         },
       },
     },
     {
       $lookup: {
-        from: 'users',
-        localField: '_id',
-        foreignField: '_id',
-        as: 'userInfo',
+        from: "users",
+        localField: "_id",
+        foreignField: "_id",
+        as: "userInfo",
       },
     },
-    { $unwind: '$userInfo' },
+    { $unwind: "$userInfo" },
     {
       $project: {
         _id: 1,
-        name: '$userInfo.name',
-        email: '$userInfo.email',
-        avatar: '$userInfo.avatar',
+        name: "$userInfo.name",
+        email: "$userInfo.email",
+        avatar: "$userInfo.avatar",
         totalAnswers: 1,
         bestAnswers: 1,
         totalUpvotes: 1,
         totalDownvotes: 1,
-        avgUpvotes: { $round: ['$avgUpvotes', 2] },
+        avgUpvotes: { $round: ["$avgUpvotes", 2] },
         voteScore: 1,
         bestAnswerRate: {
           $round: [
             {
-              $multiply: [
-                { $divide: ['$bestAnswers', '$totalAnswers'] },
-                100,
-              ],
+              $multiply: [{ $divide: ["$bestAnswers", "$totalAnswers"] }, 100],
             },
             2,
           ],
@@ -662,7 +663,7 @@ answerSchema.statics.getTopAnswerers = async function (
       },
     },
     { $sort: { voteScore: -1, bestAnswers: -1, totalAnswers: -1 } },
-    { $limit: limit }
+    { $limit: limit },
   );
 
   return this.aggregate(pipeline);
@@ -684,13 +685,13 @@ answerSchema.statics.getAnswerStatsByUser = async function (userId: string) {
         _id: null,
         totalAnswers: { $sum: 1 },
         bestAnswers: {
-          $sum: { $cond: [{ $eq: ['$isBestAnswer', true] }, 1, 0] },
+          $sum: { $cond: [{ $eq: ["$isBestAnswer", true] }, 1, 0] },
         },
-        totalUpvotes: { $sum: '$upvotes' },
-        totalDownvotes: { $sum: '$downvotes' },
-        avgUpvotes: { $avg: '$upvotes' },
-        avgScore: { $avg: { $subtract: ['$upvotes', '$downvotes'] } },
-        highestUpvotes: { $max: '$upvotes' },
+        totalUpvotes: { $sum: "$upvotes" },
+        totalDownvotes: { $sum: "$downvotes" },
+        avgUpvotes: { $avg: "$upvotes" },
+        avgScore: { $avg: { $subtract: ["$upvotes", "$downvotes"] } },
+        highestUpvotes: { $max: "$upvotes" },
       },
     },
     {
@@ -700,16 +701,13 @@ answerSchema.statics.getAnswerStatsByUser = async function (userId: string) {
         bestAnswers: 1,
         totalUpvotes: 1,
         totalDownvotes: 1,
-        avgUpvotes: { $round: ['$avgUpvotes', 2] },
-        avgScore: { $round: ['$avgScore', 2] },
+        avgUpvotes: { $round: ["$avgUpvotes", 2] },
+        avgScore: { $round: ["$avgScore", 2] },
         highestUpvotes: 1,
         bestAnswerRate: {
           $round: [
             {
-              $multiply: [
-                { $divide: ['$bestAnswers', '$totalAnswers'] },
-                100,
-              ],
+              $multiply: [{ $divide: ["$bestAnswers", "$totalAnswers"] }, 100],
             },
             2,
           ],
@@ -726,8 +724,8 @@ answerSchema.statics.getAnswerStatsByUser = async function (userId: string) {
  */
 answerSchema.statics.getMostUpvotedAnswers = function (limit: number = 10) {
   return this.find({ isDeleted: false })
-    .populate('answeredBy', 'name email avatar')
-    .populate('doubt', 'title category group')
+    .populate("answeredBy", "name email avatar")
+    .populate("doubt", "title category group")
     .sort({ upvotes: -1, createdAt: -1 })
     .limit(limit)
     .lean();
@@ -738,43 +736,41 @@ answerSchema.statics.getMostUpvotedAnswers = function (limit: number = 10) {
  */
 answerSchema.statics.getRecentAnswers = async function (
   groupId?: string,
-  limit: number = 20
+  limit: number = 20,
 ) {
-  const pipeline: any[] = [
-    { $match: { isDeleted: false } },
-  ];
+  const pipeline: any[] = [{ $match: { isDeleted: false } }];
 
   if (groupId) {
     pipeline.push(
       {
         $lookup: {
-          from: 'doubts',
-          localField: 'doubt',
-          foreignField: '_id',
-          as: 'doubtInfo',
+          from: "doubts",
+          localField: "doubt",
+          foreignField: "_id",
+          as: "doubtInfo",
         },
       },
       {
-        $unwind: '$doubtInfo',
+        $unwind: "$doubtInfo",
       },
       {
         $match: {
-          'doubtInfo.group': groupId,
+          "doubtInfo.group": groupId,
         },
-      }
+      },
     );
   }
 
   pipeline.push(
     {
       $lookup: {
-        from: 'users',
-        localField: 'answeredBy',
-        foreignField: '_id',
-        as: 'answeredByInfo',
+        from: "users",
+        localField: "answeredBy",
+        foreignField: "_id",
+        as: "answeredByInfo",
       },
     },
-    { $unwind: '$answeredByInfo' },
+    { $unwind: "$answeredByInfo" },
     {
       $project: {
         content: 1,
@@ -782,15 +778,15 @@ answerSchema.statics.getRecentAnswers = async function (
         downvotes: 1,
         createdAt: 1,
         answeredBy: {
-          _id: '$answeredByInfo._id',
-          name: '$answeredByInfo.name',
-          avatar: '$answeredByInfo.avatar',
+          _id: "$answeredByInfo._id",
+          name: "$answeredByInfo.name",
+          avatar: "$answeredByInfo.avatar",
         },
-        doubt: groupId ? '$doubtInfo.title' : '$doubt',
+        doubt: groupId ? "$doubtInfo.title" : "$doubt",
       },
     },
     { $sort: { createdAt: -1 } },
-    { $limit: limit }
+    { $limit: limit },
   );
 
   return this.aggregate(pipeline);
@@ -801,9 +797,9 @@ answerSchema.statics.getRecentAnswers = async function (
  * PRE-SAVE MIDDLEWARE
  * ====================================
  */
-answerSchema.pre('save', function (this: any, next) {
+answerSchema.pre("save", function (this: any, next) {
   // Track edit history (only if content changed)
-  if (this.isModified('content') && !this.isNew) {
+  if (this.isModified("content") && !this.isNew) {
     this.isEdited = true;
     this.editedAt = new Date();
   }
@@ -814,7 +810,7 @@ answerSchema.pre('save', function (this: any, next) {
 /**
  * POST-SAVE MIDDLEWARE (Increment answer count)
  */
-answerSchema.post('save', async function (doc: IAnswer) {
+answerSchema.post("save", async function (doc: IAnswer) {
   if (doc.isNew && !doc.isDeleted) {
     const doubt = await Doubt.findById(doc.doubt);
     if (doubt) {
@@ -828,27 +824,30 @@ answerSchema.post('save', async function (doc: IAnswer) {
  * PRE-FIND MIDDLEWARE (FIXED)
  * ====================================
  */
-answerSchema.pre('find', function (next) {
+answerSchema.pre("find", function (next) {
   if (!(this.getOptions() as any).includeDeleted) {
     this.where({ isDeleted: false });
   }
   next();
 });
 
-answerSchema.pre('findOne', function (next) {
+answerSchema.pre("findOne", function (next) {
   if (!(this.getOptions() as any).includeDeleted) {
     this.where({ isDeleted: false });
   }
   next();
 });
 
-answerSchema.pre('findOneAndUpdate', function (next) {
+answerSchema.pre("findOneAndUpdate", function (next) {
   if (!(this.getOptions() as any).includeDeleted) {
     this.where({ isDeleted: false });
   }
   next();
 });
 
-const Answer = mongoose.model<IAnswer, AnswerModel>('StudyGroup_Answer', answerSchema);
+const Answer = mongoose.model<IAnswer, AnswerModel>(
+  "StudyGroup_Answer",
+  answerSchema,
+);
 
 export default Answer;
