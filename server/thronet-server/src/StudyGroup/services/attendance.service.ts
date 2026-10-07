@@ -3,6 +3,7 @@ import { AttendanceStatus } from '../enums/AttendanceStatus.enum';
 import { ConflictError, NotFoundError } from '@/shared/errors/app.error';
 import { getStartOfMonth, getEndOfMonth } from '../utils/dateHelper';
 import { logger } from '@/shared/logger.util';
+import { updateStreakAfterActivity } from './streak.service';
 
 /**
  * Mark daily check-in for a user.
@@ -14,6 +15,16 @@ export const checkIn = async (userId: string, notes?: string) => {
 
   const attendance = await attendanceRepository.checkIn(userId, notes);
   logger.info(`User ${userId} checked in`);
+
+  try {
+    await updateStreakAfterActivity(userId);
+  } catch (streakError) {
+    logger.error(
+      `Failed to update streak after checkIn for user ${userId}:`,
+      streakError instanceof Error ? streakError : String(streakError)
+    );
+  }
+
   return attendance;
 };
 
@@ -28,6 +39,15 @@ export const autoMarkAttendance = async (
 ) => {
   const attendance = await attendanceRepository.autoMark(userId, reason, studyHours);
   logger.info(`Auto-marked attendance for user ${userId}, reason: ${reason}`);
+
+  try {
+    await updateStreakAfterActivity(userId);
+  } catch (streakError) {
+    logger.error(
+      `Failed to update streak after autoMark for user ${userId}:`,
+      streakError instanceof Error ? streakError : String(streakError)
+    );
+  }
   return attendance;
 };
 
@@ -35,16 +55,16 @@ export const autoMarkAttendance = async (
  * Get attendance percentage for the current calendar month
  */
 export const getCurrentMonthPercentage = async (userId: string) => {
-  const today        = new Date();
+  const today = new Date();
   const startOfMonth = getStartOfMonth(today);
-  const endOfMonth   = getEndOfMonth(today);
+  const endOfMonth = getEndOfMonth(today);
 
   const records = await attendanceRepository.findByDateRange(userId, startOfMonth, endOfMonth);
 
-  const totalDays   = records.length;
+  const totalDays = records.length;
   const presentDays = records.filter((a) => a.status === AttendanceStatus.PRESENT).length;
-  const absentDays  = records.filter((a) => a.status === AttendanceStatus.ABSENT).length;
-  const lateDays    = records.filter((a) => a.status === AttendanceStatus.LATE).length;
+  const absentDays = records.filter((a) => a.status === AttendanceStatus.ABSENT).length;
+  const lateDays = records.filter((a) => a.status === AttendanceStatus.LATE).length;
 
   const attendancePercentage =
     totalDays > 0
@@ -72,9 +92,9 @@ export const getTodayStatus = async (userId: string) => {
   }
 
   return {
-    status:          attendance.status,
-    hasCheckedIn:    true,
-    checkInTime:     attendance.checkInTime,
+    status: attendance.status,
+    hasCheckedIn: true,
+    checkInTime: attendance.checkInTime,
     totalActiveTime: attendance.totalActiveTime,
   };
 };
@@ -84,7 +104,7 @@ export const getTodayStatus = async (userId: string) => {
  */
 export const getAttendanceHistory = async (
   userId: string,
-  page:  number = 1,
+  page: number = 1,
   limit: number = 30
 ) => {
   const skip = (page - 1) * limit;
@@ -108,7 +128,7 @@ export const getAttendanceHistory = async (
 export const getCalendarView = async (
   userId: string,
   month: number,
-  year:  number
+  year: number
 ) => {
   return await attendanceRepository.getMonthlyAttendance(userId, year, month);
 };
