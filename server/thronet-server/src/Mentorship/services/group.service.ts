@@ -142,7 +142,16 @@ class GroupService {
 
       let thumbnailUrl: string | undefined = undefined;
       if (file) {
-        thumbnailUrl = await this.uploadImageToCloudinary(file.buffer, input.mentorId);
+        try {
+          thumbnailUrl = await this.uploadImageToCloudinary(file.buffer, input.mentorId);
+        } catch (err: any) {
+          logger.error('Thumbnail upload failed, continuing without thumbnail:', {
+            message: err.message,
+            stack: err.stack,
+            error: err
+          });
+          // Non-critical call failed, gracefully continue
+        }
       }
 
       const rawMeetUrl = input.meetingUrl || input.meeting?.meetingUrl;
@@ -201,7 +210,11 @@ class GroupService {
 
       return session;
     } catch (error: any) {
-      logger.error(`Failed to create group session:${error}`);
+      logger.error(`Failed to create group session:`, {
+        message: error.message,
+        stack: error.stack,
+        error
+      });
       throw error;
     }
   }
