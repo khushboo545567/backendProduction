@@ -4,44 +4,58 @@
  * ====================================
  * server/thronet-server/src/socket/index.ts
  *
- * Fixes applied:
- *  1. Removed duplicate handler registration
- *  2. Single AuthenticatedSocket type — always socket.data.userId
- *  3. Auto-join user:{userId} room on connect (no client-driven join needed)
- *  4. Disconnect cleanup centralized here
+ * - Core (hamesha on): notifications, mentorship, StudyGroup chat events
+ * - Optional (feature flag): connections, messaging, live room, presence
+ * - Disabled handlers load hi nahi hote
+ * - Auto-join user:{userId} room on connect
+ * - Disconnect cleanup centralized here
  */
 
 import { Server as HTTPServer } from 'http';
-import { Server, Socket } from 'socket.io';
+import { Server } from 'socket.io';
 import { socketAuthMiddleware } from './middleware/auth.socket.middleware';
-import { setupConnectionHandlers } from './handlers/connectionHandler';
 import { setupNotificationHandlers } from './handlers/notificationHandler';
-import { setupMessageHandlers } from './handlers/messageHandler';
+import { setupMentorshipHandlers } from './handlers/mentorshipHandler';
 import { LoggerUtil } from '@/shared/logger.util';
 import { handleChatEvents } from '@/StudyGroup/socket/chatHandler';
-import { liveRoomHandler } from '@/StudyGroup/socket/liveRoomHandler';
-import { handlePresenceEvents } from '@/StudyGroup/socket/presenceHandler';
-// upar baaki imports ke saath:
-import { setupMentorshipHandlers } from './handlers/mentorshipHandler';
+import { FEATURES } from '@/config/features';
 import { AuthenticatedSocket } from './types';
 export type { AuthenticatedSocket } from './types';
 import { setIO } from './emitter';
 
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+// app.ts jaisi logic: production me sirf CORS_ORIGIN / ALLOWED_ORIGINS wali list.
+const isProduction = process.env['NODE_ENV'] === 'production';
 
-// ─── Singleton ────────────────────────────────────────────────────────────────
-// Now managed in emitter.ts
+const DEFAULT_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'https://throne8-client-main.vercel.app',
+];
+
+const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] || '';
+const allowedOrigins: string[] = envOrigins
+  ? envOrigins.split(',').map((o) => o.trim()).filter(Boolean)
+  : DEFAULT_ORIGINS;
+
+const allowVercelPreviews = process.env['ALLOW_VERCEL_PREVIEWS']
+  ? process.env['ALLOW_VERCEL_PREVIEWS'] === 'true'
+  : !isProduction;
+
+const isOriginAllowed = (origin?: string): boolean => {
+  if (!origin) return true; // server-to-server / native clients
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return true;
+  if (allowVercelPreviews && /\.vercel\.app$/.test(origin)) return true;
+  if (!isProduction && /^http:\/\/localhost:\d+$/.test(origin)) return true;
+  return false;
+};
 
 // ─── Initialize ───────────────────────────────────────────────────────────────
 export const initializeSocketIO = (httpServer: HTTPServer): Server => {
   const io = new Server(httpServer, {
     cors: {
       origin: (origin, callback) => {
-        const allowed = (process.env['ALLOWED_ORIGINS'] || 'http://localhost:3000,http://localhost:3001')
-          .split(',')
-          .map((o) => o.trim());
-        const isVercel = origin && /\.vercel\.app$/.test(origin);
-        const isLocalhost = origin && /^http:\/\/localhost:\d+$/.test(origin);
-        if (!origin || allowed.includes('*') || allowed.includes(origin) || isVercel || isLocalhost) {
+        if (isOriginAllowed(origin)) {
           callback(null, true);
         } else {
           callback(new Error('Not allowed by CORS'), false);
@@ -59,6 +73,34 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
     maxHttpBufferSize: 1e6, // 1 MB
   });
 
+  // ── Optional handlers: sirf enabled features ke liye load honge ─────────────
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const connectionHandlers = FEATURES.connections
+    ? require('./handlers/connectionHandler')
+    : null;
+
+  const messageHandlers = FEATURES.messaging
+    ? require('./handlers/messageHandler')
+    : null;
+
+  const liveRoom = FEATURES.studyGroup
+    ? require('../StudyGroup/socket/liveRoomHandler')
+    : null;
+
+  // Presence online/offline status deta hai, jab in me se koi feature on ho
+  const presence =
+    FEATURES.studyGroup || FEATURES.messaging || FEATURES.connections
+      ? require('../StudyGroup/socket/presenceHandler')
+      : null;
+  /* eslint-enable @typescript-eslint/no-var-requires */
+
+  LoggerUtil.info('Socket handlers configured', {
+    connections: !!connectionHandlers,
+    messaging: !!messageHandlers,
+    liveRoom: !!liveRoom,
+    presence: !!presence,
+  });
+
   // ── Auth middleware ──────────────────────────────────────────────────────────
   io.use((socket, next) => {
     socketAuthMiddleware(socket, next);
@@ -68,8 +110,8 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
   io.on('connection', (socket: AuthenticatedSocket) => {
     const userId = socket.data.userId;
 
-    // Guard — middleware should have already rejected unauthenticated sockets,
-    // but we double-check so handlers never run without a userId.
+    // Guard — middleware ne unauthenticated sockets reject kar diye honge,
+    // phir bhi double-check taaki handlers bina userId ke na chalen.
     if (!userId) {
       LoggerUtil.error('Socket connected without userId — disconnecting', {
         socketId: socket.id,
@@ -85,21 +127,30 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
     });
 
     // ── Auto-join personal notification room ─────────────────────────────────
-    // Do this server-side so it is guaranteed — never rely on client to call
-    // 'join-notifications' before notifications can be delivered.
+    // Server-side join, taaki notifications delivery client pe depend na kare.
     socket.join(`user:${userId}`);
 
-    // ── Register all handlers ONCE ───────────────────────────────────────────
-    setupConnectionHandlers(io!, socket);
-    setupNotificationHandlers(io!, socket);
-    setupMessageHandlers(io!, socket);
-    setupMentorshipHandlers(io!, socket); 
-    
+    // ── Core handlers (hamesha on) ───────────────────────────────────────────
+    setupNotificationHandlers(io, socket);
+    setupMentorshipHandlers(io, socket);
 
-    // StudyGroup-specific handlers
-    handleChatEvents(io!, socket, userId);
-    liveRoomHandler(io!, socket as any);
-    handlePresenceEvents(io!, socket, userId);
+    // StudyGroup chat events: mentorship community isi handler pe depend kar
+    // sakta hai (community.service.ts ka comment dekho), isliye always on.
+    handleChatEvents(io, socket, userId);
+
+    // ── Optional handlers ────────────────────────────────────────────────────
+    if (connectionHandlers) {
+      connectionHandlers.setupConnectionHandlers(io, socket);
+    }
+    if (messageHandlers) {
+      messageHandlers.setupMessageHandlers(io, socket);
+    }
+    if (liveRoom) {
+      liveRoom.liveRoomHandler(io, socket as any);
+    }
+    if (presence) {
+      presence.handlePresenceEvents(io, socket, userId);
+    }
 
     // ── Disconnect ───────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
@@ -109,14 +160,14 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
         reason,
       });
 
-      // Broadcast offline status to relevant parties only (presence handler
-      // does the DB update; we just broadcast the event here so the handler
-      // doesn't need access to io directly).
-      io!.to(`user:${userId}:contacts`).emit('user-status-changed', {
-        userId,
-        isOnline: false,
-        lastActive: new Date(),
-      });
+      // Offline status broadcast sirf tab jab presence feature chalu ho
+      if (presence) {
+        io.to(`user:${userId}:contacts`).emit('user-status-changed', {
+          userId,
+          isOnline: false,
+          lastActive: new Date(),
+        });
+      }
     });
   });
 
