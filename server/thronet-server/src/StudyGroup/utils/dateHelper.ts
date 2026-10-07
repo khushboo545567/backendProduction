@@ -204,6 +204,20 @@ export const isSameDay = (date1: Date, date2: Date): boolean => {
   );
 };
 
+/**
+ * Check if two dates are the same day in UTC (calendar day match)
+ */
+export const isSameUTCDay = (date1: Date, date2: Date): boolean => {
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  
+  return (
+    d1.getUTCDate() === d2.getUTCDate() &&
+    d1.getUTCMonth() === d2.getUTCMonth() &&
+    d1.getUTCFullYear() === d2.getUTCFullYear()
+  );
+};
+
 export default {
   addDays,
   addHours,

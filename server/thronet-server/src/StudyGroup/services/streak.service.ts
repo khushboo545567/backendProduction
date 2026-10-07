@@ -8,7 +8,7 @@
 
 import streakRepository from '../repositories/streak.repository';
 import { IStreak } from '../interfaces/IStreak';
-import { isSameDay } from '../utils/dateHelper';
+import { isSameUTCDay } from '../utils/dateHelper';
 import { NotFoundError } from '@/shared/errors/app.error';
 import { LoggerUtil } from '@/shared/logger.util';
 
@@ -24,28 +24,29 @@ export const getOrCreateStreak = async (userId: string): Promise<IStreak> => {
 /**
  * Update streak after user activity
  * FIX: UTC dates — server timezone pe dependent nahi rahega
+ * Idempotent: increments at most once per calendar day per user (checkIn + autoMark + session-stop safe)
  */
 export const updateStreakAfterActivity = async (userId: string): Promise<IStreak> => {
   const streak = await streakRepository.getOrCreate(userId);
 
-  // FIX: UTC midnight — consistent across all timezones
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  // UTC midnight for current calendar day
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
 
-  // Already updated today — return as-is
-  if (streak.lastActivityDate && isSameDay(streak.lastActivityDate, today)) {
+  // Already updated today (same UTC calendar day) — return as-is
+  if (streak.lastActivityDate && isSameUTCDay(streak.lastActivityDate, today)) {
     return streak;
   }
 
-  // FIX: UTC yesterday
+  // UTC yesterday
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
-  if (streak.lastActivityDate && isSameDay(streak.lastActivityDate, yesterday)) {
+  if (streak.lastActivityDate && isSameUTCDay(streak.lastActivityDate, yesterday)) {
     // Consecutive day — streak continue
     streak.currentStreak += 1;
   } else {
-    // Streak broken ya fresh start
+    // Streak broken or fresh start
     if (streak.currentStreak > 0) {
       streak.streakBreaks += 1;
       streak.lastBreakDate = new Date();
