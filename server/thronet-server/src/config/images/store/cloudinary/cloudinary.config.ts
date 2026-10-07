@@ -24,11 +24,11 @@ class CloudinaryConfigManager {
     private initializeCloudinary(): void {
         try {
             const config: CloudinaryConfig = {
-                cloud_name: process.env.CLOUDINARY_CLOUD_NAME || '',
-                api_key: process.env.CLOUDINARY_API_KEY || '',
-                api_secret: process.env.CLOUDINARY_API_SECRET || '',
-                secure: process.env.CLOUDINARY_SECURE_URLS === 'true'
-            };
+    cloud_name: (process.env.CLOUDINARY_CLOUD_NAME || '').trim(),
+    api_key: (process.env.CLOUDINARY_API_KEY || '').trim(),
+    api_secret: (process.env.CLOUDINARY_API_SECRET || '').trim(),
+    secure: process.env.CLOUDINARY_SECURE_URLS === 'true'
+};
 
             // Validate configuration
             if (!config.cloud_name || !config.api_key || !config.api_secret) {

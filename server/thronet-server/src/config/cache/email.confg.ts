@@ -1,3 +1,4 @@
+//server/thronet-server/src/config/cache/email.confg.ts
 import config from '../env/env';
 import { logger } from '@/shared/logger.util';
 

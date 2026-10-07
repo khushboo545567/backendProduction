@@ -1,9 +1,4 @@
-/**
- * src/config/features.ts
- * Feature flags — launch ke time sirf core modules chalu rehte hain.
- * Baaki modules Railway env variable se on hote hain (default: off).
- */
-
+//server/thronet-server/src/config/features.ts
 const readFlag = (name: string, fallback: boolean): boolean => {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
