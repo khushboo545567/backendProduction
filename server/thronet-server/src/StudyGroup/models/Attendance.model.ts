@@ -5,32 +5,41 @@
  * Mongoose schema for daily attendance tracking
  */
 
-import mongoose, { Schema } from 'mongoose';
-import { IAttendance } from '../interfaces/IAttendance';
-import { AttendanceStatus } from '../enums/AttendanceStatus.enum';
-import { validId } from '@/shared/security';
+import mongoose, { Schema } from "mongoose";
+import { IAttendance } from "../interfaces/IAttendance";
+import { AttendanceStatus } from "../enums/AttendanceStatus.enum";
+import { validId } from "@/shared/security";
+import { v4 as uuidv4 } from "uuid";
 
 const attendanceSchema = new Schema<IAttendance>(
   {
     // ADD: attendanceId UUID
+    // attendanceId: {
+    //   type: String,
+    //   required: true,
+    //   unique: true,
+    //   index: true,
+    //   validate: (v: any) => validId(v),
+    // },
+
     attendanceId: {
       type: String,
       required: true,
       unique: true,
       index: true,
+      default: () => uuidv4(),
       validate: (v: any) => validId(v),
     },
     user: {
       type: String,
-      ref: 'User',
-      required: [true, 'User is required'],
-
+      ref: "User",
+      required: [true, "User is required"],
     },
 
     // Attendance details
     date: {
       type: Date,
-      required: [true, 'Date is required'],
+      required: [true, "Date is required"],
       index: true,
     },
     status: {
@@ -61,7 +70,7 @@ const attendanceSchema = new Schema<IAttendance>(
     },
     autoMarkReason: {
       type: String,
-      enum: ['study_session', 'task_completion', 'manual'],
+      enum: ["study_session", "task_completion", "manual"],
       default: undefined,
     },
 
@@ -86,7 +95,7 @@ const attendanceSchema = new Schema<IAttendance>(
     notes: {
       type: String,
       trim: true,
-      maxlength: [500, 'Notes cannot exceed 500 characters'],
+      maxlength: [500, "Notes cannot exceed 500 characters"],
     },
   },
   {
@@ -98,10 +107,10 @@ const attendanceSchema = new Schema<IAttendance>(
         delete ret._id;
         delete ret.__v;
         return ret;
-      }
+      },
     },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 /**
@@ -120,28 +129,28 @@ attendanceSchema.index({ user: 1, date: 1 }, { unique: true });
 /**
  * Virtual: Is marked as present
  */
-attendanceSchema.virtual('isPresent').get(function (this: any) {
+attendanceSchema.virtual("isPresent").get(function (this: any) {
   return this.status === AttendanceStatus.PRESENT;
 });
 
 /**
  * Virtual: Is marked as absent
  */
-attendanceSchema.virtual('isAbsent').get(function (this: any) {
+attendanceSchema.virtual("isAbsent").get(function (this: any) {
   return this.status === AttendanceStatus.ABSENT;
 });
 
 /**
  * Virtual: Is marked as late
  */
-attendanceSchema.virtual('isLate').get(function (this: any) {
+attendanceSchema.virtual("isLate").get(function (this: any) {
   return this.status === AttendanceStatus.LATE;
 });
 
 /**
  * Virtual: Total active time in hours
  */
-attendanceSchema.virtual('activeHours').get(function (this: any) {
+attendanceSchema.virtual("activeHours").get(function (this: any) {
   if (!this.totalActiveTime || this.totalActiveTime === 0) return 0;
   return parseFloat((this.totalActiveTime / 3600).toFixed(2));
 });
@@ -149,15 +158,15 @@ attendanceSchema.virtual('activeHours').get(function (this: any) {
 /**
  * Virtual: Has checked out
  */
-attendanceSchema.virtual('hasCheckedOut').get(function (this: any) {
+attendanceSchema.virtual("hasCheckedOut").get(function (this: any) {
   return this.checkOutTime !== undefined && this.checkOutTime !== null;
 });
 
 /**
  * Pre-save hook: Set date to start of day
  */
-attendanceSchema.pre('save', function (this: any, next) {
-  if (this.isModified('date')) {
+attendanceSchema.pre("save", function (this: any, next) {
+  if (this.isModified("date")) {
     const d = new Date(this.date);
     d.setHours(0, 0, 0, 0);
     this.date = d;
@@ -168,7 +177,7 @@ attendanceSchema.pre('save', function (this: any, next) {
 /**
  * Pre-save hook: Calculate total active time if checked out
  */
-attendanceSchema.pre('save', function (this: any, next) {
+attendanceSchema.pre("save", function (this: any, next) {
   if (this.checkInTime && this.checkOutTime) {
     const checkIn = new Date(this.checkInTime).getTime();
     const checkOut = new Date(this.checkOutTime).getTime();
@@ -180,8 +189,8 @@ attendanceSchema.pre('save', function (this: any, next) {
 /**
  * Pre-save hook: Auto-mark as late if check-in after 10 AM
  */
-attendanceSchema.pre('save', function (this: any, next) {
-  if (this.checkInTime && !this.isModified('status')) {
+attendanceSchema.pre("save", function (this: any, next) {
+  if (this.checkInTime && !this.isModified("status")) {
     const checkInHour = new Date(this.checkInTime).getHours();
     if (checkInHour >= 10) {
       this.status = AttendanceStatus.LATE;
@@ -190,7 +199,10 @@ attendanceSchema.pre('save', function (this: any, next) {
   next();
 });
 
-const Attendance = mongoose.model<IAttendance>('StudyGroup_Attendance', attendanceSchema);
+const Attendance = mongoose.model<IAttendance>(
+  "StudyGroup_Attendance",
+  attendanceSchema,
+);
 
 // Export both as default and named export
 export { Attendance };

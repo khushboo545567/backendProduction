@@ -4,11 +4,11 @@
  * ====================================
  */
 
-import express from 'express';
-import { doubtController } from '../controllers';
-import AuthMiddleware from '@/shared/middlewares/auth.middleware';
-import { isMember } from '../middleware/groupAccess.middleware';
-import { validation } from '@/shared/middlewares/validation.middleware';
+import express from "express";
+import { doubtController } from "../controllers";
+import AuthMiddleware from "@/shared/middlewares/auth.middleware";
+import { isMember } from "../middleware/groupAccess.middleware";
+import { validation } from "@/shared/middlewares/validation.middleware";
 import {
   createDoubtSchema,
   updateDoubtSchema,
@@ -16,159 +16,158 @@ import {
   updateAnswerSchema,
   tagMembersSchema,
   searchDoubtsSchema,
-} from '../validators/doubt.validator';
-import { uploadMultiple } from '@/shared/upload/upload';
+} from "../validators/doubt.validator";
+import { uploadMultiple } from "@/shared/upload/upload";
+
+const uploadIfMultipart =
+  (field: string, max: number) => (req: any, res: any, next: any) =>
+    req.is("multipart/form-data")
+      ? uploadMultiple(field, max)(req, res, next)
+      : next();
 
 const router = express.Router();
 
-// doubtController
-// .Doubt
-//  routes
 router.post(
-  '/:groupId/post', 
+  "/:groupId/post",
   AuthMiddleware.authenticate as any,
-   isMember, 
-   uploadMultiple('images', 5), 
-   validation(createDoubtSchema), 
-  doubtController.postDoubt
+  isMember,
+  // uploadMultiple("images", 5),
+  uploadIfMultipart("images", 5),
+  validation(createDoubtSchema),
+  doubtController.postDoubt,
 );
 router.get(
-  '/:doubtId', 
+  "/:doubtId",
   AuthMiddleware.authenticate as any,
-  doubtController.getDoubt
+  doubtController.getDoubt,
 );
 router.get(
-  '/:groupId/all', 
+  "/:groupId/all",
   AuthMiddleware.authenticate as any,
-   isMember, 
-  doubtController.getAllDoubts
+  isMember,
+  doubtController.getAllDoubts,
 );
 router.get(
-  '/user/my-doubts', 
+  "/user/my-doubts",
   AuthMiddleware.authenticate as any,
 
-  doubtController.getMyDoubts
+  doubtController.getMyDoubts,
 );
 router.get(
-  '/:groupId/solved', 
+  "/:groupId/solved",
   AuthMiddleware.authenticate as any,
-   isMember, 
-  doubtController.getSolvedDoubts
+  isMember,
+  doubtController.getSolvedDoubts,
 );
 router.get(
-  '/:groupId/unsolved', 
+  "/:groupId/unsolved",
   AuthMiddleware.authenticate as any,
-   isMember, 
-  doubtController.getUnsolvedDoubts
+  isMember,
+  doubtController.getUnsolvedDoubts,
 );
 router.get(
-  '/:groupId/urgent', 
+  "/:groupId/urgent",
   AuthMiddleware.authenticate as any,
-   isMember, 
-  doubtController.getUrgentDoubts
+  isMember,
+  doubtController.getUrgentDoubts,
 );
 router.put(
-  '/:doubtId', 
+  "/:doubtId",
   AuthMiddleware.authenticate as any,
-   validation(updateDoubtSchema), 
-  doubtController.updateDoubt
+  validation(updateDoubtSchema),
+  doubtController.updateDoubt,
 );
 router.delete(
-  '/:doubtId', 
+  "/:doubtId",
   AuthMiddleware.authenticate as any,
 
-  doubtController.deleteDoubt
+  doubtController.deleteDoubt,
 );
 router.patch(
-  '/:doubtId/mark-solved', 
+  "/:doubtId/mark-solved",
   AuthMiddleware.authenticate as any,
 
-  doubtController.markAsSolved
+  doubtController.markAsSolved,
 );
 router.get(
-  '/search/query', 
+  "/search/query",
   AuthMiddleware.authenticate as any,
-   validation(searchDoubtsSchema, 'query'), 
-  doubtController.searchDoubts
+  validation(searchDoubtsSchema, "query"),
+  doubtController.searchDoubts,
 );
 router.get(
-  '/category/:category', 
+  "/category/:category",
   AuthMiddleware.authenticate as any,
 
-  doubtController.getDoubtsByCategory
+  doubtController.getDoubtsByCategory,
 );
 router.post(
-  '/:doubtId/tag-member', 
+  "/:doubtId/tag-member",
   AuthMiddleware.authenticate as any,
-   validation(tagMembersSchema), 
-  doubtController.tagMember
+  validation(tagMembersSchema),
+  doubtController.tagMember,
 );
 router.get(
-  '/:groupId/stats', 
+  "/:groupId/stats",
   AuthMiddleware.authenticate as any,
-   isMember, 
-  doubtController.getGroupDoubtStats
+  isMember,
+  doubtController.getGroupDoubtStats,
 );
 router.get(
-  '/user/:userId/stats', 
+  "/user/:userId/stats",
   AuthMiddleware.authenticate as any,
-   doubtController.getUserDoubtStats
-  );
+  doubtController.getUserDoubtStats,
+);
 
 router.post(
-  '/:doubtId/answer', 
+  "/:doubtId/answer",
   AuthMiddleware.authenticate as any,
-   uploadMultiple('images', 3),
-    validation(answerDoubtSchema), 
-  doubtController.answerDoubt
+  // uploadMultiple("images", 3),
+  uploadIfMultipart("images", 3),
+  validation(answerDoubtSchema),
+  doubtController.answerDoubt,
 );
 router.get(
-  '/:doubtId/answers', 
+  "/:doubtId/answers",
   AuthMiddleware.authenticate as any,
-  doubtController.getDoubtAnswers
+  doubtController.getDoubtAnswers,
 );
 router.put(
-  '/answer/:answerId', 
+  "/answer/:answerId",
   AuthMiddleware.authenticate as any,
-   validation(updateAnswerSchema), 
-  doubtController.updateAnswer
+  validation(updateAnswerSchema),
+  doubtController.updateAnswer,
 );
 router.delete(
-  '/answer/:answerId', 
+  "/answer/:answerId",
   AuthMiddleware.authenticate as any,
 
-  doubtController.deleteAnswer
+  doubtController.deleteAnswer,
 );
 router.post(
-  '/answer/:answerId/upvote', 
+  "/answer/:answerId/upvote",
   AuthMiddleware.authenticate as any,
 
-  doubtController.upvoteAnswer
+  doubtController.upvoteAnswer,
 );
 router.post(
-  '/answer/:answerId/downvote', 
+  "/answer/:answerId/downvote",
   AuthMiddleware.authenticate as any,
 
-  doubtController.downvoteAnswer
+  doubtController.downvoteAnswer,
 );
 router.post(
-  '/answer/:answerId/remove-vote', 
+  "/answer/:answerId/remove-vote",
   AuthMiddleware.authenticate as any,
 
-  doubtController.removeVote
+  doubtController.removeVote,
 );
+router.get("/answers/top-answerers", doubtController.getTopAnswerers);
+router.get("/answers/best-answers", doubtController.getBestAnswers);
 router.get(
-  '/answers/top-answerers', 
-  doubtController.getTopAnswerers
-);
-router.get(
-  '/answers/best-answers', 
-  doubtController.getBestAnswers
-);
-router.get(
-  '/answers/user/:userId/stats', 
+  "/answers/user/:userId/stats",
   AuthMiddleware.authenticate as any,
-   doubtController.getUserAnswerStats
-  );
+  doubtController.getUserAnswerStats,
+);
 
 export default router;
