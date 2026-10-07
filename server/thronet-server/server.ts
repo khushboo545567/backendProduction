@@ -2,14 +2,8 @@
  * /server/thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
  */
-import dns from "dns";
 import dotenv from "dotenv";
 import path from "path";
-
-// Fix for Node on Windows DNS resolving MongoDB Atlas SRV records.
-// ⚠️ ONLY apply this in local/dev — on Railway (or any Linux container
-// production environment) this can break SRV DNS resolution entirely.
-// Removed dns.setServers because it breaks local Windows DNS resolution on restricted networks.
 
 // ============================================================
 // ENVIRONMENT
@@ -30,6 +24,9 @@ import mongoose from "mongoose";
 
 // App
 import { app, NotificationService } from "./src/app";
+
+// Feature flags
+import { FEATURES, enabledFeatures } from "./src/config/features";
 
 // Database
 import MongoConnection from "./src/database/sharding/connection";
@@ -73,6 +70,7 @@ async function initializeApp(): Promise<void> {
       nodeEnv: process.env["NODE_ENV"],
       nodeVersion: process.version,
       port: process.env["PORT"] || "4000",
+      enabledFeatures: enabledFeatures(),
     });
 
     // ========================================================
@@ -118,23 +116,27 @@ async function initializeApp(): Promise<void> {
     }
 
     // ========================================================
-    // STEP 4 — MUTUAL CONNECTIONS SERVICE
+    // STEP 4 — MUTUAL CONNECTIONS SERVICE (only if connections on)
     // ========================================================
 
-    logger.info("STEP 3: Starting Mutual Connections Service...");
+    if (FEATURES.connections) {
+      logger.info("STEP 3: Starting Mutual Connections Service...");
 
-    try {
-      const { mutualService } =
-        await import("./src/connections/services/mutual.service");
+      try {
+        const { mutualService } =
+          await import("./src/connections/services/mutual.service");
 
-      await mutualService.initialize();
+        await mutualService.initialize();
 
-      logger.info("Mutual connections service initialized");
-    } catch (err: any) {
-      logger.warn("Mutual service initialization failed, using mock mode", {
-        error: err?.message || "Unknown mutual service error",
-        stack: err?.stack,
-      });
+        logger.info("Mutual connections service initialized");
+      } catch (err: any) {
+        logger.warn("Mutual service initialization failed, using mock mode", {
+          error: err?.message || "Unknown mutual service error",
+          stack: err?.stack,
+        });
+      }
+    } else {
+      logger.info("STEP 3: Mutual Connections Service skipped (connections disabled)");
     }
 
     // ========================================================
@@ -163,7 +165,7 @@ async function initializeApp(): Promise<void> {
     }
 
     // ========================================================
-    // STEP 5.5 — SCHEDULED JOBS (SESSION REMINDER CRON)
+    // STEP 5.5 — SCHEDULED JOBS (mentorship crons)
     // ========================================================
 
     logger.info("STEP 4.5: Starting scheduled jobs...");
@@ -173,8 +175,14 @@ async function initializeApp(): Promise<void> {
       ReminderCron.init();
       logger.info("Session reminder cron initialized");
 
-      // TEMP (sirf testing ke liye, baad mein hata dena)
-      ReminderCron.triggerManually().catch(console.error);
+      // Sirf explicit testing ke liye. Production me ye env set mat karna.
+      if (process.env["RUN_REMINDER_ON_BOOT"] === "true") {
+        ReminderCron.triggerManually().catch((err: unknown) =>
+          logger.error("Manual reminder trigger failed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
     } catch (error: any) {
       logger.error(
         "Session reminder cron failed to initialize (non-critical)",
