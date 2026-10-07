@@ -72,6 +72,15 @@ interface CachedItem {
 }
 const memoryCache: Map<string, CachedItem> = new Map();
 
+let lastRedisErrorLogTime = 0;
+function logRedisError(message: string, metadata?: any): void {
+    const now = Date.now();
+    if (now - lastRedisErrorLogTime >= 30000) {
+        lastRedisErrorLogTime = now;
+        LoggerUtil.error(message, metadata);
+    }
+}
+
 // ==================== TIMEOUT HELPER ====================
 
 /**
@@ -226,7 +235,7 @@ class CacheUtil {
                 }
 
                 redisClient.on('error', (error: Error) => {
-                    LoggerUtil.error('Redis client error', {
+                    logRedisError('Redis client error', {
                         error: error.message,
                         code: (error as any).code
                     });
@@ -293,7 +302,7 @@ class CacheUtil {
                 }).catch((error: Error) => {
                     if (!connected) {
                         clearTimeout(timeoutId);
-                        LoggerUtil.error('Redis connection failed', {
+                        logRedisError('Redis connection failed', {
                             error: error.message,
                             code: (error as any).code,
                         });
@@ -306,7 +315,7 @@ class CacheUtil {
 
             } catch (error: unknown) {
                 clearTimeout(timeoutId);
-                LoggerUtil.error('Redis initialization failed', {
+                logRedisError('Redis initialization failed', {
                     error: (error as Error).message,
                     stack: (error as Error).stack,
                 });
