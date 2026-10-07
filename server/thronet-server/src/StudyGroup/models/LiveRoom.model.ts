@@ -168,11 +168,14 @@ liveRoomSchema.virtual('activeParticipantsCount').get(function () {
  */
 liveRoomSchema.methods.addParticipant = async function (userId: string) {
   const existingParticipant = this.participants.find(
-    (p: IParticipant) => p.user.toString() === userId.toString() && !p.leftAt
+    (p: IParticipant) => p.user.toString() === userId.toString()
   );
 
   if (existingParticipant) {
-    throw new Error('User is already in the room');
+    existingParticipant.leftAt = null;
+    existingParticipant.joinedAt = new Date();
+    await this.save();
+    return;
   }
 
   const activeCount = this.participants.filter((p: IParticipant) => !p.leftAt).length;
