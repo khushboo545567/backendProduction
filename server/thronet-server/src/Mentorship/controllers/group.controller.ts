@@ -82,7 +82,7 @@ class GroupController {
       );
 
       const sanitizedSessions = await Promise.all(
-        result.sessions.map((s: any) => groupService.sanitizeGroupSession(s))
+        result.sessions.map((s: any) => groupService.sanitizeGroupSession(s, req.user?.id))
       );
 
       ResponseHandler.paginated(
@@ -115,7 +115,7 @@ class GroupController {
       );
 
       const sanitizedSessions = await Promise.all(
-        sessions.map((s: any) => groupService.sanitizeGroupSession(s))
+        sessions.map((s: any) => groupService.sanitizeGroupSession(s, req.user?.id))
       );
 
       ResponseHandler.success(res, 'Upcoming group sessions retrieved successfully', sanitizedSessions);

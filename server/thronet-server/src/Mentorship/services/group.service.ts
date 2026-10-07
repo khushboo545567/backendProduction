@@ -704,12 +704,10 @@ class GroupService {
 
         const sessionStartedPayload = {
           sessionId: session.sessionId,
-          bookingId: session.sessionId,
           roomId: session.sessionId,
           title: session.title,
           startedAt: new Date().toISOString(),
           scheduledAt: session.scheduledAt,
-          meetingUrl: session.meeting?.meetingUrl || null,
         };
 
         acceptedMenteeIds.forEach((menteeId) => {
@@ -1397,6 +1395,21 @@ class GroupService {
     if (!session) return session;
     const doc = session.toObject ? session.toObject({ virtuals: true }) : { ...session };
 
+    const origParticipants = Array.isArray(doc.participants) ? doc.participants : [];
+    const acceptedCount = origParticipants.filter((p: any) => p.requestStatus === 'accepted').length;
+    const maxParticipants = doc.maxParticipants || 0;
+
+    // Keep virtuals (isFull, spotsRemaining) and currentParticipants intact
+    if (doc.isFull === undefined) {
+      doc.isFull = acceptedCount >= maxParticipants;
+    }
+    if (doc.spotsRemaining === undefined) {
+      doc.spotsRemaining = Math.max(0, maxParticipants - acceptedCount);
+    }
+    if (doc.currentParticipants === undefined) {
+      doc.currentParticipants = acceptedCount;
+    }
+
     let isMentor = false;
     if (currentUserId) {
       if (doc.mentorId === currentUserId) {
@@ -1412,17 +1425,42 @@ class GroupService {
     const isAcceptedMenteeDuringSession = Boolean(
       currentUserId &&
       doc.status === 'in_progress' &&
-      Array.isArray(doc.participants) &&
-      doc.participants.some(
+      origParticipants.some(
         (p: any) => (p.menteeId === currentUserId || p.menteeId?.toString() === currentUserId) && p.requestStatus === 'accepted'
       )
     );
 
     const canSeeMeeting = isMentor || isAcceptedMenteeDuringSession;
 
-    if (!canSeeMeeting && doc.meeting) {
-      const { meetingUrl, meetingId, passcode, ...safeMeeting } = doc.meeting;
-      doc.meeting = safeMeeting;
+    if (!canSeeMeeting) {
+      if (doc.meeting) {
+        const { meetingUrl, meetingId, passcode, ...safeMeeting } = doc.meeting;
+        doc.meeting = safeMeeting;
+      }
+      if (doc.meetingUrl) {
+        delete doc.meetingUrl;
+      }
+    }
+
+    // For callers who are not the session's mentor, replace doc.participants with only
+    // the caller's own entry (menteeId === currentUserId); anonymous callers get [].
+    // Strip transactionId from entries returned to non-mentors. Mentor keeps full list.
+    if (!isMentor) {
+      if (currentUserId) {
+        doc.participants = origParticipants
+          .filter(
+            (p: any) =>
+              p.menteeId === currentUserId ||
+              p.menteeId?.toString() === currentUserId
+          )
+          .map((p: any) => {
+            const item = typeof p.toObject === 'function' ? p.toObject() : { ...p };
+            delete item.transactionId;
+            return item;
+          });
+      } else {
+        doc.participants = [];
+      }
     }
 
     return doc;
