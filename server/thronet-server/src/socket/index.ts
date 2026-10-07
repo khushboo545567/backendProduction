@@ -13,12 +13,17 @@
 
 import { Server as HTTPServer } from 'http';
 import { Server } from 'socket.io';
+import { FEATURES } from '@/config/features';
 import { socketAuthMiddleware } from './middleware/auth.socket.middleware';
 import { setupNotificationHandlers } from './handlers/notificationHandler';
 import { setupMentorshipHandlers } from './handlers/mentorshipHandler';
 import { LoggerUtil } from '@/shared/logger.util';
 import { handleChatEvents } from '@/StudyGroup/socket/chatHandler';
-import { FEATURES } from '@/config/features';
+import { liveRoomHandler } from '@/StudyGroup/socket/liveRoomHandler';
+import { handlePresenceEvents } from '@/StudyGroup/socket/presenceHandler';
+import { setupStudyGroupSessionHandlers } from '@/StudyGroup/socket/socket';
+// upar baaki imports ke saath:
+
 import { AuthenticatedSocket } from './types';
 export type { AuthenticatedSocket } from './types';
 import { setIO } from './emitter';
@@ -134,23 +139,11 @@ export const initializeSocketIO = (httpServer: HTTPServer): Server => {
     setupNotificationHandlers(io, socket);
     setupMentorshipHandlers(io, socket);
 
-    // StudyGroup chat events: mentorship community isi handler pe depend kar
-    // sakta hai (community.service.ts ka comment dekho), isliye always on.
-    handleChatEvents(io, socket, userId);
-
-    // ── Optional handlers ────────────────────────────────────────────────────
-    if (connectionHandlers) {
-      connectionHandlers.setupConnectionHandlers(io, socket);
-    }
-    if (messageHandlers) {
-      messageHandlers.setupMessageHandlers(io, socket);
-    }
-    if (liveRoom) {
-      liveRoom.liveRoomHandler(io, socket as any);
-    }
-    if (presence) {
-      presence.handlePresenceEvents(io, socket, userId);
-    }
+    // StudyGroup-specific handlers
+    handleChatEvents(io!, socket, userId);
+    liveRoomHandler(io!, socket as any);
+    handlePresenceEvents(io!, socket, userId);
+    setupStudyGroupSessionHandlers(io!, socket, userId);
 
     // ── Disconnect ───────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
