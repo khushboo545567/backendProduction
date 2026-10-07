@@ -26,8 +26,8 @@ export const handleTypingEvents = (socket: Socket, userId: string): void => {
 
       // Verify membership
       const isMember = await GroupMember.findOne({
-        user: userId,
-        group: groupId,
+        userId: userId,
+        groupId: groupId,
         status: 'active',
       });
 

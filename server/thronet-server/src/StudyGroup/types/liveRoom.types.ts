@@ -99,6 +99,7 @@ export interface ParticipantInfo {
  */
 export interface LiveRoomResponse {
   _id: Types.ObjectId | string;
+  roomId: string;
   group: Types.ObjectId | string;
   title: string;
   description?: string;

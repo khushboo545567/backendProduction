@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { Types } from 'mongoose';
 import { asyncHandler } from '@/shared/utils/helpers.util';
 import * as webrtcService from '../services/webrtc.service';
 import ResponseUtil from '@/shared/response.util';
@@ -178,7 +177,7 @@ export const toggleCamera = asyncHandler(async (req: Request, res: Response) => 
   const liveRoom = await liveRoomRepository.findRawById(req.params.roomId!);
   if (!liveRoom) throw new ValidationError('Live room not found');
 
-  await liveRoom.toggleCamera(new Types.ObjectId(userId!), value.cameraOn);
+  await liveRoom.toggleCamera(userId!, value.cameraOn);
 
   LoggerUtil.info(`User ${userId} toggled camera ${value.cameraOn ? 'ON' : 'OFF'} in room ${req.params.roomId}`);
   return ResponseUtil.success(res, { cameraOn: value.cameraOn }, `Camera turned ${value.cameraOn ? 'on' : 'off'} successfully`);
@@ -199,7 +198,7 @@ export const toggleMic = asyncHandler(async (req: Request, res: Response) => {
   const liveRoom = await liveRoomRepository.findRawById(req.params.roomId!);
   if (!liveRoom) throw new ValidationError('Live room not found');
 
-  await liveRoom.toggleMic(new Types.ObjectId(userId!), value.micOn);
+  await liveRoom.toggleMic(userId!, value.micOn);
 
   LoggerUtil.info(`User ${userId} toggled mic ${value.micOn ? 'ON' : 'OFF'} in room ${req.params.roomId}`);
   return ResponseUtil.success(res, { micOn: value.micOn }, `Microphone turned ${value.micOn ? 'on' : 'off'} successfully`);
@@ -220,7 +219,7 @@ export const toggleScreenShare = asyncHandler(async (req: Request, res: Response
   const liveRoom = await liveRoomRepository.findRawById(req.params.roomId!);
   if (!liveRoom) throw new ValidationError('Live room not found');
 
-  await liveRoom.toggleScreenShare(new Types.ObjectId(userId!), value.sharing);
+  await liveRoom.toggleScreenShare(userId!, value.sharing);
 
   LoggerUtil.info(`User ${userId} toggled screen share ${value.sharing ? 'ON' : 'OFF'} in room ${req.params.roomId}`);
   return ResponseUtil.success(res, { sharing: value.sharing }, `Screen sharing ${value.sharing ? 'started' : 'stopped'} successfully`);

@@ -19,6 +19,7 @@
  *     does for 1:1 sessions.
  */
 
+import mongoose from 'mongoose';
 import { Server } from 'socket.io';
 import {
   AuthenticatedSocket,
@@ -33,6 +34,7 @@ import {
   WebRTCIceCandidatePayload,
 } from '../types/Socket.types';
 import GroupMember from '../models/GroupMember.model';
+import LiveRoom from '../models/LiveRoom.model';
 import { LoggerUtil } from '@/shared/logger.util';
 import { SessionMentor, Mentor, GroupSession } from '@/Mentorship/models';
 
@@ -72,20 +74,32 @@ async function isMentorshipSessionMember(userId: string, roomId: string): Promis
 }
 
 // ─── Helper: verify room access and determine max capacity ────────────────────
-async function getRoomAccess(userId: string, roomId: string): Promise<{ allowed: boolean, maxCapacity: number }> {
+async function getRoomAccess(userId: string, roomId: string): Promise<{ allowed: boolean, maxCapacity: number, errorReason?: string }> {
   // Allow mock group ID '1' for frontend UI testing
   if (roomId === '1' || roomId === 1 as any) return { allowed: true, maxCapacity: MAX_ROOM_SIZE };
 
   if (!userId || !roomId) {
     LoggerUtil.warn(`Missing userId or roomId in getRoomAccess check`);
-    return { allowed: false, maxCapacity: 0 };
+    return { allowed: false, maxCapacity: 0, errorReason: 'Missing user ID or room ID' };
   }
 
   // 1. StudyGroup room
   try {
+    let targetGroupId = roomId;
+    if (mongoose.isValidObjectId(roomId)) {
+      const liveRoom = await LiveRoom.findById(roomId).lean();
+      if (!liveRoom) {
+        return { allowed: false, maxCapacity: 0, errorReason: 'Live room not found' };
+      }
+      if (!liveRoom.isActive) {
+        return { allowed: false, maxCapacity: 0, errorReason: 'This live room has ended' };
+      }
+      targetGroupId = liveRoom.group;
+    }
+
     const member = await GroupMember.findOne({
       userId: userId,
-      groupId: roomId,
+      groupId: targetGroupId,
       status: 'active',
     }).lean();
     if (member) return { allowed: true, maxCapacity: MAX_ROOM_SIZE };
@@ -145,12 +159,12 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
       const { roomId } = data;
       if (!roomId) return;
 
-      // roomId == groupId in your domain
-      const { allowed, maxCapacity } = await getRoomAccess(userId, roomId);
+      // roomId can be live room ObjectId or groupId
+      const { allowed, maxCapacity, errorReason } = await getRoomAccess(userId, roomId);
       if (!allowed) {
         socket.emit('error', {
           event: 'join-live-room',
-          message: 'You are not a member of this group',
+          message: errorReason || 'You are not a member of this group',
         });
         return;
       }
