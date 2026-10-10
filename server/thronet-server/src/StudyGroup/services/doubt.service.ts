@@ -1,21 +1,37 @@
 // services/doubt.service.ts
 
-import doubtRepository from '../repositories/doubt.repository';
-import answerRepository from '../repositories/answer.repository';
-import groupMemberRepository from '../repositories/groupMember.repository';
-import { IDoubt } from '../interfaces/IDoubt';
-import { IAnswer } from '../interfaces/IAnswer';
-import { NotFoundError, BadRequestError, ForbiddenError } from '@/shared/errors/app.error';
-import { CreateDoubtDTO, UpdateDoubtDTO, DoubtQueryParams } from '../types/doubt.types';
-import { MemberStatus } from '../interfaces/IGroupMember';
+import doubtRepository from "../repositories/doubt.repository";
+import answerRepository from "../repositories/answer.repository";
+import groupMemberRepository from "../repositories/groupMember.repository";
+import { IDoubt } from "../interfaces/IDoubt";
+import { IAnswer } from "../interfaces/IAnswer";
+import {
+  NotFoundError,
+  BadRequestError,
+  ForbiddenError,
+} from "@/shared/errors/app.error";
+import {
+  CreateDoubtDTO,
+  UpdateDoubtDTO,
+  DoubtQueryParams,
+} from "../types/doubt.types";
+import { MemberStatus } from "../interfaces/IGroupMember";
 
 class DoubtService {
-
-  async createDoubt(userId: string, groupId: string, data: CreateDoubtDTO): Promise<IDoubt> {
+  async createDoubt(
+    userId: string,
+    groupId: string,
+    data: CreateDoubtDTO,
+  ): Promise<IDoubt> {
     // Membership check — string userId/groupId
-    const membership = await groupMemberRepository.findActiveOne(groupId, userId);
+    const membership = await groupMemberRepository.findActiveOne(
+      groupId,
+      userId,
+    );
     if (!membership) {
-      throw new ForbiddenError('You must be a member of this group to post doubts');
+      throw new ForbiddenError(
+        "You must be a member of this group to post doubts",
+      );
     }
 
     const doubt = await doubtRepository.create({
@@ -24,24 +40,34 @@ class DoubtService {
       postedBy: userId,
     } as Partial<IDoubt>);
 
-    await doubt.populate('postedBy', 'name email avatar');
+    // await doubt.populate('postedBy', 'name email avatar');
     return doubt;
   }
 
   async getDoubtById(doubtId: string, userId?: string): Promise<IDoubt> {
     const doubt = await doubtRepository.findByDoubtId(doubtId);
-    if (!doubt) throw new NotFoundError('Doubt not found');
+    if (!doubt) throw new NotFoundError("Doubt not found");
 
     // View count increment — async
     if (userId && userId !== doubt.postedBy) {
-      doubtRepository.update(doubt._id.toString(), { $inc: { viewCount: 1 } }).catch(() => {});
+      doubtRepository
+        .update(doubt._id.toString(), { $inc: { viewCount: 1 } })
+        .catch(() => {});
     }
 
     return doubt;
   }
 
   async getGroupDoubts(groupId: string, params: DoubtQueryParams) {
-    const { category, isSolved, isUrgent, page = 1, limit = 20, sort = 'recent', search } = params;
+    const {
+      category,
+      isSolved,
+      isUrgent,
+      page = 1,
+      limit = 20,
+      sort = "recent",
+      search,
+    } = params;
 
     const filter: any = { group: groupId, isDeleted: false };
     if (category) filter.category = category;
@@ -49,9 +75,9 @@ class DoubtService {
     if (isUrgent !== undefined) filter.isUrgent = isUrgent;
     if (search) {
       filter.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } },
+        { title: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { tags: { $in: [new RegExp(search, "i")] } },
       ];
     }
 
@@ -65,14 +91,21 @@ class DoubtService {
 
     const skip = (page - 1) * limit;
     const [doubts, total] = await Promise.all([
-      doubtRepository.findWithPagination(filter, sortMap[sort] || sortMap.recent, skip, limit),
+      doubtRepository.findWithPagination(
+        filter,
+        sortMap[sort] || sortMap.recent,
+        skip,
+        limit,
+      ),
       doubtRepository.count(filter),
     ]);
 
     return {
       doubts,
       pagination: {
-        page, limit, total,
+        page,
+        limit,
+        total,
         totalPages: Math.ceil(total / limit),
         hasNextPage: page < Math.ceil(total / limit),
         hasPrevPage: page > 1,
@@ -94,45 +127,69 @@ class DoubtService {
     return {
       doubts,
       pagination: {
-        page, limit, total,
+        page,
+        limit,
+        total,
         totalPages: Math.ceil(total / limit),
       },
     };
   }
 
-  async updateDoubt(doubtId: string, userId: string, data: UpdateDoubtDTO): Promise<IDoubt> {
+  async updateDoubt(
+    doubtId: string,
+    userId: string,
+    data: UpdateDoubtDTO,
+  ): Promise<IDoubt> {
     const doubt = await doubtRepository.findRawByDoubtId(doubtId, userId);
-    if (!doubt) throw new NotFoundError('Doubt not found');
-    if (doubt.postedBy !== userId) throw new ForbiddenError('You can only update your own doubts');
-    if (doubt.isSolved) throw new BadRequestError('Cannot update a solved doubt');
+    if (!doubt) throw new NotFoundError("Doubt not found");
+    if (doubt.postedBy !== userId)
+      throw new ForbiddenError("You can only update your own doubts");
+    if (doubt.isSolved)
+      throw new BadRequestError("Cannot update a solved doubt");
 
     Object.assign(doubt, data);
     await doubt.save();
-    await doubt.populate('postedBy', 'name email avatar');
+    await doubt.populate("postedBy", "name email avatar");
     return doubt;
   }
 
-  async deleteDoubt(doubtId: string, userId: string, isLeader: boolean = false): Promise<{ message: string }> {
+  async deleteDoubt(
+    doubtId: string,
+    userId: string,
+    isLeader: boolean = false,
+  ): Promise<{ message: string }> {
     const doubt = await doubtRepository.findRawByDoubtId(doubtId);
-    if (!doubt) throw new NotFoundError('Doubt not found');
+    if (!doubt) throw new NotFoundError("Doubt not found");
     if (doubt.postedBy !== userId && !isLeader) {
-      throw new ForbiddenError('You can only delete your own doubts');
+      throw new ForbiddenError("You can only delete your own doubts");
     }
 
     await doubt.softDelete();
     await answerRepository.softDeleteByDoubt(doubtId);
-    return { message: 'Doubt deleted successfully' };
+    return { message: "Doubt deleted successfully" };
   }
 
-  async markAsSolved(doubtId: string, userId: string, bestAnswerId: string): Promise<IDoubt> {
+  async markAsSolved(
+    doubtId: string,
+    userId: string,
+    bestAnswerId: string,
+  ): Promise<IDoubt> {
     const doubt = await doubtRepository.findRawByDoubtId(doubtId);
-    if (!doubt) throw new NotFoundError('Doubt not found');
-    if (doubt.postedBy !== userId) throw new ForbiddenError('Only the doubt poster can mark it as solved');
-    if (doubt.isSolved) throw new BadRequestError('Doubt is already marked as solved');
+    if (!doubt) throw new NotFoundError("Doubt not found");
+    if (doubt.postedBy !== userId)
+      throw new ForbiddenError("Only the doubt poster can mark it as solved");
+    if (doubt.isSolved)
+      throw new BadRequestError("Doubt is already marked as solved");
 
     // Answer verify karo — UUID se
-    const answer = await answerRepository.findByDoubtAndAnswerId(bestAnswerId, doubtId);
-    if (!answer) throw new NotFoundError('Answer not found or does not belong to this doubt');
+    const answer = await answerRepository.findByDoubtAndAnswerId(
+      bestAnswerId,
+      doubtId,
+    );
+    if (!answer)
+      throw new NotFoundError(
+        "Answer not found or does not belong to this doubt",
+      );
 
     // Best answer mark karo
     await answerRepository.markAsBest(bestAnswerId, doubtId);
@@ -143,8 +200,8 @@ class DoubtService {
     doubt.bestAnswer = bestAnswerId;
     await doubt.save();
 
-    await doubt.populate('postedBy', 'name email avatar');
-    await doubt.populate('bestAnswer');
+    await doubt.populate("postedBy", "name email avatar");
+    await doubt.populate("bestAnswer");
     return doubt;
   }
 
@@ -164,21 +221,30 @@ class DoubtService {
     return await doubtRepository.searchDoubts(query, groupId);
   }
 
-  async getDoubtsByCategory(category: string, groupId?: string): Promise<IDoubt[]> {
+  async getDoubtsByCategory(
+    category: string,
+    groupId?: string,
+  ): Promise<IDoubt[]> {
     return await doubtRepository.findByCategory(category, groupId);
   }
 
-  async tagMembers(doubtId: string, userId: string, memberIds: string[]): Promise<IDoubt> {
+  async tagMembers(
+    doubtId: string,
+    userId: string,
+    memberIds: string[],
+  ): Promise<IDoubt> {
     const doubt = await doubtRepository.findRawByDoubtId(doubtId);
-    if (!doubt) throw new NotFoundError('Doubt not found');
-    if (doubt.postedBy !== userId) throw new ForbiddenError('Only doubt poster can tag members');
+    if (!doubt) throw new NotFoundError("Doubt not found");
+    if (doubt.postedBy !== userId)
+      throw new ForbiddenError("Only doubt poster can tag members");
 
     // Validate members — string userId comparison
     const validMembers = await groupMemberRepository.findByGroupId(doubt.group);
-    const validMemberIds = validMembers.map(m => m.userId);
-    const allValid = memberIds.every(id => validMemberIds.includes(id));
+    const validMemberIds = validMembers.map((m) => m.userId);
+    const allValid = memberIds.every((id) => validMemberIds.includes(id));
 
-    if (!allValid) throw new BadRequestError('Some users are not members of this group');
+    if (!allValid)
+      throw new BadRequestError("Some users are not members of this group");
 
     // Duplicates avoid karo
     doubt.taggedMembers = [...new Set([...doubt.taggedMembers, ...memberIds])];
@@ -196,12 +262,21 @@ class DoubtService {
 
   // ====== ANSWER OPERATIONS ======
 
-  async answerDoubt(doubtId: string, userId: string, content: string, links?: any[]): Promise<IAnswer> {
+  async answerDoubt(
+    doubtId: string,
+    userId: string,
+    content: string,
+    links?: any[],
+  ): Promise<IAnswer> {
     const doubt = await doubtRepository.findRawByDoubtId(doubtId);
-    if (!doubt) throw new NotFoundError('Doubt not found');
+    if (!doubt) throw new NotFoundError("Doubt not found");
 
-    const membership = await groupMemberRepository.findActiveOne(doubt.group, userId);
-    if (!membership) throw new ForbiddenError('You must be a member to answer doubts');
+    const membership = await groupMemberRepository.findActiveOne(
+      doubt.group,
+      userId,
+    );
+    if (!membership)
+      throw new ForbiddenError("You must be a member to answer doubts");
 
     const answer = await answerRepository.create({
       doubt: doubtId,
@@ -210,7 +285,7 @@ class DoubtService {
       links: links || [],
     } as Partial<IAnswer>);
 
-    await answer.populate('answeredBy', 'name email avatar');
+    // await answer.populate("answeredBy", "name email avatar");
     return answer;
   }
 
@@ -228,7 +303,7 @@ class DoubtService {
 
   async upvoteAnswer(answerId: string, userId: string): Promise<IAnswer> {
     const answer = await answerRepository.findByAnswerId(answerId);
-    if (!answer) throw new NotFoundError('Answer not found');
+    if (!answer) throw new NotFoundError("Answer not found");
 
     await answer.upvote(userId);
     return answer;
@@ -236,45 +311,57 @@ class DoubtService {
 
   async downvoteAnswer(answerId: string, userId: string): Promise<IAnswer> {
     const answer = await answerRepository.findByAnswerId(answerId);
-    if (!answer) throw new NotFoundError('Answer not found');
+    if (!answer) throw new NotFoundError("Answer not found");
 
     await answer.downvote(userId);
     return answer;
   }
 
-  async updateAnswer(answerId: string, userId: string, content: string, links?: any[]): Promise<IAnswer> {
+  async updateAnswer(
+    answerId: string,
+    userId: string,
+    content: string,
+    links?: any[],
+  ): Promise<IAnswer> {
     const answer = await answerRepository.findRawByAnswerId(answerId, userId);
-    if (!answer) throw new NotFoundError('Answer not found');
-    if (answer.answeredBy !== userId) throw new ForbiddenError('You can only update your own answers');
+    if (!answer) throw new NotFoundError("Answer not found");
+    if (answer.answeredBy !== userId)
+      throw new ForbiddenError("You can only update your own answers");
 
     // 1 hour check
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     if (answer.createdAt < oneHourAgo && !answer.isEdited) {
-      throw new BadRequestError('You can only edit answers within 1 hour of posting');
+      throw new BadRequestError(
+        "You can only edit answers within 1 hour of posting",
+      );
     }
 
     answer.content = content;
     if (links) answer.links = links;
     await answer.save();
-    await answer.populate('answeredBy', 'name email avatar');
+    await answer.populate("answeredBy", "name email avatar");
     return answer;
   }
 
-  async deleteAnswer(answerId: string, userId: string, isLeader: boolean = false): Promise<{ message: string }> {
+  async deleteAnswer(
+    answerId: string,
+    userId: string,
+    isLeader: boolean = false,
+  ): Promise<{ message: string }> {
     const answer = await answerRepository.findRawByAnswerId(answerId);
-    if (!answer) throw new NotFoundError('Answer not found');
+    if (!answer) throw new NotFoundError("Answer not found");
     if (answer.answeredBy !== userId && !isLeader) {
-      throw new ForbiddenError('You can only delete your own answers');
+      throw new ForbiddenError("You can only delete your own answers");
     }
-    if (answer.isBestAnswer) throw new BadRequestError('Cannot delete the best answer');
+    if (answer.isBestAnswer)
+      throw new BadRequestError("Cannot delete the best answer");
 
     await answer.softDelete();
-    return { message: 'Answer deleted successfully' };
+    return { message: "Answer deleted successfully" };
   }
 }
 
 export default new DoubtService();
-
 
 // /**
 //  * ====================================

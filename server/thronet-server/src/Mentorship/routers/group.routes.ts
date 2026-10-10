@@ -72,6 +72,13 @@ const createGroupSessionValidator = Joi.object({
     })
   }).optional(),
   bufferTimeMinutes: Joi.number().min(0).max(60).optional().default(0),
+  meetingUrl: Joi.string()
+    .pattern(/^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3}|lookup\/[A-Za-z0-9]+)(\?.*)?$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Must be a valid Google Meet link (e.g. https://meet.google.com/abc-defg-hij)',
+      'any.required': 'Google Meet link is required',
+    }),
 });
 
 
@@ -110,6 +117,12 @@ const updateGroupSessionValidator = Joi.object({
       otherwise: Joi.optional(),
     }),
   }).optional(),
+  meetingUrl: Joi.string()
+    .pattern(/^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3}|lookup\/[A-Za-z0-9]+)(\?.*)?$/)
+    .optional()
+    .messages({
+      'string.pattern.base': 'Must be a valid Google Meet link (e.g. https://meet.google.com/abc-defg-hij)',
+    }),
   // thumbnailImage is a file — handled by uploadSingle() middleware
   // separately (lands on req.file, not req.body), so it never needs a
   // Joi key here. Left out intentionally.
@@ -302,6 +315,15 @@ router.put(
   groupController.updateGroupSession
 );
 
+router.patch(
+  '/:id',
+  AuthMiddleware.authenticate as any,
+  uploadSingle('thumbnailImage', 'image', true),
+  parseFormDataFields,
+  validateJoi(updateGroupSessionValidator),
+  groupController.updateGroupSession
+);
+
 /**
  * @route   DELETE /api/v1/group-sessions/:id
  * @desc    Hard-delete a group session with no participants
@@ -383,6 +405,17 @@ router.post(
   AuthMiddleware.authenticate as any,
   validateJoi(addFeedbackValidator),
   groupController.addFeedback
+);
+
+/**
+ * @route   POST /api/v1/group-sessions/:id/attend
+ * @desc    Mentee clicks Join Meet to mark attendance (in_progress and accepted)
+ * @access  Private (Mentee)
+ */
+router.post(
+  '/:id/attend',
+  AuthMiddleware.authenticate as any,
+  groupController.markAttendance
 );
 
 router.patch(

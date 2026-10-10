@@ -42,7 +42,7 @@ class ReviewService {
 
       const existingReview = await reviewRepository.findBySessionId(input.sessionId);
       if (existingReview) {
-        throw new Error('Review already submitted for this session');
+        throw new Error('You have already reviewed this session.');
       }
 
       // ✅ FIX: root-level session.menteeId defaults to null and is never
@@ -105,6 +105,9 @@ class ReviewService {
       return review;
     } catch (error: any) {
       logger.error('❌ Failed to submit review:', error);
+      if (error.code === 11000 || (error.message && error.message.includes('E11000'))) {
+        throw new Error('You have already reviewed this session.');
+      }
       throw error;
     }
   }

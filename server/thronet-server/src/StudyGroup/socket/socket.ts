@@ -26,6 +26,21 @@ export interface JWTPayload {
 const userSockets = new Map<string, Set<string>>(); // userId -> Set of socketIds
 const socketUsers = new Map<string, string>(); // socketId -> userId
 const groupRooms = new Map<string, Set<string>>(); // groupId -> Set of userIds
+// Active session tracking per group room
+const groupActiveSessions = new Map<string, Map<string, { lastSeen: number; elapsedTime: number }>>(); // groupId -> Map of userId -> session
+const socketBroadcastRateLimit = new Map<string, number>(); // socketId -> timestamp
+
+const removeUserActiveSession = (groupId: string, userId: string, io: Server) => {
+  const sessions = groupActiveSessions.get(groupId);
+  if (sessions && sessions.has(userId)) {
+    sessions.delete(userId);
+    if (sessions.size === 0) {
+      groupActiveSessions.delete(groupId);
+    }
+    io.to(groupId).emit('member-session-ended', { groupId, userId });
+  }
+};
+
 
 
 
@@ -91,56 +106,43 @@ const verifyGroupMembership = async (
 };
 
 /**
- * Initialize Socket.io event handlers
+ * Initialize StudyGroup real-time session, active tracking and presence handlers
  */
-export const setupSocketHandlers = (io: Server): void => {
-  io.on('connection', async (socket: Socket) => {
-    LoggerUtil.info(`🔌 New socket connection: ${socket.id}`);
+export const setupStudyGroupSessionHandlers = (
+  io: Server,
+  socket: Socket,
+  userId: string
+): void => {
+  // Store socket connection
+  if (!userSockets.has(userId)) {
+    userSockets.set(userId, new Set());
+  }
+  userSockets.get(userId)!.add(socket.id);
+  socketUsers.set(socket.id, userId);
 
-    // Authenticate socket
-    const userId = await authenticateSocket(socket);
+  LoggerUtil.info(`✅ User ${userId} connected via socket ${socket.id}`);
+  LoggerUtil.info(`👥 Total active sockets for user ${userId}: ${userSockets.get(userId)!.size}`);
 
-    if (!userId) {
-      LoggerUtil.warn(`⚠️  Unauthenticated socket connection: ${socket.id}`);
-      socket.emit('error', { message: 'Authentication required' });
-      socket.disconnect(true);
-      return;
-    }
+  // Attach userId to socket
+  socket.data.userId = userId;
+  (socket as any).userId = userId;
 
-    // Store socket connection
-    if (!userSockets.has(userId)) {
-      userSockets.set(userId, new Set());
-    }
-    userSockets.get(userId)!.add(socket.id);
-    socketUsers.set(socket.id, userId);
+  // Get user details for live room handler
+  User.findOne({ userId })
+    .select('username name firstName lastName')
+    .then((user) => {
+      const userName =
+        user?.username ||
+        (user as any)?.name ||
+        ((user as any)?.firstName ? `${(user as any).firstName} ${(user as any).lastName || ''}`.trim() : '') ||
+        'Unknown User';
+      socket.data.userName = userName;
+      (socket as any).userName = userName;
+    })
+    .catch((err) => {
+      LoggerUtil.error(`Failed to fetch user name for socket: ${err.message}`);
+    });
 
-    LoggerUtil.info(`✅ User ${userId} connected via socket ${socket.id}`);
-    LoggerUtil.info(`👥 Total active sockets for user ${userId}: ${userSockets.get(userId)!.size}`);
-
-    // Attach userId to socket
-    socket.data.userId = userId;
-
-    // Get user details for live room handler
-    // BUG FIX: userId is a UUID string, so we must use findOne({ userId }) instead of findById
-    const user = await User.findOne({ userId }).select('username name firstName lastName');
-    const userName =
-      user?.username ||
-      (user as any)?.name ||
-      ((user as any)?.firstName ? `${(user as any).firstName} ${(user as any).lastName || ''}`.trim() : '') ||
-      'Unknown User';
-
-    // BUG FIX: set BOTH socket.data.userName AND (socket as any).userName.
-    // liveRoomHandler reads socket.data.userName — it was always undefined before.
-    socket.data.userName = userName;
-    (socket as any).userId = userId;
-    (socket as any).userName = userName;
-
-    // ⚡ CRITICAL: Join the user's personal socket room.
-    // This is required for WebRTC P2P signaling (offer/answer/ICE).
-    // liveRoomHandler uses io.to(`user:${targetUserId}`) to send signals
-    // directly to a specific peer — without this, all WebRTC signals are dropped.
-    socket.join(`user:${userId}`);
-    LoggerUtil.info(`📡 User ${userId} joined personal room user:${userId}`);
 
     // ==========================================
     // JOIN GROUP ROOM
@@ -191,6 +193,24 @@ export const setupSocketHandlers = (io: Server): void => {
           timestamp: new Date(),
         });
 
+        // Send current active study members to the joined user
+        const sessions = groupActiveSessions.get(groupId);
+        const now = Date.now();
+        const activeList: { userId: string; elapsedTime: number }[] = [];
+        if (sessions) {
+          sessions.forEach((val, uId) => {
+            if (now - val.lastSeen <= 90000) {
+              activeList.push({ userId: uId, elapsedTime: val.elapsedTime });
+            } else {
+              sessions.delete(uId);
+            }
+          });
+        }
+        socket.emit('active-members', {
+          groupId,
+          members: activeList,
+        });
+
       } catch (error: any) {
         LoggerUtil.error(`❌ Error joining group:`, error);
         socket.emit('error', { 
@@ -225,6 +245,9 @@ export const setupSocketHandlers = (io: Server): void => {
           message: 'Successfully left group room' 
         });
 
+        // Remove active session if any
+        removeUserActiveSession(groupId, userId, io);
+
         // Notify others in the group
         socket.to(groupId).emit('user-left-group', {
           userId,
@@ -242,67 +265,173 @@ export const setupSocketHandlers = (io: Server): void => {
     });
 
     // ==========================================
-    // CHAT EVENTS
+    // GET ACTIVE MEMBERS
     // ==========================================
-    handleChatEvents(io, socket, userId);
+    socket.on('get-active-members', async (data: { groupId: string } | string) => {
+      try {
+        const targetGroupId = typeof data === 'string' ? data : data?.groupId;
+        if (!targetGroupId || typeof targetGroupId !== 'string') return;
 
-    // ==========================================
-    // TYPING EVENTS
-    // ==========================================
-    handleTypingEvents(socket, userId);
+        // Security: verify membership
+        const isMember = await verifyGroupMembership(userId, targetGroupId);
+        if (!isMember) {
+          socket.emit('error', {
+            event: 'get-active-members',
+            message: 'You are not a member of this group',
+          });
+          return;
+        }
 
-    // ==========================================
-    // PRESENCE EVENTS
-    // ==========================================
-    handlePresenceEvents(io, socket, userId);
-
-    // ==========================================
-    // LIVE ROOM EVENTS (NEW)
-    // ==========================================
-    liveRoomHandler(io, socket as any);
-
-    // ==========================================
-    // DISCONNECT
-    // ==========================================
-    socket.on('disconnect', (reason) => {
-      LoggerUtil.info(`🔌 Socket disconnected: ${socket.id}, Reason: ${reason}`);
-
-      // Remove socket from tracking
-      if (userSockets.has(userId)) {
-        userSockets.get(userId)!.delete(socket.id);
-        if (userSockets.get(userId)!.size === 0) {
-          userSockets.delete(userId);
-          
-          // User is completely offline
-          LoggerUtil.info(`👋 User ${userId} is now offline (all sockets disconnected)`);
-
-          // Notify all groups where user was present
-          groupRooms.forEach((members, groupId) => {
-            if (members.has(userId)) {
-              io.to(groupId).emit('user-offline', {
-                userId,
-                lastSeen: new Date(),
-              });
-              members.delete(userId);
+        const now = Date.now();
+        const sessions = groupActiveSessions.get(targetGroupId);
+        const activeList: { userId: string; elapsedTime: number }[] = [];
+        if (sessions) {
+          sessions.forEach((val, uId) => {
+            if (now - val.lastSeen <= 90000) {
+              activeList.push({ userId: uId, elapsedTime: val.elapsedTime });
+            } else {
+              sessions.delete(uId);
             }
           });
         }
+        socket.emit('active-members', {
+          groupId: targetGroupId,
+          members: activeList,
+        });
+      } catch (err: any) {
+        LoggerUtil.error('❌ Error handling get-active-members:', err);
       }
-
-      socketUsers.delete(socket.id);
-
-      LoggerUtil.info(`👥 Remaining active connections for user ${userId}: ${userSockets.get(userId)?.size || 0}`);
     });
 
     // ==========================================
-    // ERROR HANDLING
+    // SESSION PAUSED
     // ==========================================
-    socket.on('error', (error) => {
-      LoggerUtil.error(`❌ Socket error on ${socket.id}:`, error);
+    socket.on('session-paused', async (data: { groupId: string } | string) => {
+      try {
+        const targetGroupId = typeof data === 'string' ? data : data?.groupId;
+        if (!targetGroupId || typeof targetGroupId !== 'string') return;
+
+        // Security: verify membership
+        const isMember = await verifyGroupMembership(userId, targetGroupId);
+        if (!isMember) return;
+
+        const sessions = groupActiveSessions.get(targetGroupId);
+        if (sessions) {
+          sessions.delete(userId);
+        }
+        socket.to(targetGroupId).emit('member-session-paused', {
+          groupId: targetGroupId,
+          userId,
+        });
+      } catch (err: any) {
+        LoggerUtil.error('❌ Error handling session-paused:', err);
+      }
     });
+
+    // ==========================================
+    // BROADCAST SESSION TIME
+    // ==========================================
+    socket.on('broadcast-session-time', async (data: { groupId: string; elapsedTime: number }) => {
+      try {
+        if (
+          !data?.groupId ||
+          typeof data.groupId !== 'string' ||
+          typeof data.elapsedTime !== 'number' ||
+          !Number.isFinite(data.elapsedTime) ||
+          data.elapsedTime < 0
+        ) {
+          return;
+        }
+
+        // Rate limiting: at most once every 3 seconds per socket
+        const now = Date.now();
+        const last = socketBroadcastRateLimit.get(socket.id) || 0;
+        if (now - last < 3000) {
+          return;
+        }
+        socketBroadcastRateLimit.set(socket.id, now);
+
+        // Verify group membership
+        const isMember = await verifyGroupMembership(userId, data.groupId);
+        if (!isMember) return;
+
+        if (!groupActiveSessions.has(data.groupId)) {
+          groupActiveSessions.set(data.groupId, new Map());
+        }
+        groupActiveSessions.get(data.groupId)!.set(userId, {
+          lastSeen: now,
+          elapsedTime: data.elapsedTime,
+        });
+
+        socket.to(data.groupId).emit('member-session-update', {
+          groupId: data.groupId,
+          userId,
+          elapsedTime: data.elapsedTime,
+          timestamp: now,
+        });
+      } catch (err: any) {
+        LoggerUtil.error('❌ Error handling broadcast-session-time:', err);
+      }
+    });
+
+  // ==========================================
+  // TYPING EVENTS
+  // ==========================================
+  handleTypingEvents(socket, userId);
+
+  // ==========================================
+  // DISCONNECT
+  // ==========================================
+  socket.on('disconnect', (reason) => {
+    LoggerUtil.info(`🔌 Socket disconnected: ${socket.id}, Reason: ${reason}`);
+
+    // Remove socket from tracking and rate limiter
+    socketBroadcastRateLimit.delete(socket.id);
+
+    if (userSockets.has(userId)) {
+      userSockets.get(userId)!.delete(socket.id);
+      if (userSockets.get(userId)!.size === 0) {
+        userSockets.delete(userId);
+        
+        // User is completely offline
+        LoggerUtil.info(`👋 User ${userId} is now offline (all sockets disconnected)`);
+
+        // Notify all groups where user was present and remove active sessions
+        groupRooms.forEach((members, groupId) => {
+          if (members.has(userId)) {
+            io.to(groupId).emit('user-offline', {
+              userId,
+              lastSeen: new Date(),
+            });
+            members.delete(userId);
+            removeUserActiveSession(groupId, userId, io);
+          }
+        });
+      }
+    }
+
+    socketUsers.delete(socket.id);
+
+    LoggerUtil.info(`👥 Remaining active connections for user ${userId}: ${userSockets.get(userId)?.size || 0}`);
   });
 
-  LoggerUtil.info('✅ Socket.io event handlers initialized');
+  // ==========================================
+  // ERROR HANDLING
+  // ==========================================
+  socket.on('error', (error) => {
+    LoggerUtil.error(`❌ Socket error on ${socket.id}:`, error);
+  });
+};
+
+/**
+ * Initialize Socket.io event handlers (legacy wrapper)
+ */
+export const setupSocketHandlers = (io: Server): void => {
+  io.on('connection', async (socket: Socket) => {
+    const userId = await authenticateSocket(socket);
+    if (!userId) return;
+    setupStudyGroupSessionHandlers(io, socket, userId);
+  });
 };
 
 /**

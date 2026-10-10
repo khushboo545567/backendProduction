@@ -31,12 +31,10 @@ class WaitlistCron {
       const session: any = await SessionMentor.findOne({ sessionId });
       if (!session) return 0;
 
-      const notified = await waitlistService.notifyNextInLine(session.mentorId, undefined, {
-        serviceId: session.sessionId,
-      });
+      const notified = await waitlistService.processWaitlist(session.mentorId, session.sessionId || session.serviceId);
       return notified ? 1 : 0;
     } catch (error: any) {
-      logger.error('❌ Failed to notify waitlist for session:', error);
+      logger.error('❌ Failed to process waitlist for session cancellation:', error);
       return 0;
     }
   }

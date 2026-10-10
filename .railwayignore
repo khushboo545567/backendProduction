@@ -1,0 +1,4 @@
+logs-export/
+**/node_modules/
+**/dist/
+*.log

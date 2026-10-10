@@ -5,10 +5,13 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
  * Waitlist Status
  */
 export enum WaitlistStatus {
+  WAITING = 'waiting',
   ACTIVE = 'active',
   NOTIFIED = 'notified',
+  CONVERTED = 'converted',
   BOOKED = 'booked',
   EXPIRED = 'expired',
+  DECLINED = 'declined',
   CANCELLED = 'cancelled',
 }
 
@@ -38,10 +41,18 @@ export interface IWaitlist extends Document {
   status: WaitlistStatus;
   priority: number; // Higher priority users notified first
 
+  // Offered Slot Hold
+  offeredSlot?: {
+    date?: Date;
+    startTime?: string;
+    endTime?: string;
+    slotId?: string;
+  };
+
   // Notification tracking
   notifiedAt?: Date;
   notificationSent: boolean;
-  bookingWindowExpiresAt?: Date; // 48 hours to book after notification
+  bookingWindowExpiresAt?: Date; // 24 hours to book after notification
 
   // Booking reference
   sessionId?: string;
@@ -57,8 +68,8 @@ export interface IWaitlist extends Document {
   updatedAt: Date;
 
   // Methods
-  notify(): Promise<void>;
-  markAsBooked(sessionId: mongoose.Types.ObjectId): Promise<void>;
+  notify(offeredSlot?: any, windowHours?: number): Promise<void>;
+  markAsBooked(sessionId: mongoose.Types.ObjectId | string): Promise<void>;
   markAsExpired(): Promise<void>;
   cancel(reason: string): Promise<void>;
   isBookingWindowExpired(): boolean;
@@ -133,6 +144,12 @@ const WaitlistSchema = new Schema<IWaitlist>(
       default: 0,
       index: true,
     },
+    offeredSlot: {
+      date: Date,
+      startTime: String,
+      endTime: String,
+      slotId: String,
+    },
     notifiedAt: Date,
     notificationSent: {
       type: Boolean,
@@ -194,8 +211,8 @@ WaitlistSchema.pre('save', function (next) {
 /**
  * Method: Notify user about availability
  */
-WaitlistSchema.methods.notify = async function (): Promise<void> {
-  if (this.status !== WaitlistStatus.ACTIVE) {
+WaitlistSchema.methods.notify = async function (offeredSlot?: any, windowHours = 24): Promise<void> {
+  if (this.status !== WaitlistStatus.ACTIVE && this.status !== WaitlistStatus.WAITING) {
     throw new Error('Waitlist entry is not active');
   }
 
@@ -203,26 +220,34 @@ WaitlistSchema.methods.notify = async function (): Promise<void> {
   this.notifiedAt = new Date();
   this.notificationSent = true;
 
-  // Set 48-hour booking window
+  if (offeredSlot) {
+    this.offeredSlot = offeredSlot;
+  }
+
+  // Set booking window (default 24 hours)
   const bookingWindow = new Date();
-  bookingWindow.setHours(bookingWindow.getHours() + 48);
+  bookingWindow.setHours(bookingWindow.getHours() + windowHours);
   this.bookingWindowExpiresAt = bookingWindow;
 
   await this.save();
 };
 
 /**
- * Method: Mark as booked
+ * Method: Mark as booked / converted
  */
 WaitlistSchema.methods.markAsBooked = async function (
-  sessionId: mongoose.Types.ObjectId
+  sessionId: mongoose.Types.ObjectId | string
 ): Promise<void> {
-  if (this.status !== WaitlistStatus.NOTIFIED && this.status !== WaitlistStatus.ACTIVE) {
+  if (
+    this.status !== WaitlistStatus.NOTIFIED &&
+    this.status !== WaitlistStatus.ACTIVE &&
+    this.status !== WaitlistStatus.WAITING
+  ) {
     throw new Error('Cannot mark this waitlist entry as booked');
   }
 
-  this.status = WaitlistStatus.BOOKED;
-  this.sessionId = sessionId;
+  this.status = WaitlistStatus.CONVERTED;
+  this.sessionId = sessionId.toString();
   this.bookedAt = new Date();
 
   await this.save();

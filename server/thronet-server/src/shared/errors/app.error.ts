@@ -1,5 +1,5 @@
 // errors/app.error.ts
-import { logger } from "@/shared/logger.util";
+import { logger, LoggerUtil } from "@/shared/logger.util";
 
 /**
  * Custom Application Error Class
@@ -202,7 +202,25 @@ export const errorHandler = (err: any, req: any, res: any, next: any) => {
     if (!(error instanceof AppError)) {
         const statusCode = error.statusCode || 500;
         const message = error.message || 'Internal Server Error';
+        const originalStack = error?.stack;
+        const originalName = error?.name;
         error = new AppError(message, statusCode, false);
+        if (originalStack) {
+            error.stack = originalStack;
+        }
+        if (originalName) {
+            error.name = originalName;
+        }
+    }
+
+    if (error.statusCode === 500) {
+        LoggerUtil.error(`500 Internal Server Error: ${error.name} - ${error.message}`, {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+            path: req.path,
+            method: req.method,
+        });
     }
 
     // Log error

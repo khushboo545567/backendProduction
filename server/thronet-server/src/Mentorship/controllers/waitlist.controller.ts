@@ -274,11 +274,11 @@ export const getWaitlistStats = async (
 };
 
 /**
- * @desc    Mentor approves a waiting entry (user gets 48h to book)
- * @route   POST /api/waitlist/:waitlistId/approve
+ * @desc    Mentor approves/offers a slot to a waitlist entry
+ * @route   POST /api/waitlist/:waitlistId/offer
  * @access  Private (Mentor)
  */
-export const approveWaitlistEntry = async (
+export const offerWaitlistSlot = async (
   req: Request,
   res: Response,
   next: NextFunction
@@ -293,9 +293,150 @@ export const approveWaitlistEntry = async (
     }
 
     const entry = await waitlistService.approveEntry(waitlistId, userId);
-    ResponseHandler.success(res, 'Waitlist entry approved. The user has been notified.', entry);
+    ResponseHandler.success(res, 'Slot offered to waitlist entry successfully', entry);
   } catch (error: any) {
-    logger.error('Error approving waitlist entry:', error);
+    logger.error('Error offering slot to waitlist entry:', error);
+    next(error);
+  }
+};
+
+export const approveWaitlistEntry = offerWaitlistSlot;
+
+/**
+ * @desc    Mentee claims an offered slot
+ * @route   POST /api/waitlist/:waitlistId/claim
+ * @access  Private
+ */
+export const claimWaitlistSlot = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const { waitlistId } = req.params;
+    const { sessionId } = req.body || {};
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const entry = await waitlistService.claimWaitlistSlot(waitlistId, userId, sessionId);
+    ResponseHandler.success(res, 'Slot claimed successfully! Booking confirmed.', entry);
+  } catch (error: any) {
+    logger.error('Error claiming waitlist slot:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Mentee declines an offered slot
+ * @route   POST /api/waitlist/:waitlistId/decline
+ * @access  Private
+ */
+export const declineWaitlistSlot = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const { waitlistId } = req.params;
+    const { reason } = req.body || {};
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const entry = await waitlistService.declineWaitlistSlot(waitlistId, userId, reason);
+    ResponseHandler.success(res, 'Offer declined successfully.', entry);
+  } catch (error: any) {
+    logger.error('Error declining waitlist slot:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Mentor updates priority of a waitlist entry (move up/down)
+ * @route   PATCH /api/waitlist/:waitlistId/priority
+ * @access  Private (Mentor)
+ */
+export const updateWaitlistPriority = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const { waitlistId } = req.params;
+    const { delta } = req.body || {};
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const entry = await waitlistService.updatePriority(waitlistId, userId, Number(delta) || 1);
+    ResponseHandler.success(res, 'Priority updated successfully', entry);
+  } catch (error: any) {
+    logger.error('Error updating waitlist priority:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Mentor removes an entry
+ * @route   DELETE /api/waitlist/:waitlistId/remove
+ * @access  Private (Mentor)
+ */
+export const removeWaitlistEntry = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const { waitlistId } = req.params;
+    const { reason } = req.body || {};
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    await waitlistService.removeFromWaitlist(waitlistId, userId, reason || 'Removed by mentor');
+    ResponseHandler.success(res, 'Entry removed from waitlist successfully', null);
+  } catch (error: any) {
+    logger.error('Error removing waitlist entry:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Mentor toggles auto-offer setting
+ * @route   PATCH /api/waitlist/settings/auto-offer
+ * @access  Private (Mentor)
+ */
+export const toggleAutoOffer = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    const { enabled } = req.body;
+
+    if (!userId) {
+      ResponseHandler.unauthorized(res);
+      return;
+    }
+
+    const result = await waitlistService.toggleAutoOffer(userId, Boolean(enabled));
+    ResponseHandler.success(res, 'Auto-offer setting updated', result);
+  } catch (error: any) {
+    logger.error('Error toggling auto offer setting:', error);
     next(error);
   }
 };

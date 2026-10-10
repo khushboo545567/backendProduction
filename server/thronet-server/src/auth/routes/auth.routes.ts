@@ -1,41 +1,47 @@
 /**
  * auth.routes.ts
- * Production-ready authentication routes for auth-service-phase3-kafka
- * Handles login, logout, register, and token refresh endpoints
- * Compliant with NIST 800-63B and OWASP guidelines
- * Enhanced with production security measures
+ * Authentication routes: register, login, refresh, logout, profile, OAuth.
  */
 
 import Joi from 'joi';
-import rateLimit from 'express-rate-limit';
 import express, { Request, Response, NextFunction } from 'express';
 import Constants from '@/shared/constants.util';
 import { AuthController } from '@/shared/controllers/index.controllers';
 import {
     validateLogin,
     validateLogout,
-    validateTokenRefresh
 } from '@/shared/middlewares/validation.middleware';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import rateLimitMiddleware from '@/shared/middlewares/rateLimit.middleware';
 import LoggerUtil from '@/shared/logger.util';
 import ResponseUtil from '@/shared/response.util';
-import { User } from '../models';
+import { User, Session } from '@/shared/models/index.models';
 import passport from '@/config/oauth/passport.config';
 import { csrfProtection } from '@/config/security/csrf.config';
 import { updateDateOfBirth } from '../controllers/dob.controller';
 import { googleVerifyController, googleRegisterController } from '../controllers/googleAuth.controller';
-
+import { DeviceRepository, SessionRepository } from '../repository/auth.repository';
 
 const router = express.Router();
 
-console.log('🔍 auth/routes/index.ts LOADING START');
-
 // ==================== MIDDLEWARE ====================
 
-const sanitizeInput = (req: Request, res: Response, next: NextFunction) => {
-    if (req.body) {
-        Object.keys(req.body).forEach(key => {
+// In fields ko kabhi modify nahi karte (password ko <, > ya trim se badalna nahi chahiye)
+const SKIP_SANITIZE_FIELDS = new Set([
+    'password',
+    'confirmPassword',
+    'currentPassword',
+    'newPassword',
+    'refreshToken',
+    'idToken',
+    'credential',
+    'token',
+]);
+
+const sanitizeInput = (req: Request, _res: Response, next: NextFunction) => {
+    if (req.body && typeof req.body === 'object') {
+        Object.keys(req.body).forEach((key) => {
+            if (SKIP_SANITIZE_FIELDS.has(key)) return;
             if (typeof req.body[key] === 'string') {
                 req.body[key] = (req.body[key] as string).replace(/[<>]/g, '').trim();
             }
@@ -45,62 +51,16 @@ const sanitizeInput = (req: Request, res: Response, next: NextFunction) => {
 };
 
 /**
- * Rate limiter for sending OTP
- * Max 3 requests per 15 minutes per IP
+ * Controller errors ko next() tak pahunchata hai
  */
-const sendOTPLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 3,
-    message: {
-        status: 'error',
-        message: 'Too many OTP requests. Please try again after 15 minutes.',
-        retryAfter: 900
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
+const handle =
+    (fn: (req: any, res: Response) => Promise<unknown>) =>
+        (req: Request, res: Response, next: NextFunction) => {
+            Promise.resolve(fn(req, res)).catch(next);
+        };
 
-/**
- * Rate limiter for verifying OTP
- * Max 5 attempts per 5 minutes per IP
- */
-const verifyOTPLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000, // 5 minutes
-    max: 5,
-    message: {
-        status: 'error',
-        message: 'Too many verification attempts. Please try again after 5 minutes.',
-        retryAfter: 300
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
+// ==================== HELPERS ====================
 
-/**
- * Rate limiter for resending OTP
- * Max 3 requests per 15 minutes per IP
- */
-const resendOTPLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 3,
-    message: {
-        status: 'error',
-        message: 'Too many resend requests. Please try again after 15 minutes.',
-        retryAfter: 900
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
-// ==================== VALIDATION SCHEMAS ====================
-
-/**
- * ==================== HELPER FUNCTIONS ====================
- */
-
-/**
- * Calculate months difference between two dates
- */
 const getMonthsDifference = (startDate: string, endDate: string): number => {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -109,11 +69,66 @@ const getMonthsDifference = (startDate: string, endDate: string): number => {
 };
 
 /**
- * ==================== REGISTRATION VALIDATION SCHEMA ====================
+ * OAuth (browser flow) ke baad tokens issue karta hai, hamesha session + device ke saath
+ * (warna refresh 15 minute baad fail hoga).
  */
+async function issueOAuthTokens(
+    req: Request,
+    user: any
+): Promise<{ accessToken: string; refreshToken: string }> {
+    const ipAddress = req.ip || '0.0.0.0';
+    const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
+
+    let sessionId: string | undefined = user.sessionId;
+    let deviceId: string | undefined = user.deviceId;
+
+    if (!sessionId || !deviceId) {
+        const device = await DeviceRepository.registerDevice(user.userId, {
+            deviceType: 'desktop',
+            deviceName: 'OAuth Login',
+            os: 'Unknown',
+            browser: 'Unknown',
+            userAgent,
+        } as any);
+
+        const session = await SessionRepository.createSession({
+            userId: user.userId,
+            ipAddress,
+            deviceId: device.deviceId,
+            sessionType: 'oauth',
+            deviceInfo: { userAgent },
+        });
+
+        sessionId = session._id;
+        deviceId = device.deviceId;
+    }
+
+    const payload = {
+        userId: user.userId,
+        role: user.role || 'user',
+        sessionId: sessionId as string,
+        deviceId: deviceId as string,
+    };
+
+    const accessToken = User.generateAccessToken(payload);
+    const refreshToken = User.generateRefreshToken(payload);
+
+    try {
+        await Session.setRefreshToken(sessionId as string, refreshToken);
+    } catch (err: any) {
+        LoggerUtil.error('Saving OAuth refresh token hash failed (non-critical)', {
+            error: err.message,
+            userId: user.userId,
+        });
+    }
+
+    return { accessToken, refreshToken };
+}
+
+// ==================== REGISTRATION VALIDATION SCHEMA ====================
 
 const registerSchema = Joi.object({
-    // ==================== BASIC FIELDS ====================
+    // Basic fields
     email: Joi.string()
         .email()
         .lowercase()
@@ -196,7 +211,7 @@ const registerSchema = Joi.object({
             'string.pattern.base': 'Invalid phone number format (E.164 format required, e.g., +919876543210)',
         }),
 
-    // ==================== ONBOARDING FIELDS ====================
+    // Onboarding
     userType: Joi.string()
         .valid(...Constants.ONBOARDING.USER_TYPES)
         .required()
@@ -205,7 +220,7 @@ const registerSchema = Joi.object({
             'any.required': 'User type is required',
         }),
 
-    // ==================== WORKING PROFESSIONAL FIELDS ====================
+    // Working professional fields
     jobTitle: Joi.when('userType', {
         is: 'working',
         then: Joi.string()
@@ -263,7 +278,7 @@ const registerSchema = Joi.object({
             .optional()
             .allow(null, '')
             .custom((value, helpers) => {
-                if (!value) return value;  // Allow empty for current jobs
+                if (!value) return value;
 
                 const startDate = helpers.state.ancestors[0].startDate;
                 if (!startDate) return value;
@@ -291,7 +306,7 @@ const registerSchema = Joi.object({
             }),
     }),
 
-    // ==================== STUDENT FIELDS ====================
+    // Student fields
     collegeName: Joi.when('userType', {
         is: 'student',
         then: Joi.string()
@@ -368,7 +383,7 @@ const registerSchema = Joi.object({
             }),
     }),
 
-    // ==================== FRESHER FIELDS ====================
+    // Fresher fields
     highestEducation: Joi.when('userType', {
         is: 'fresher',
         then: Joi.string()
@@ -414,16 +429,13 @@ const registerSchema = Joi.object({
             }),
     }),
 
-    // ==================== DEVICE INFO (OPTIONAL) ====================
+    // Device info (optional)
     deviceType: Joi.string().optional().allow(''),
     deviceName: Joi.string().optional().allow(''),
     os: Joi.string().optional().allow(''),
     browser: Joi.string().optional().allow(''),
 });
 
-/**
- * Validation middleware wrapper
- */
 const validateRegistration = (req: Request, res: Response, next: NextFunction) => {
     const { error, value } = registerSchema.validate(req.body, {
         abortEarly: false,
@@ -432,12 +444,12 @@ const validateRegistration = (req: Request, res: Response, next: NextFunction) =
     });
 
     if (error) {
-        const errors = error.details.map(detail => detail.message);
+        const errors = error.details.map((detail) => detail.message);
 
         LoggerUtil.warn('Registration validation failed', {
             errors,
-            email: req.body.email,
-            userType: req.body.userType,
+            email: req.body?.email,
+            userType: req.body?.userType,
             ipAddress: req.ip,
         });
 
@@ -448,27 +460,19 @@ const validateRegistration = (req: Request, res: Response, next: NextFunction) =
     next();
 };
 
-/**
- * ==================== VALIDATION SCHEMA (Optional) ====================
- * 
- * If you want to add strict query parameter validation,
- * add this Joi schema before the route:
- */
+// ==================== ADMIN USERS QUERY VALIDATION ====================
 
 const getAllUsersQuerySchema = Joi.object({
     page: Joi.number().integer().min(1).default(1),
     limit: Joi.number().integer().min(1).max(100).default(20),
     status: Joi.string().valid('active', 'inactive', 'suspended', 'deleted'),
-    role: Joi.string().valid('user', 'admin', 'moderator'),
+    role: Joi.string().valid('user', 'admin', 'moderator', 'mentor'),
     userType: Joi.string().valid('working', 'student', 'fresher'),
     location: Joi.string().min(2).max(50),
     search: Joi.string().min(2).max(100),
     sortBy: Joi.string().valid('newest', 'oldest', 'name', 'email').default('newest'),
 });
 
-/**
- * Validation middleware for query parameters
- */
 const validateGetAllUsersQuery = (req: Request, res: Response, next: NextFunction) => {
     const { error, value } = getAllUsersQuerySchema.validate(req.query, {
         abortEarly: false,
@@ -476,41 +480,25 @@ const validateGetAllUsersQuery = (req: Request, res: Response, next: NextFunctio
     });
 
     if (error) {
-        const errors = error.details.map(detail => detail.message);
+        const errors = error.details.map((detail) => detail.message);
         return ResponseUtil.validationError(res, errors, 'Invalid query parameters');
     }
 
-    req.query = value;
+    // Express 5 mein req.query getter-only hota hai, isliye defineProperty
+    Object.defineProperty(req, 'query', {
+        value,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+    });
     next();
 };
 
-/**
- * Update Profile Validation Schema
- */
+// ==================== UPDATE PROFILE / DEACTIVATE / DELETE SCHEMAS ====================
+
+// Email aur password yahan allowed nahi (stripUnknown unhe hata deta hai).
+// Unhe badalne ke liye verified OTP flows use hote hain.
 const updateProfileSchema = Joi.object({
-    // ==================== EMAIL ====================
-    email: Joi.string()
-        .email()
-        .lowercase()
-        .trim()
-        .optional()
-        .messages({
-            'string.email': 'Invalid email format',
-        }),
-
-    // ==================== PASSWORD ====================
-    password: Joi.string()
-        .min(8)
-        .max(128)
-        .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
-        .optional()
-        .messages({
-            'string.min': 'Password must be at least 8 characters',
-            'string.max': 'Password cannot exceed 128 characters',
-            'string.pattern.base': 'Password must contain uppercase, lowercase, number, and special character',
-        }),
-
-    // ==================== PHONE NUMBER ====================
     phoneNumber: Joi.string()
         .pattern(/^\+?[1-9]\d{1,14}$/)
         .allow(null, '')
@@ -519,7 +507,6 @@ const updateProfileSchema = Joi.object({
             'string.pattern.base': 'Invalid phone number format (E.164 format required, e.g., +919876543210)',
         }),
 
-    // ==================== FIRST NAME ====================
     firstName: Joi.string()
         .min(2)
         .max(50)
@@ -532,7 +519,6 @@ const updateProfileSchema = Joi.object({
             'string.pattern.base': 'First name can only contain letters, spaces, hyphens, and apostrophes',
         }),
 
-    // ==================== LAST NAME ====================
     lastName: Joi.string()
         .min(2)
         .max(50)
@@ -546,22 +532,18 @@ const updateProfileSchema = Joi.object({
             'string.pattern.base': 'Last name can only contain letters, spaces, hyphens, and apostrophes',
         }),
 
-    // ==================== LOCATION ====================
     location: Joi.string()
         .min(2)
         .max(50)
-        .pattern(/^[A-Z][a-zA-Z\s\-]{1,49}$/)
+        .pattern(/^[A-Za-z][A-Za-z\s\-,.'()]{1,49}$/)
         .trim()
         .optional()
         .messages({
             'string.min': 'Location must be at least 2 characters',
             'string.max': 'Location cannot exceed 50 characters',
-            'string.pattern.base': 'Location must start with a capital letter',
+            'string.pattern.base': "Location can contain only letters, spaces and these characters: - , . ' ( )",
         }),
 
-
-
-    // ✅ ADD THESE 4 NEW FIELDS
     currentPosition: Joi.string()
         .max(100)
         .trim()
@@ -597,8 +579,6 @@ const updateProfileSchema = Joi.object({
             'any.only': 'Pronouns must be one of: He/Him, She/Her, They/Them, Other',
         }),
 
-
-    // ==================== ONBOARDING ====================
     onboarding: Joi.object({
         userType: Joi.string()
             .valid('working', 'student', 'fresher')
@@ -628,7 +608,6 @@ const updateProfileSchema = Joi.object({
         }).optional(),
     }).optional(),
 
-    // ==================== PREFERENCES ====================
     preferences: Joi.object({
         notifications: Joi.object({
             email: Joi.boolean().optional(),
@@ -644,9 +623,6 @@ const updateProfileSchema = Joi.object({
     'object.min': 'At least one field must be provided',
 });
 
-/**
- * Deactivate Account Validation Schema
- */
 const deactivateAccountSchema = Joi.object({
     reason: Joi.string()
         .max(500)
@@ -664,9 +640,6 @@ const deactivateAccountSchema = Joi.object({
         }),
 });
 
-/**
- * Delete User Validation Schema (Admin)
- */
 const deleteUserSchema = Joi.object({
     reason: Joi.string()
         .min(10)
@@ -687,11 +660,6 @@ const deleteUserSchema = Joi.object({
         }),
 });
 
-// ==================== VALIDATION MIDDLEWARE ====================
-
-/**
- * Validate request body against Joi schema
- */
 const validate = (schema: Joi.ObjectSchema) => {
     return (req: Request, res: Response, next: NextFunction) => {
         const { error, value } = schema.validate(req.body, {
@@ -700,7 +668,7 @@ const validate = (schema: Joi.ObjectSchema) => {
         });
 
         if (error) {
-            const errors = error.details.map(detail => detail.message);
+            const errors = error.details.map((detail) => detail.message);
             return res.status(400).json({
                 status: 'error',
                 message: 'Validation failed',
@@ -717,99 +685,53 @@ const validate = (schema: Joi.ObjectSchema) => {
 
 /**
  * @route GET /api/v1/auth/health
- * @desc Health check endpoint
- * @access Public
  */
-router.get('/health', (req: Request, res: Response) => {
+router.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({
         status: 'OK',
         timestamp: new Date().toISOString(),
         service: 'auth-service',
-        version: process.env.APP_VERSION || '1.0.0'
+        version: process.env.APP_VERSION || '1.0.0',
     });
 });
 
 /**
  * @route POST /api/v1/auth/register
- * @desc Register new user account
- * @access Public
  */
 router.post(
     '/register',
     sanitizeInput,
     rateLimitMiddleware(),
     validateRegistration,
-    async (req, res, next) => {
-        try {
-            console.log('🎯 REGISTER ROUTE HIT');
-            console.log('📦 Request Body:', JSON.stringify(req.body, null, 2));
-            console.log('📊 Body Keys:', Object.keys(req.body));
-            console.log('🔍 userType:', req.body.userType);
-            console.log('🔍 status:', req.body.status);
-
-            await AuthController.register(req, res);
-            console.log('✅ REGISTER ROUTE COMPLETED');
-        } catch (error: any) {
-            console.error('❌ REGISTER ROUTE ERROR:', error);
-            next(error);
-        }
-    }
+    handle((req, res) => AuthController.register(req, res))
 );
 
 /**
  * @route POST /api/v1/auth/login
- * @desc Authenticate user and generate session
- * @access Public
  */
 router.post(
     '/login',
     sanitizeInput,
     rateLimitMiddleware(),
     validateLogin,
-    async (req, res, next) => {
-        try {
-            console.log('🎯 LOGIN ROUTE HIT');
-            console.log('📦 Request Body:', JSON.stringify(req.body, null, 2));
-            await AuthController.login(req, res);
-            console.log('✅ LOGIN ROUTE COMPLETED');
-        } catch (error: any) {
-            console.error('❌ LOGIN ROUTE ERROR:', error);
-            next(error);
-        }
-    }
+    handle((req, res) => AuthController.login(req, res))
 );
 
 /**
- * @route POST /api/v1/auth/refresh
- * @desc Refresh access token using refresh token (with rotation)
- * @access Public (requires valid refresh token)
+ * @route POST /api/v1/auth/refresh-token
+ * Frontend isi path ko call karta hai (api.instance.ts REFRESH_PATH)
  */
 router.post(
     '/refresh-token',
     sanitizeInput,
     rateLimitMiddleware(),
-    async (req, res, next) => {
-        try {
-            console.log('🎯 REFRESH TOKEN ROUTE HIT');
-            await AuthController.refreshToken(req, res);
-            console.log('✅ REFRESH TOKEN ROUTE COMPLETED');
-        } catch (error: any) {
-            console.error('❌ REFRESH TOKEN ROUTE ERROR:', error);
-            next(error);
-        }
-    }
-
+    handle((req, res) => AuthController.refreshToken(req, res))
 );
 
 router.patch('/date-of-birth', AuthMiddleware.authenticate as any, updateDateOfBirth);
 
-// ==================== GOOGLE OAUTH & NATIVE VERIFY ROUTES ====================
+// ==================== GOOGLE (NATIVE VERIFY) ROUTES ====================
 
-/**
- * @route POST /api/v1/auth/google/verify
- * @desc Verify Google ID Token for React Native / Mobile Apps
- * @access Public
- */
 router.post(
     '/google/verify',
     sanitizeInput,
@@ -817,11 +739,6 @@ router.post(
     googleVerifyController
 );
 
-/**
- * @route POST /api/v1/auth/google/register
- * @desc Register new user using Google ID token and onboarding info
- * @access Public
- */
 router.post(
     '/google/register',
     sanitizeInput,
@@ -829,11 +746,6 @@ router.post(
     googleRegisterController
 );
 
-/**
- * @route POST /api/v1/auth/google/native
- * @desc Alias for Google ID token verify
- * @access Public
- */
 router.post(
     '/google/native',
     sanitizeInput,
@@ -845,119 +757,80 @@ router.get('/csrf-token', csrfProtection, (req: Request, res: Response) => {
     res.json({ csrfToken: req.csrfToken() });
 });
 
-/**
- * @route GET /api/v1/auth/google
- * @desc Google OAuth initiate
- * @access Public
- */
+// ==================== GOOGLE OAUTH (BROWSER FLOW) ====================
+
 router.get(
     '/google',
     csrfProtection,
     passport.authenticate('google', {
         scope: ['profile', 'email'],
-        session: false // JWT use kar rahe hain
+        session: false,
     })
 );
 
-/**
- * @route GET /api/v1/auth/google/callback
- * @desc Google OAuth callback
- * @access Public
- */
 router.get(
     '/google/callback',
     csrfProtection,
     passport.authenticate('google', {
         failureRedirect: `${process.env.FRONTEND_URL}/login?error=oauth_failed`,
-        session: false
+        session: false,
     }),
     async (req: any, res: Response) => {
         try {
             const user = req.user;
+            const { accessToken, refreshToken } = await issueOAuthTokens(req, user);
 
-            // JWT tokens generate karo — User model ka existing method use karo
-            const accessToken = User.generateAccessToken({
-                userId: user.userId,
-                role: user.role
-            });
-            const refreshToken = User.generateRefreshToken({
-                userId: user.userId,
-                role: user.role
-            });
-
-            // Frontend ko redirect karo tokens ke saath (query params mein)
-            // Note: Production mein httpOnly cookie better hai
+            // Note: tokens query string mein jaate hain (frontend /auth/callback page yahin se padhta hai)
             const redirectUrl = new URL(`${process.env.FRONTEND_URL}/auth/callback`);
             redirectUrl.searchParams.set('accessToken', accessToken);
             redirectUrl.searchParams.set('refreshToken', refreshToken);
             redirectUrl.searchParams.set('userId', user.userId);
             redirectUrl.searchParams.set('email', user.email);
-            redirectUrl.searchParams.set('role', user.role);
-            redirectUrl.searchParams.set('isNewUser', (req.user as any).isNewUser ? 'true' : 'false');
+            redirectUrl.searchParams.set('role', user.role || 'user');
+            redirectUrl.searchParams.set('isNewUser', user.isNewUser === true ? 'true' : 'false');
 
             res.redirect(redirectUrl.toString());
-
         } catch (error: any) {
-            console.error('Google callback error:', error);
+            LoggerUtil.error('Google callback error', { error: error.message });
             res.redirect(`${process.env.FRONTEND_URL}/login?error=token_generation_failed`);
         }
     }
 );
 
+// ==================== GITHUB OAUTH ====================
 
-// ==================== GITHUB OAUTH ROUTES ====================
-
-/**
- * @route GET /api/v1/auth/github
- * @desc GitHub OAuth initiate
- * @access Public
- */
 router.get(
     '/github',
     csrfProtection,
     passport.authenticate('github', {
         scope: ['user:email'],
-        session: false
+        session: false,
     })
 );
 
-/**
- * @route GET /api/v1/auth/github/callback
- * @desc GitHub OAuth callback
- * @access Public
- */
 router.get(
     '/github/callback',
     csrfProtection,
     passport.authenticate('github', {
         failureRedirect: `${process.env.FRONTEND_URL}/login?error=github_oauth_failed`,
-        session: false
+        session: false,
     }),
     async (req: any, res: Response) => {
         try {
             const user = req.user;
-
-            const accessToken = User.generateAccessToken({
-                userId: user.userId,
-                role: user.role
-            });
-            const refreshToken = User.generateRefreshToken({
-                userId: user.userId,
-                role: user.role
-            });
+            const { accessToken, refreshToken } = await issueOAuthTokens(req, user);
 
             const redirectUrl = new URL(`${process.env.FRONTEND_URL}/auth/callback`);
             redirectUrl.searchParams.set('accessToken', accessToken);
             redirectUrl.searchParams.set('refreshToken', refreshToken);
             redirectUrl.searchParams.set('userId', user.userId);
             redirectUrl.searchParams.set('email', user.email);
-            redirectUrl.searchParams.set('role', user.role);
+            redirectUrl.searchParams.set('role', user.role || 'user');
             redirectUrl.searchParams.set('isNewUser', user.isNewUser === true ? 'true' : 'false');
 
             res.redirect(redirectUrl.toString());
-
         } catch (error: any) {
-            console.error('GitHub callback error:', error);
+            LoggerUtil.error('GitHub callback error', { error: error.message });
             res.redirect(`${process.env.FRONTEND_URL}/login?error=token_generation_failed`);
         }
     }
@@ -966,89 +839,50 @@ router.get(
 // ==================== AUTHENTICATED ROUTES ====================
 
 /**
- * @route   GET /api/v1/user/profile
- * @desc    Get authenticated user's profile
- * @access  Private (requires JWT)
- * @query   {Boolean} includeStats - Include statistics
- * @query   {Boolean} includeSessions - Include active sessions
+ * @route GET /api/v1/auth/profile
+ * Apna full profile
  */
 router.get(
     '/profile',
     AuthMiddleware.authenticate as any,
-    // rateLimitMiddleware(),
     AuthController.getUserProfile as any
 );
 
 /**
- * @route   GET /api/v1/auth/users/:userId
- * @desc    Get user by ID (UUID)
- * @access  Public (or Private - add AuthMiddleware.authenticate)
- * @param   {String} userId - User UUID
- * @query   {Boolean} includeStats - Include statistics (optional)
- * @query   {Boolean} includeSessions - Include active sessions (optional)
- * 
- * @example
- * GET /api/v1/auth/users/fa8b42a2-6e15-49e2-8a5a-9ab45758baaa
- * GET /api/v1/auth/users/fa8b42a2-6e15-49e2-8a5a-9ab45758baaa?includeStats=true
- * GET /api/v1/auth/users/fa8b42a2-6e15-49e2-8a5a-9ab45758baaa?includeStats=true&includeSessions=true
+ * @route GET /api/v1/auth/get-user/:userId
+ * Public profile (self ya admin ko full). Token optional.
  */
 router.get(
     '/get-user/:userId',
-    // AuthMiddleware.authenticate as any,  // ✅ Uncomment if you want authentication required
-    // rateLimitMiddleware(),
+    AuthMiddleware.authenticateOptional as any,
     AuthController.getUserById as any
 );
 
 /**
- * ==================== GET ALL USERS ROUTE ====================
- * 
- * Add this route in your auth.routes.ts file
- * Place it in the "AUTHENTICATED ROUTES" section
- */
-
-/**
- * @route   GET /api/v1/auth/users
- * @desc    Get all users (admin only)
- * @access  Private (Admin only)
- * @query   {Number} page - Page number (default: 1)
- * @query   {Number} limit - Items per page (default: 20, max: 100)
- * @query   {String} status - Filter by status (active, inactive, suspended, deleted)
- * @query   {String} role - Filter by role (user, admin, moderator)
- * @query   {String} userType - Filter by userType (working, student, fresher)
- * @query   {String} location - Filter by location (partial match)
- * @query   {String} search - Search by email, firstName, lastName
- * @query   {String} sortBy - Sort order (newest, oldest, name, email)
- * 
- * @example
- * GET /api/v1/auth/users?page=1&limit=20&status=active&sortBy=newest
- * GET /api/v1/auth/users?search=john&location=Mumbai
- * GET /api/v1/auth/users?userType=working&role=user
- */
-
-/**
- * ==================== ROUTE WITH VALIDATION (Recommended) ====================
+ * @route GET /api/v1/auth/users
+ * Sirf admin
  */
 router.get(
     '/users',
     AuthMiddleware.authenticate as any,
-    // AuthMiddleware.authorize('admin') as any,
-    // validateGetAllUsersQuery,  // ✅ Add query validation
-    // rateLimitMiddleware(),
+    AuthMiddleware.authorize('admin') as any,
+    validateGetAllUsersQuery,
     AuthController.getAllUsers as any
 );
 
+/**
+ * @route POST /api/v1/auth/get-users-bulk
+ * Logged-in users ke liye (public fields only)
+ */
 router.post(
     '/get-users-bulk',
+    AuthMiddleware.authenticate as any,
     sanitizeInput,
     AuthController.getUsersBulk as any
 );
+
 /**
- * @route   PUT /api/v1/user/profile
- * @desc    Update authenticated user's profile
- * @access  Private (requires JWT)
- * @body    {String} username - New username (optional)
- * @body    {String} phone - New phone number (optional)
- * @body    {Object} preferences - User preferences (optional)
+ * @route PUT /api/v1/auth/update-profile
  */
 router.put(
     '/update-profile',
@@ -1060,11 +894,7 @@ router.put(
 );
 
 /**
- * @route   POST /api/v1/user/deactivate
- * @desc    Deactivate authenticated user's account
- * @access  Private (requires JWT)
- * @body    {String} reason - Deactivation reason (optional)
- * @body    {String} confirmation - Must be "DEACTIVATE_MY_ACCOUNT"
+ * @route POST /api/v1/auth/user-account-deactivate
  */
 router.post(
     '/user-account-deactivate',
@@ -1076,12 +906,8 @@ router.post(
 );
 
 /**
- * @route   DELETE /api/v1/user/:userId
- * @desc    Permanently delete user account (admin only)
- * @access  Private (requires admin role)
- * @param   {String} userId - Target user ID
- * @body    {String} reason - Deletion reason (required)
- * @body    {String} confirmation - Must be "DELETE_USER_PERMANENTLY"
+ * @route DELETE /api/v1/auth/user-delete/:userId
+ * Sirf admin
  */
 router.delete(
     '/user-delete/:userId',
@@ -1095,8 +921,6 @@ router.delete(
 
 /**
  * @route POST /api/v1/auth/logout
- * @desc Terminate user session
- * @access Private
  */
 router.post(
     '/logout',
@@ -1107,16 +931,12 @@ router.post(
 
 /**
  * @route POST /api/v1/auth/logout-all
- * @desc Logout from all devices
- * @access Private
  */
 router.post(
     '/logout-all',
     AuthMiddleware.authenticate as any,
-    rateLimitMiddleware({ maxRequests: 5, windowMs: 900000 }), // 5 req/15min
+    rateLimitMiddleware({ maxRequests: 5, windowMs: 900000 }),
     AuthController.logoutAllDevices as any
 );
 
 export default router;
-
-console.log('🔍 auth/routes/index.ts LOADING END');

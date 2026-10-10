@@ -45,6 +45,9 @@ interface BookingResult {
   };
 }
 
+// Last-resort fallback agar Railway me FRONTEND_URL set na ho.
+const FALLBACK_FRONTEND_URL = 'https://throne8-client-main.vercel.app';
+
 class BookingService {
   async createBooking(input: BookingInput, authToken?: string): Promise<BookingResult> {
     const lockKey = `booking:lock:${input.mentorId}:${input.scheduledAt.getTime()}`;
@@ -68,7 +71,7 @@ class BookingService {
 
       let meetingDetails: any;
       try {
-        meetingDetails = await this.createVideoMeeting(session, input.timezone);
+        meetingDetails = await this.createVideoMeeting(session, input.timezone, input.menteeId);
         logger.info(`✅ Video meeting created: ${meetingDetails.meetingUrl}`);
       } catch (videoError: any) {
         logger.error(`❌ Video meeting creation failed, rolling back session: ${videoError.message}`);
@@ -150,20 +153,62 @@ class BookingService {
     }
   }
 
-  private async createVideoMeeting(session: any, timezone: string): Promise<any> {
-    try {
-      const meetingDetails = await videoService.createMeeting({
-        topic: session.title,
-        startTime: session.scheduledAt,
-        duration: session.duration,
-        timezone,
-        agenda: session.description,
-      });
-      return meetingDetails;
-    } catch (error: any) {
-      logger.error(`Failed to create video meeting: ${error.message}`);
+  /**
+   * Frontend ka base URL (trailing slash ke bina).
+   * Railway me FRONTEND_URL set hona chahiye, jaise https://your-domain.com
+   */
+  private getFrontendBaseUrl(): string {
+    const fromEnv = (process.env['FRONTEND_URL'] || '').trim();
+    if (!fromEnv) {
+      logger.warn('FRONTEND_URL not set, using fallback URL for session room links');
+    }
+    return (fromEnv || FALLBACK_FRONTEND_URL).replace(/\/+$/, '');
+  }
+
+  /**
+   * Meeting details banata hai.
+   *
+   * Video call external provider (Daily/Zoom) pe nahi, app ke apne WebRTC room
+   * (/mentorship/session-room/[sessionId]) me hoti hai. Isliye meeting link
+   * seedha in-app room ka link hai, aur booking ko kisi video API key pe
+   * depend nahi karna padta.
+   *
+   * Room ID ka client convention (session-room/[sessionId]/page.tsx):
+   *   roomId = ?bookingId || sessionId
+   *   - 1:1 session: mentee dashboard `?bookingId=<bookingId>` ke saath join
+   *     karta hai, isliye link me bhi bookingId chahiye (warna alag room ban jata hai).
+   *   - Group session: bookingId nahi hota, room = sessionId.
+   */
+  private async createVideoMeeting(session: any, _timezone: string, menteeId?: string): Promise<any> {
+    const sessionId = session?.sessionId || session?._id?.toString();
+    if (!sessionId) {
+      logger.error('Cannot build session room link: session has no sessionId');
       throw new Error('Failed to create video meeting');
     }
+
+    let meetingUrl = `${this.getFrontendBaseUrl()}/mentorship/session-room/${encodeURIComponent(String(sessionId))}`;
+
+    // Group sessions me room = sessionId, bookingId nahi jodna.
+    const isGroupSession = String(session?.sessionType || '').toLowerCase().includes('group');
+
+    if (!isGroupSession) {
+      const bookings: any[] = Array.isArray(session?.bookings) ? session.bookings : [];
+      const booking = bookings.find((b: any) => b?.menteeId === menteeId) || bookings[0];
+      const bookingId = booking?._id?.toString();
+
+      if (bookingId) {
+        meetingUrl += `?bookingId=${encodeURIComponent(bookingId)}`;
+      } else {
+        logger.warn(`No bookingId found while building room link for session ${sessionId}`);
+      }
+    }
+
+    return {
+      platform: 'custom',
+      meetingUrl,
+      meetingId: String(sessionId),
+      passcode: undefined,
+    };
   }
 
   /**
@@ -270,9 +315,10 @@ class BookingService {
         reason,
         bookingId,
       });
-      
 
-      if (session.meeting?.meetingId) {
+      // In-app room ('custom' platform) ke liye external meeting delete karne ki
+      // zaroorat nahi, wo sirf ek link hai.
+      if (session.meeting?.meetingId && session.meeting?.platform !== 'custom') {
         try {
           await videoService.deleteMeeting(session.meeting.meetingId);
         } catch (videoError: any) {

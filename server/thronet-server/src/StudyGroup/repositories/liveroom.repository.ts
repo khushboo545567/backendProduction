@@ -1,7 +1,6 @@
 import { BaseRepository } from './base.repository';
 import LiveRoom from '../models/LiveRoom.model';
 import { ILiveRoomDocument } from '../interfaces/ILiveRoom';
-import { Types } from 'mongoose';
 
 class LiveRoomRepository extends BaseRepository<ILiveRoomDocument> {
   constructor() {
@@ -15,9 +14,6 @@ class LiveRoomRepository extends BaseRepository<ILiveRoomDocument> {
   async findByIdWithPopulate(roomId: string): Promise<ILiveRoomDocument | null> {
     return await this.model
       .findById(roomId)
-      .populate('host', 'name avatar email')
-      .populate('group', 'title category visibility')
-      .populate('participants.user', 'name avatar email')
       .exec();
   }
 
@@ -28,9 +24,6 @@ class LiveRoomRepository extends BaseRepository<ILiveRoomDocument> {
   async findWithFilters(query: any, skip: number, limit: number): Promise<ILiveRoomDocument[]> {
     return await this.model
       .find(query)
-      .populate('host', 'name avatar email')
-      .populate('group', 'title category visibility')
-      .populate('participants.user', 'name avatar email')
       .sort({ startedAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -44,7 +37,7 @@ class LiveRoomRepository extends BaseRepository<ILiveRoomDocument> {
   async getStatsByGroupId(groupId: string): Promise<any[]> {
     return await this.model.aggregate([
       {
-        $match: { group: new Types.ObjectId(groupId) },
+        $match: { group: groupId },
       },
       {
         $group: {
@@ -72,7 +65,7 @@ class LiveRoomRepository extends BaseRepository<ILiveRoomDocument> {
     }
 
     return await this.model.findOneAndUpdate(
-      { _id: roomId, 'participants.user': new Types.ObjectId(userId) },
+      { _id: roomId, 'participants.user': userId },
       { $set: updateFields },
       { new: true }
     ).exec();

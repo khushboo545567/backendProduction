@@ -17,23 +17,15 @@ import mongoose from 'mongoose';
 import { MongoStore } from 'connect-mongo';
 import passport from '@/config/oauth/passport.config';
 
-// Routes
-import AuthRoutes from './routes/index';
-import mentorRoutes from './Mentorship/routers';
-// import seniorMentorRoutes from './SeniorMentorship/routers'; // disabled — causes a startup hang, debug separately
-import companyRoutes from './company/routers';
-import studyGroupRoutes from './StudyGroup/routers';
-import messageRoutes from './message/routes/message.routes';
-import notificationRoutes from './notifications/routes/notification.routes';
-import jobServiceRoutes from './Job-Service/routers';
+// Routes (saari mounting routes/index.ts me hoti hai)
+import apiRoutes from './routes/index';
 
 import { User } from './auth/models';
 
 // Config
 import { LoggerUtil, requestLogger } from './shared/logger.util';
 import NotificationService from './auth/services/notification.service';
-import CacheUtil from './shared/cache.util';
- console.log('🔍 LOADING:, app.ts ');
+
 interface CustomError extends Error {
     status?: number;
     statusCode?: number;
@@ -42,6 +34,7 @@ interface CustomError extends Error {
 
 const logger = LoggerUtil;
 const app: Express = express();
+const isProduction = process.env['NODE_ENV'] === 'production';
 
 // ==================== TRUST PROXY ====================
 // Railway sits behind exactly one reverse proxy layer.
@@ -49,18 +42,32 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 // ==================== CORS ====================
+// Production me sirf CORS_ORIGIN (comma separated) wali origins allowed hain.
+// Vercel preview URLs sirf tab allowed jab ALLOW_VERCEL_PREVIEWS=true ho.
+// Localhost sirf non-production me allowed hai.
+const DEFAULT_ORIGINS = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://throne8-client-main.vercel.app',
+];
+
+const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] || '';
+const allowedOrigins: string[] = envOrigins
+    ? envOrigins.split(',').map((o) => o.trim()).filter(Boolean)
+    : DEFAULT_ORIGINS;
+
+const allowVercelPreviews = process.env['ALLOW_VERCEL_PREVIEWS']
+    ? process.env['ALLOW_VERCEL_PREVIEWS'] === 'true'
+    : !isProduction;
+
 app.use(cors({
     origin: (origin, callback) => {
-        const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] || '';
-        const allowedOrigins = envOrigins
-            ? envOrigins.split(',').map(o => o.trim())
-            : ['http://localhost:3000', 'http://localhost:3001', 'https://throne8-client-main.vercel.app'];
-
         // Server-to-server calls (no origin) allow karo
         if (!origin) return callback(null, true);
 
-        const isVercel = /\.vercel\.app$/.test(origin);
-        const isLocalhost = /^http:\/\/localhost:\d+$/.test(origin);
+        const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(origin);
+        const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(origin);
+
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel || isLocalhost) {
             return callback(null, origin);
         }
@@ -88,26 +95,23 @@ app.use(cookieParser());
 app.use(requestLogger);
 
 // 2. Body parsers
-// ⚠️ 50mb is high for plain JSON bodies. Keep it only if you genuinely accept
-// base64 payloads (e.g. inline image uploads). If uploads go through
-// Cloudinary/multipart instead, drop this to something like '2mb'.
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Default 10mb. Agar kahin base64 payload bhejte ho toh JSON_BODY_LIMIT env se badhao.
+const bodyLimit = process.env['JSON_BODY_LIMIT'] || '10mb';
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
 // 3. Security middleware
 app.use(helmet());
 app.use(compression());
 
-// 3a. NoSQL injection protection — strips `$` and `.` keys from
-// req.body / req.query / req.params before they ever reach Mongoose.
+// 3a. NoSQL injection protection — `$` aur `.` keys strip karta hai
 app.use((req: Request, _res: Response, next: NextFunction) => {
     if (req.body) req.body = mongoSanitize.sanitize(req.body);
     if (req.params) req.params = mongoSanitize.sanitize(req.params);
     next();
 });
 
-// 3b. HTTP Parameter Pollution protection — collapses duplicate query
-// params (e.g. ?role=admin&role=user) to a single value instead of an array.
+// 3b. HTTP Parameter Pollution protection
 app.use(hpp());
 
 // 4. Rate limiting
@@ -119,8 +123,7 @@ const limiter = rateLimit({
 });
 app.use('/api', limiter);
 
-// 4a. Stricter limiter specifically for auth endpoints (login/signup/OTP)
-// to slow down credential-stuffing / brute-force attempts.
+// 4a. Auth endpoints (login/signup/OTP) ke liye stricter limiter
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 200,
@@ -147,20 +150,15 @@ app.use(session({
             ttl: 5 * 60,
             autoRemove: 'native',
         })
-        :  MongoStore.create({
+        : MongoStore.create({
             clientPromise: mongoose.connection.asPromise().then((m) => m.getClient()),
             collectionName: 'sessions',
             ttl: 5 * 60,
             autoRemove: 'native',
         }),
     cookie: {
-        secure: process.env['NODE_ENV'] === 'production',
+        secure: isProduction,
         httpOnly: true,
-        // SameSite=strict already provides strong CSRF protection for
-        // state-changing requests from other origins — that's why there's
-        // no separate CSRF-token middleware here. If you ever need
-        // cross-site form posts (e.g. an external partner site submitting
-        // to your API), you'd need to relax this and add real CSRF tokens.
         sameSite: 'lax',
         maxAge: 5 * 60 * 1000 // 5 min in ms
     }
@@ -179,7 +177,7 @@ passport.deserializeUser(async (userId: string, done) => {
 });
 
 // ==================== HEALTH CHECK ====================
-// Liveness probe — just confirms the process is up and responding.
+// Liveness probe
 app.get('/api/v1/health', (_req: Request, res: Response) => {
     res.status(200).json({
         status: 'ok',
@@ -189,10 +187,7 @@ app.get('/api/v1/health', (_req: Request, res: Response) => {
     });
 });
 
-// Readiness probe — confirms downstream dependencies (MongoDB) are
-// actually connected, not just that the process exists. Useful for
-// Railway/load-balancer health checks that should fail traffic routing
-// if the DB connection drops, even though the process is technically alive.
+// Readiness probe — MongoDB connected hai ya nahi
 app.get('/api/v1/health/ready', (_req: Request, res: Response) => {
     const mongoState = mongoose.connection.readyState; // 1 = connected
     const isReady = mongoState === 1;
@@ -210,19 +205,9 @@ app.get('/api/v1/health/ready', (_req: Request, res: Response) => {
 });
 
 // ==================== ROUTES ====================
-app.use('/api/v1', AuthRoutes);
-// app.use('/api/v1/senior-mentorship', seniorMentorRoutes); // disabled — see import above
-app.use('/api/v1/mentorship', mentorRoutes);
-app.use('/api/v1/company', companyRoutes);
-app.use('/api/v1/study-group', studyGroupRoutes);
-app.use('/api/v1/messaging', messageRoutes);
-app.use('/api/v1/notifications', notificationRoutes);
-app.use('/api/v1/job-service', jobServiceRoutes);
+app.use('/api/v1', apiRoutes);
 
 // ==================== 404 HANDLER ====================
-// Catches anything that didn't match a mounted route, before the error
-// handler. Without this, unmatched routes fall through to Express's
-// default (unstyled) 404 page instead of your JSON error format.
 app.use((req: Request, res: Response) => {
     res.status(404).json({
         status: 'error',
@@ -232,7 +217,7 @@ app.use((req: Request, res: Response) => {
 });
 
 // ==================== ERROR HANDLER ====================
-app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => {
+app.use(((err: CustomError, req: Request, res: Response, _next: NextFunction) => {
     if (err.code === 'EBADCSRFTOKEN') {
         return res.status(403).json({
             status: 'error',
@@ -257,35 +242,30 @@ app.use(((err: CustomError, req: Request, res: Response, next: NextFunction) => 
     });
 
     let statusCode = err.statusCode || err.status || 500;
-let message = err.message;
+    let message = err.message;
 
-// Mongoose validation/cast errors (jaise ID type mismatch, missing
-// required field) aur Zod validation errors ko 400 mein map karo —
-// warna ye generic 500 "Internal server error" ke peeche chhup jate
-// hain aur asli wajah pata nahi chalti.
-if (err.name === 'ValidationError' || err.name === 'CastError') {
-    statusCode = 400;
-    message = err.message;
-} else if (err.name === 'ZodError') {
-    statusCode = 400;
-    message = (err as any).errors?.map((e: any) => `${e.path?.join('.')}: ${e.message}`).join('; ') || 'Validation failed';
-}
+    // Mongoose validation/cast errors aur Zod errors ko 400 me map karo,
+    // warna ye generic 500 ke peeche chhup jate hain.
+    if (err.name === 'ValidationError' || err.name === 'CastError') {
+        statusCode = 400;
+        message = err.message;
+    } else if (err.name === 'ZodError') {
+        statusCode = 400;
+        message = (err as any).errors?.map((e: any) => `${e.path?.join('.')}: ${e.message}`).join('; ') || 'Validation failed';
+    }
 
-// ✅ Sirf genuine 500 (unexpected/unknown) errors ke liye generic
-// message chhupao. Operational errors (400/401/403/404/409 etc — jo
-// BadRequestError, NotFoundError, ConflictError se aate hain aur
-// .message already set hoti hai) ka asli message hamesha bhejo,
-// production mein bhi — warna debugging/UX dono break ho jate hain.
-const isKnownOperationalError = statusCode < 500 && !!message;
+    // Sirf genuine 500 errors ka message production me chhupao.
+    // Operational errors (400/401/403/404/409) ka asli message hamesha bhejo.
+    const isKnownOperationalError = statusCode < 500 && !!message;
 
-return res.status(statusCode).json({
-    status: 'error',
-    message: isKnownOperationalError
-        ? message
-        : (process.env['NODE_ENV'] === 'production'
-            ? 'Internal server error'
-            : message || 'Internal server error'),
-});
+    return res.status(statusCode).json({
+        status: 'error',
+        message: isKnownOperationalError
+            ? message
+            : (isProduction
+                ? 'Internal server error'
+                : message || 'Internal server error'),
+    });
 }) as express.ErrorRequestHandler);
 
 export { app, NotificationService };
