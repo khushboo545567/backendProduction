@@ -8,7 +8,7 @@ import { LoggerUtil } from "@/shared/logger.util";
 import userEmitter from "@/shared/events/emitters/user.emitter";
 import Constants from "@/shared/constants.util";
 import CacheUtil from "@/shared/cache.util";
-import { IUserBadge } from "@/StudyGroup/interfaces/IBadge";
+import type { IUserBadge } from "@/StudyGroup/interfaces/IBadge";
 
 const logger = LoggerUtil;
 
@@ -182,7 +182,7 @@ interface IUserPreferences {
   };
   theme: "light" | "dark" | "auto";
   // Controls whether "who viewed your profile" notifications name the viewer
-  // ('named'), hide identity but still track ('public'/'connections' — reserved
+  // ('named'), hide identity but still track ('public'/'connections' - reserved
   // for future granularity), or disable view tracking entirely ('private').
   profileViewVisibility?: "named" | "public" | "connections" | "private";
 }
@@ -203,7 +203,7 @@ interface IUserFlags {
   deletedBy?: string;
 }
 
-// 🔧 NAYA — search result ke return shape ke liye
+// NAYA - search result ke return shape ke liye
 interface IPaginatedUsersResult {
   data: any[];
   totalCount: number;
@@ -218,14 +218,18 @@ export interface IUserModel extends Model<IUser> {
   generateAccessToken(payload: TokenPayload): string;
   generateRefreshToken(payload: TokenPayload): string;
   verifyToken(token: string, tokenType?: "access" | "refresh"): TokenPayload;
-  lockAccount(userId: string, reason?: string): Promise<IUser>;
+  lockAccount(
+    userId: string,
+    reason?: string,
+    durationMs?: number,
+  ): Promise<IUser>;
   unlockAccount(userId: string): Promise<IUser>;
   syncJobStatus(userId: string, jobStatus: string): Promise<void>;
   findByEmail(email: string): Promise<IUser | null>;
   findByUsername(username: string): Promise<(IUser & Document) | null>;
   findByUserId(userId: string): Promise<IUser | null>;
   getActiveUserCount(): Promise<number>;
-  // 🔧 NAYA — search ke liye
+  // NAYA - search ke liye
   findUsersPaginated(options: {
     page: number;
     limit: number;
@@ -245,18 +249,47 @@ interface TokenPayload {
   exp?: number;
 }
 
+// ==================== JWT CONFIG ====================
+// Production mein secret na ho (ya kamzor ho) to server start hi nahi hoga.
+
+const isProduction = process.env["NODE_ENV"] === "production";
+
+const requireSecret = (name: string, devFallback: string): jwt.Secret => {
+  const value = process.env[name];
+  if (value && value.length >= 32) return value;
+  if (isProduction) {
+    throw new Error(`${name} must be set (min 32 chars) in production`);
+  }
+  return devFallback;
+};
+
 const JWT_CONFIG = {
   accessToken: {
-    secret: (process.env["JWT_ACCESS_SECRET"] ||
-      "your-access-secret-key-change-in-production") as jwt.Secret,
-    expiresIn: "15m" as const,
+    secret: requireSecret(
+      "JWT_ACCESS_SECRET",
+      "dev-only-access-secret-change-me-0123456789",
+    ),
+    expiresIn: (process.env["JWT_ACCESS_EXPIRES_IN"] ||
+      "15m") as jwt.SignOptions["expiresIn"],
   },
   refreshToken: {
-    secret: (process.env["JWT_REFRESH_SECRET"] ||
-      "your-refresh-secret-key-change-in-production") as jwt.Secret,
-    expiresIn: "30d" as const,
+    secret: requireSecret(
+      "JWT_REFRESH_SECRET",
+      "dev-only-refresh-secret-change-me-0123456789",
+    ),
+    expiresIn: (process.env["JWT_REFRESH_EXPIRES_IN"] ||
+      "30d") as jwt.SignOptions["expiresIn"],
   },
 } as const;
+
+if (
+  isProduction &&
+  JWT_CONFIG.accessToken.secret === JWT_CONFIG.refreshToken.secret
+) {
+  throw new Error(
+    "JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different in production",
+  );
+}
 
 const UserSchema = new Schema<IUser, IUserModel>(
   {
@@ -312,7 +345,7 @@ const UserSchema = new Schema<IUser, IUserModel>(
       trim: true,
       maxlength: [50, "Last name cannot exceed 50 characters"],
     },
-    // dateOfBirth removed — birthday data lives in Contact.birthday.{day,month,year}
+    // dateOfBirth removed - birthday data lives in Contact.birthday.{day,month,year}
     // See: src/Profile/models/Contact.model.ts
     location: {
       type: String,
@@ -322,9 +355,11 @@ const UserSchema = new Schema<IUser, IUserModel>(
       maxlength: [50, "Location cannot exceed 50 characters"],
       validate: {
         validator: function (v: string) {
-          return !v || /^[A-Z][a-zA-Z\s\-]{1,49}$/.test(v);
+          // Letters se shuru, aage letters/space/hyphen/comma/period/apostrophe/brackets
+          return !v || /^[A-Za-z][A-Za-z\s\-,.'()]{1,49}$/.test(v);
         },
-        message: "Location must start with a capital letter",
+        message:
+          "Location can contain only letters, spaces and these characters: - , . ' ( )",
       },
     },
     dismissedSuggestionIds: {
@@ -823,12 +858,11 @@ const UserSchema = new Schema<IUser, IUserModel>(
 );
 
 // ==================== INDEXES ====================
-// NOTE: Sirf compound aur unique indexes yahan hain
-// Single-field indexes upar field definition mein  se handle hote hain
+// NOTE: Sirf compound aur unique indexes yahan hain.
+// Single-field indexes upar field definition mein (unique: true) se handle hote hain.
 
-// ⚠️ MIGRATION REQUIRED: run the following against the live DB to drop the obsolete index:
+// MIGRATION REQUIRED: live DB par ye obsolete index manually drop karo:
 // db.users.dropIndex({ dateOfBirth: 1, status: 1 })
-// This Mongoose definition is removed; the physical index must be dropped manually.
 UserSchema.index({ "onboarding.workingProfile.startDate": 1, status: 1 });
 UserSchema.index({ email: 1, status: 1 });
 UserSchema.index({ userId: 1, emailVerified: 1 });
@@ -843,7 +877,7 @@ UserSchema.index({
   createdAt: -1,
 });
 
-// 🔧 NAYA — full-text search index (name, username, email, company, location)
+// NAYA - full-text search index (name, username, email, company, location)
 UserSchema.index(
   {
     firstName: "text",
@@ -913,6 +947,7 @@ UserSchema.statics.generateRefreshToken = function (
   try {
     return jwt.sign(payload, JWT_CONFIG.refreshToken.secret, {
       expiresIn: JWT_CONFIG.refreshToken.expiresIn,
+      jwtid: crypto.randomUUID(),
     });
   } catch (error: any) {
     logger.error("Refresh token generation failed", {
@@ -931,7 +966,9 @@ UserSchema.statics.verifyToken = function (
       tokenType === "refresh"
         ? JWT_CONFIG.refreshToken
         : JWT_CONFIG.accessToken;
-    return jwt.verify(token, config.secret) as TokenPayload;
+    return jwt.verify(token, config.secret, {
+      algorithms: ["HS256"],
+    }) as TokenPayload;
   } catch (error: any) {
     logger.warn(`Token verification failed (${tokenType})`, {
       error: (error as Error).message,
@@ -940,14 +977,19 @@ UserSchema.statics.verifyToken = function (
   }
 };
 
+/**
+ * Account lock. Default 24h (admin actions ke liye);
+ * login ka temporary lock durationMs (15 min) pass karta hai.
+ */
 UserSchema.statics.lockAccount = async function (
   userId: string,
   reason: string = "admin_action",
+  durationMs: number = 24 * 60 * 60 * 1000,
 ): Promise<IUser> {
   try {
     const user = await this.findOne({ userId });
     if (!user) throw new Error("User not found");
-    user.lockUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    user.lockUntil = new Date(Date.now() + durationMs);
     user.accountLockedReason = reason as any;
     await user.save();
     userEmitter.emit("user:locked", { userId, reason, timestamp: new Date() });
@@ -1022,7 +1064,7 @@ UserSchema.statics.getActiveUserCount = async function (): Promise<number> {
   return this.countDocuments({ status: "active", "flags.isDeleted": false });
 };
 
-// 🔧 NAYA — Feature 40: paginated user search
+// NAYA - Feature 40: paginated user search
 // Query string ko firstName/lastName/username/company/location ke against
 // case-insensitive partial (regex) match karta hai. Deleted/inactive users
 // exclude hote hain.
@@ -1156,21 +1198,25 @@ UserSchema.methods.verifyEmail = async function (this: IUser): Promise<IUser> {
   return this;
 };
 
+/**
+ * Last login update: atomic updateOne (full document save aur validators nahi chalte).
+ * Purani cache key ko set karne ki jagah delete karte hain, taaki koi bhi reader
+ * stripped data na pakde aur DB se fresh data le.
+ */
 UserSchema.methods.updateLastLogin = async function (
   this: IUser,
   ipAddress: string,
 ): Promise<IUser> {
-  this.lastLoginAt = new Date();
-  this.lastLoginIp = ipAddress;
-  this.metadata.lastActiveAt = new Date();
-  this.metadata.totalLogins = (this.metadata.totalLogins || 0) + 1;
-  await this.save();
-  const cacheKey = `${Constants.CACHE_PREFIXES.USER}${this.userId}`;
-  await CacheUtil.set(
-    cacheKey,
-    JSON.stringify({ userId: this.userId, emailVerified: this.emailVerified }),
-    Constants.CACHE_TTLS.USER,
-  );
+  const now = new Date();
+  await this.updateOne({
+    $set: {
+      lastLoginAt: now,
+      lastLoginIp: ipAddress,
+      "metadata.lastActiveAt": now,
+    },
+    $inc: { "metadata.totalLogins": 1 },
+  });
+  await CacheUtil.del(`${Constants.CACHE_PREFIXES.USER}${this.userId}`);
   return this;
 };
 

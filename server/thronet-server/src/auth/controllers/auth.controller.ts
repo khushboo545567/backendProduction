@@ -1,44 +1,15 @@
 // ../controllers/auth.controller.ts
 /**
  * auth.controller.ts
- * Production-Level Authentication Controllers for 1M+ Users
- * Supports Registration, Login, Logout, Token Refresh
- * 
- * Features:
- * - NIST 800-63B compliant authentication
- * - Kafka audit logging for all events
- * - Redis caching for sessions
- * - Rate limiting integration
- * - Device fingerprintings
- * - IP-based security checks
- * - Comprehensive error handling
- * - Performance monitoring
- * 
- * @module controllers/auth.controller
- * @version 3.0.0
+ * Authentication controllers: register, login, refresh (DB rotation), logout, profile.
  *
- * ✅ PERFORMANCE FIX (this version) — login():
- *    - Removed the separate AuthService.checkAccountLocked() call.
- *      AuthService.login() now does IP-check + user-fetch +
- *      rate-limit-check + account-status-check all in a single pass,
- *      so calling checkAccountLocked() first was doing a redundant
- *      user fetch + redundant rate-limit query before login() even ran.
- *    - Removed the User.findOne({ userId }) re-fetch that used to run
- *      AFTER a successful login just to build the response.
- *      AuthService.login() now returns the full user fields
- *      (email, role, firstName, lastName, profilePhotoId, headlineId)
- *      directly, so the controller never needs to touch the DB again.
- *    - The 3 CacheUtil.set() calls (session, user, access token) now
- *      run in parallel via Promise.all instead of sequentially.
- *    - The success audit log write is now fire-and-forget
- *      (setImmediate) instead of blocking the response, matching the
- *      pattern already used everywhere else in this file.
+ * @module controllers/auth.controller
+ * @version 4.0.0
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
 import ResponseUtil from '@/shared/response.util';
-
 
 import ValidatorUtil from '@/shared/utils/validator.util';
 import LoggerUtil from '@/shared/logger.util';
@@ -47,9 +18,18 @@ import Constants from '@/shared/constants.util';
 import AuditProducer from '@/shared/kafka/producers/audit.producer';
 import { User, AuditLog, Session } from '@/shared/models/index.models';
 import { AuthService } from '@/shared/services/index.service';
-import TokenBlacklistUtil from '@/shared/utils/tokenBlacklist.util';
 import { GetAllUsersParams } from '../interfaces/auth.interfaces';
 import { AuthCacheRepository } from '../repository/auth.repository';
+
+// ==================== CONSTANTS ====================
+
+// JWT config (User.model JWT_CONFIG) se match hona chahiye
+const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+const REFRESH_GRACE_MS = 60 * 1000;
+
+const UUID_REGEX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // ==================== INTERFACES ====================
 
@@ -70,45 +50,29 @@ interface DeviceData {
 }
 
 interface RegisterBody {
-    // username?: string;
-    // Basic fields
     email: string;
     password: string;
-    confirmPassword: string;        // ✅ NEW: Required
-    firstName: string;              // ✅ CHANGED: Now required (remove ?)
+    confirmPassword: string;
+    firstName: string;
     lastName?: string;
-    location: string;               // ✅ NEW: Required city name
+    location: string;
     phoneNumber?: string;
-
-    // ✅ FIX: these were destructured from req.body in register() but
-    // never declared on this interface — TypeScript now correctly
-    // flags that. Adding them here matches what the code already uses.
     currentPosition?: string;
     company?: string;
     education?: string;
     pronouns?: string;
-
-    // Onboarding fields
-    userType: 'working' | 'student' | 'fresher';  // ✅ NEW: Required
-
-    // Working Professional (conditional - required if userType is 'working')
+    userType: 'working' | 'student' | 'fresher';
     jobTitle?: string;
     companyName?: string;
-    startDate?: string;             // YYYY-MM-DD format
-    endDate?: string;               // YYYY-MM-DD format (optional for current jobs)
-
-    // Student (conditional - required if userType is 'student')
+    startDate?: string;
+    endDate?: string;
     collegeName?: string;
     degree?: string;
     fieldOfStudy?: string;
-    graduationYear?: string;        // Must be digits only
-
-    // Fresher (conditional - required if userType is 'fresher')
+    graduationYear?: string;
     highestEducation?: string;
     preferredRole?: string;
-    cgpa?: string;                  // Optional, no validation
-
-    // Device info (optional)
+    cgpa?: string;
     deviceType?: string;
     deviceName?: string;
     os?: string;
@@ -126,8 +90,6 @@ interface LoginBody {
 }
 
 interface UpdateProfileBody {
-    email?: string;
-    password?: string;
     phoneNumber?: string;
     firstName?: string;
     lastName?: string;
@@ -169,11 +131,6 @@ interface DeleteBody {
     confirmation: string;
 }
 
-interface RefreshBody {
-    refreshToken?: string;
-    deviceId?: string;
-}
-
 interface ValidationResult {
     isValid: boolean;
     data?: {
@@ -189,29 +146,80 @@ interface ValidationResult {
         pronouns?: string;
         phoneNumber?: string;
         userType: 'working' | 'student' | 'fresher';
-
-        // Working fields
         jobTitle?: string;
         companyName?: string;
         startDate?: string;
         endDate?: string;
-
-        // Student fields
         collegeName?: string;
         degree?: string;
         fieldOfStudy?: string;
         graduationYear?: string;
-
-        // Fresher fields
         highestEducation?: string;
         preferredRole?: string;
         cgpa?: string;
-
         rememberMe?: boolean;
-        // username?: string;
     };
     errors?: string[];
 }
+
+// ==================== HELPERS ====================
+
+/**
+ * Kafka audit event: fire-and-forget. KAFKA_ENABLED=false par skip.
+ */
+const sendAudit = (event: Record<string, any>): void => {
+    if (process.env['KAFKA_ENABLED'] === 'false') return;
+    try {
+        Promise.resolve(AuditProducer.sendAuditEvent(event as any)).catch((err: any) =>
+            LoggerUtil.warn('Audit event failed (non-critical)', { error: err?.message })
+        );
+    } catch (err: any) {
+        LoggerUtil.warn('Audit event failed (non-critical)', { error: err?.message });
+    }
+};
+
+/**
+ * Mongo AuditLog: fire-and-forget. Fail hone par kabhi request ko nahi todta.
+ */
+const logAuditSafe = (data: Record<string, any>): void => {
+    try {
+        Promise.resolve(AuditLog.logAction(data as any)).catch((err: any) =>
+            LoggerUtil.error('Audit log write failed (non-critical)', { error: err?.message })
+        );
+    } catch (err: any) {
+        LoggerUtil.error('Audit log write failed (non-critical)', { error: err?.message });
+    }
+};
+
+const buildTokensResponse = (accessToken: string, refreshToken: string) => ({
+    accessToken,
+    refreshToken,
+    tokenType: 'Bearer',
+    expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+    expiresAt: new Date(Date.now() + ACCESS_TOKEN_TTL_SECONDS * 1000).toISOString(),
+    refreshExpiresIn: REFRESH_TOKEN_TTL_SECONDS,
+    refreshExpiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(),
+});
+
+/**
+ * Refresh JWT ka hash session mein save karo (rotation/reuse detection ke liye).
+ * Fail hua to bhi login nahi tootta: pehli refresh par session bootstrap ho jati hai.
+ */
+const saveRefreshTokenHash = async (
+    sessionId: string,
+    refreshToken: string,
+    correlationId: string
+): Promise<void> => {
+    try {
+        await Session.setRefreshToken(sessionId, refreshToken);
+    } catch (err: any) {
+        LoggerUtil.error('Saving refresh token hash failed (non-critical)', {
+            error: err.message,
+            sessionId,
+            correlationId,
+        });
+    }
+};
 
 // ==================== AUTH CONTROLLER CLASS ====================
 
@@ -220,54 +228,37 @@ class AuthController {
     // ==================== USER REGISTRATION ====================
 
     /**
-     * Register a new user
      * POST /api/v1/auth/register
-     * 
-     * @param {Request} req - Express request
-     * @param {Response} res - Express response
-     * @returns {Promise<void>}
      */
-
     static async register(req: Request<{}, any, RegisterBody>, res: Response): Promise<void> {
         const startTime = Date.now();
         const correlationId = (req as any).correlationId || uuidv4();
 
         try {
-            // Step 1: Extract request data
             const {
-                /* username, */
                 email,
                 password,
-                confirmPassword,           // ✅ NEW
-                firstName,                 // Now required
+                confirmPassword,
+                firstName,
                 lastName,
-                location,                  // ✅ NEW
+                location,
                 phoneNumber,
-                userType,                  // ✅ NEW
-                currentPosition,           // ✅ NEW
-                company,                   // ✅ NEW
-                education,                 // ✅ NEW
-                pronouns,                  // ✅ NEW
-
-                // Working fields
+                userType,
                 jobTitle,
                 companyName,
                 startDate,
                 endDate,
-
-                // Student fields
                 collegeName,
                 degree,
                 fieldOfStudy,
                 graduationYear,
-
-                // Fresher fields
                 highestEducation,
                 preferredRole,
                 cgpa,
             } = req.body;
+
             const ipAddress = req.ip || (req as any).connection?.remoteAddress || '0.0.0.0';
-            const userAgent = req.headers['user-agent'] as string || 'Unknown';
+            const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
 
             const deviceData: DeviceData = {
                 deviceType: req.body.deviceType || 'desktop',
@@ -278,38 +269,27 @@ class AuthController {
                 ipAddress,
             };
 
-            LoggerUtil.info('Registration attempt started', {
-                email,
-                ipAddress,
-                correlationId,
-            });
+            LoggerUtil.info('Registration attempt started', { email, ipAddress, correlationId });
 
-            // Step 2: Validate input
+            // Step 1: Validate input
             const validation: ValidationResult = await ValidatorUtil.validateUserRegistration(
                 {
-                    /* username, */
                     email,
                     password,
-                    confirmPassword,       // ✅ NEW
-                    firstName,             // Required
+                    confirmPassword,
+                    firstName,
                     lastName,
-                    location,              // ✅ NEW
+                    location,
                     phoneNumber,
-                    userType,              // ✅ NEW
-
-                    // Working
+                    userType,
                     jobTitle,
                     companyName,
                     startDate,
                     endDate,
-
-                    // Student
                     collegeName,
                     degree,
                     fieldOfStudy,
                     graduationYear,
-
-                    // Fresher
                     highestEducation,
                     preferredRole,
                     cgpa,
@@ -324,43 +304,35 @@ class AuthController {
                     ipAddress,
                     correlationId,
                 });
-
                 ResponseUtil.validationError(res, validation.errors || [], 'Validation failed');
                 return;
             }
 
-            // Step 3: Check for existing user
-            const existingUser = await User.findOne({ email: validation.data?.email });
+            const data = validation.data!;
+            const normalizedEmail = data.email.trim().toLowerCase();
+
+            // Step 2: Existing user check
+            const existingUser = await User.findOne({ email: normalizedEmail });
             if (existingUser) {
                 LoggerUtil.warn('Registration failed - user already exists', {
-                    email: validation.data?.email,
+                    email: normalizedEmail,
                     ipAddress,
                     correlationId,
                 });
 
-                // ✅ Async audit event (non-blocking)
-                setImmediate(async () => {
-                    try {
-                        await AuditProducer.connect();
-                        await AuditProducer.sendAuditEvent({
-                            eventId: uuidv4(),
-                            userId: null,
-                            action: 'REGISTRATION_FAILED',
-                            ipAddress,
-                            status: 'FAILURE',
-                            severity: 'LOW',
-                            timestamp: new Date().toISOString(),
-                            metadata: {
-                                email: validation.data?.email,
-                                reason: 'user_already_exists',
-                                correlationId,
-                            },
-                        });
-                    } catch (err: any) {
-                        LoggerUtil.warn('Audit event failed (non-critical)', { error: err.message });
-                    } finally {
-                        await AuditProducer.disconnect();
-                    }
+                sendAudit({
+                    eventId: uuidv4(),
+                    userId: null,
+                    action: 'REGISTRATION_FAILED',
+                    ipAddress,
+                    status: 'FAILURE',
+                    severity: 'LOW',
+                    timestamp: new Date().toISOString(),
+                    metadata: {
+                        email: normalizedEmail,
+                        reason: 'user_already_exists',
+                        correlationId,
+                    },
                 });
 
                 ResponseUtil.conflict(
@@ -371,33 +343,27 @@ class AuthController {
                 return;
             }
 
-            // Step 4: Register user via AuthService
+            // Step 3: Register via AuthService
             const result = await AuthService.register(
-                validation.data!.email,
-                validation.data!.password,
+                normalizedEmail,
+                data.password,
                 {
-                    firstName: validation.data!.firstName,
-                    lastName: validation.data!.lastName,
-                    location: validation.data!.location,        // ✅ NEW
-                    phoneNumber: validation.data!.phoneNumber,
-                    userType: validation.data!.userType,        // ✅ NEW
-
-                    // Working profile
-                    jobTitle: validation.data!.jobTitle,
-                    companyName: validation.data!.companyName,
-                    startDate: validation.data!.startDate,
-                    endDate: validation.data!.endDate,
-
-                    // Student profile
-                    collegeName: validation.data!.collegeName,
-                    degree: validation.data!.degree,
-                    fieldOfStudy: validation.data!.fieldOfStudy,
-                    graduationYear: validation.data!.graduationYear,
-
-                    // Fresher profile
-                    highestEducation: validation.data!.highestEducation,
-                    preferredRole: validation.data!.preferredRole,
-                    cgpa: validation.data!.cgpa,
+                    firstName: data.firstName,
+                    lastName: data.lastName,
+                    location: data.location,
+                    phoneNumber: data.phoneNumber,
+                    userType: data.userType,
+                    jobTitle: data.jobTitle,
+                    companyName: data.companyName,
+                    startDate: data.startDate,
+                    endDate: data.endDate,
+                    collegeName: data.collegeName,
+                    degree: data.degree,
+                    fieldOfStudy: data.fieldOfStudy,
+                    graduationYear: data.graduationYear,
+                    highestEducation: data.highestEducation,
+                    preferredRole: data.preferredRole,
+                    cgpa: data.cgpa,
                 },
                 deviceData
             );
@@ -406,36 +372,29 @@ class AuthController {
                 userId: result.userId,
                 sessionId: result.sessionId,
                 deviceId: result.deviceId,
-                correlationId
+                correlationId,
             });
 
-            // Step 5: Generate JWT tokens
+            // Step 4: Tokens
             const payload: UserPayload = {
                 userId: result.userId,
                 role: result.role || 'user',
                 sessionId: result.sessionId,
-                deviceId: result.deviceId
+                deviceId: result.deviceId,
             };
-
-            LoggerUtil.debug('Generating JWT tokens', { userId: result.userId, correlationId });
 
             const accessToken = User.generateAccessToken(payload);
             const refreshToken = User.generateRefreshToken(payload);
 
-            LoggerUtil.debug('JWT tokens generated successfully', {
-                userId: result.userId,
-                hasAccessToken: !!accessToken,
-                hasRefreshToken: !!refreshToken,
-                correlationId
-            });
+            await saveRefreshTokenHash(result.sessionId, refreshToken, correlationId);
 
-            // Step 6: Cache session and user data
+            // Step 5: Cache session and user data
             try {
                 await CacheUtil.set(
                     `${Constants.CACHE_PREFIXES.SESSION}${result.sessionId}`,
                     {
                         userId: result.userId,
-                        email: validation.data!.email,
+                        email: normalizedEmail,
                         sessionId: result.sessionId,
                         ipAddress,
                         createdAt: new Date().toISOString(),
@@ -447,9 +406,9 @@ class AuthController {
                     result.userId,
                     {
                         userId: result.userId,
-                        email: validation.data!.email,
-                        firstName: validation.data!.firstName,
-                        lastName: validation.data!.lastName,
+                        email: normalizedEmail,
+                        firstName: data.firstName,
+                        lastName: data.lastName,
                         role: result.role || 'user',
                     },
                     Constants.CACHE_TTLS.USER
@@ -457,98 +416,53 @@ class AuthController {
 
                 await CacheUtil.set(
                     `access_token:${accessToken}`,
-                    {
-                        ...payload,
-                        ipAddress,
-                        userAgent
-                    },
-                    900
+                    { ...payload, ipAddress, userAgent },
+                    ACCESS_TOKEN_TTL_SECONDS
                 );
-
-                LoggerUtil.debug('Cache updated successfully', {
-                    userId: result.userId,
-                    sessionId: result.sessionId,
-                    correlationId
-                });
             } catch (cacheError: any) {
                 LoggerUtil.error('Cache update failed (non-critical)', {
                     error: cacheError.message,
                     userId: result.userId,
-                    correlationId
+                    correlationId,
                 });
             }
 
-            // Step 7: ✅ Send audit event ASYNCHRONOUSLY (non-blocking)
-            setImmediate(async () => {
-                try {
-                    await AuditProducer.connect();
-                    await AuditProducer.sendAuditEvent({
-                        eventId: uuidv4(),
-                        userId: result.userId,
-                        action: Constants.AUDIT_ACTIONS.USER_REGISTERED,
-                        ipAddress,
-                        status: 'SUCCESS',
-                        severity: 'LOW',
-                        timestamp: new Date().toISOString(),
-                        metadata: {
-                            email: validation.data!.email,
-                            firstName: validation.data!.firstName,
-                            location: validation.data!.location,
-                            userType: validation.data!.userType,
-                            hasPhoneNumber: !!validation.data!.phoneNumber,
-                            registrationMethod: 'local',
-                            correlationId,
-                            duration: Date.now() - startTime,
-                        },
-                    });
-                } catch (err: any) {
-                    LoggerUtil.warn('Audit event failed (non-critical)', {
-                        error: err.message,
-                        userId: result.userId,
-                    });
-                } finally {
-                    await AuditProducer.disconnect();
-                }
+            // Step 6: Audit (non-blocking)
+            sendAudit({
+                eventId: uuidv4(),
+                userId: result.userId,
+                action: Constants.AUDIT_ACTIONS.USER_REGISTERED,
+                ipAddress,
+                status: 'SUCCESS',
+                severity: 'LOW',
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    firstName: data.firstName,
+                    location: data.location,
+                    userType: data.userType,
+                    hasPhoneNumber: !!data.phoneNumber,
+                    registrationMethod: 'local',
+                    correlationId,
+                    duration: Date.now() - startTime,
+                },
             });
 
-            // Step 8: Log performance metrics
             const duration = Date.now() - startTime;
             LoggerUtil.performance('user_registration', duration, {
                 userId: result.userId,
-                email: validation.data!.email,
                 correlationId,
             });
-
-            LoggerUtil.info('User registered successfully', {
-                userId: result.userId,
-                email: validation.data!.email,
-                duration,
-                correlationId,
-            });
-
-            // Step 9: Return success response
-            const accessTokenExpiresIn = 15 * 60; // 15 minutes in seconds
-            const refreshTokenExpiresIn = 7 * 24 * 60 * 60; // 7 days in seconds
 
             ResponseUtil.created(res, {
                 user: {
                     userId: result.userId,
-                    email: validation.data!.email,
-                    firstName: validation.data!.firstName,
-                    lastName: validation.data!.lastName,
+                    email: normalizedEmail,
+                    firstName: data.firstName,
+                    lastName: data.lastName,
                     role: result.role || 'user',
                 },
-                tokens: {
-                    accessToken: accessToken,
-                    refreshToken: refreshToken,
-                    tokenType: 'Bearer',                    // ✅ NEW
-                    expiresIn: accessTokenExpiresIn,       // ✅ NEW: seconds
-                    expiresAt: new Date(Date.now() + accessTokenExpiresIn * 1000).toISOString(), // ✅ NEW: ISO timestamp
-                    refreshExpiresIn: refreshTokenExpiresIn,  // ✅ NEW
-                    refreshExpiresAt: new Date(Date.now() + refreshTokenExpiresIn * 1000).toISOString(), // ✅ NEW
-                },
+                tokens: buildTokensResponse(accessToken, refreshToken),
             }, 'Registration successful');
-
             return;
 
         } catch (error: any) {
@@ -557,35 +471,25 @@ class AuthController {
             LoggerUtil.error('Registration failed', {
                 error: error.message,
                 stack: error.stack,
-                email: req.body.email,
+                email: req.body?.email,
                 ipAddress: req.ip,
                 duration,
                 correlationId,
             });
 
-            // ✅ Async audit event for error
-            setImmediate(async () => {
-                try {
-                    await AuditProducer.connect();
-                    await AuditProducer.sendAuditEvent({
-                        eventId: uuidv4(),
-                        userId: null,
-                        action: 'REGISTRATION_ERROR',
-                        ipAddress: req.ip || '0.0.0.0',
-                        status: 'ERROR',
-                        severity: 'HIGH',
-                        timestamp: new Date().toISOString(),
-                        metadata: {
-                            error: error.message,
-                            endpoint: '/api/v1/auth/register',
-                            correlationId,
-                        },
-                    });
-                } catch (err: any) {
-                    LoggerUtil.warn('Audit event failed', { error: err.message });
-                } finally {
-                    await AuditProducer.disconnect();
-                }
+            sendAudit({
+                eventId: uuidv4(),
+                userId: null,
+                action: 'REGISTRATION_ERROR',
+                ipAddress: req.ip || '0.0.0.0',
+                status: 'ERROR',
+                severity: 'HIGH',
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    error: error.message,
+                    endpoint: '/api/v1/auth/register',
+                    correlationId,
+                },
             });
 
             ResponseUtil.internalError(
@@ -602,27 +506,8 @@ class AuthController {
     // ==================== USER LOGIN ====================
 
     /**
-    * Authenticate user and create session
-    * POST /api/v1/auth/login
-    *
-    * ✅ OPTIMIZED: previously this handler called
-    * AuthService.checkAccountLocked() (which fetched the user + ran a
-    * rate-limit query), then called AuthService.login() which fetched
-    * the SAME user again and ran the SAME rate-limit query again, and
-    * THEN — after a successful login — fetched the user a THIRD time
-    * via User.findOne() just to build the response. That's 3 user
-    * fetches + 2 rate-limit queries for a single login request.
-    *
-    * Now: a single call to AuthService.login() does everything (IP
-    * check, user fetch, account-status checks, rate-limit check,
-    * password verification) and returns the full user fields needed
-    * for the response — so this handler never touches the User
-    * collection directly.
-    * 
-    * @param {Request} req - Express request
-    * @param {Response} res - Express response
-    * @returns {Promise<void>}
-    */
+     * POST /api/v1/auth/login
+     */
     static async login(req: Request<{}, any, LoginBody>, res: Response): Promise<void> {
         const startTime = Date.now();
         const correlationId = (req as any).correlationId || uuidv4();
@@ -630,7 +515,7 @@ class AuthController {
         try {
             const { email, password, rememberMe } = req.body;
             const ipAddress = req.ip || '0.0.0.0';
-            const userAgent = req.headers['user-agent'] as string || 'Unknown';
+            const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
 
             const deviceData: DeviceData = {
                 deviceType: req.body.deviceType || 'desktop',
@@ -645,7 +530,7 @@ class AuthController {
                 email,
                 ipAddress,
                 rememberMe: !!rememberMe,
-                correlationId
+                correlationId,
             });
 
             // Step 1: Validate input
@@ -655,36 +540,25 @@ class AuthController {
             );
 
             if (!validation.isValid) {
-                await AuditLog.logAction({
-                    userId: String(null),
+                logAuditSafe({
+                    userId: 'unknown',
                     userEmail: email,
                     action: 'LOGIN_FAILED',
                     ipAddress,
                     userAgent,
-                    status: 'FAILURE' as const,
-                    severity: 'MEDIUM' as const,
+                    status: 'FAILURE',
+                    severity: 'MEDIUM',
                     metadata: new Map<string, any>(Object.entries({
-                        reason: '3_failed_attempts', correlationId
+                        reason: 'validation_failed',
+                        correlationId,
                     })),
                 });
                 ResponseUtil.validationError(res, validation.errors || [], 'Validation failed');
                 return;
             }
 
-            // ✅ Step 2 (removed): AuthService.checkAccountLocked() no
-            // longer called separately here — AuthService.login() below
-            // now handles the IP-block check, account-status checks,
-            // and rate-limit check internally in a single pass, using
-            // ONE user fetch instead of the two (checkAccountLocked +
-            // login) this used to require.
-
-            // Step 3: Authenticate user via AuthService — this single
-            // call now does everything: IP check, user fetch, account
-            // status checks, rate-limit check, password verification,
-            // device registration, session creation, and returns the
-            // full user data needed for the response.
-            LoggerUtil.debug('Calling AuthService.login', { email, correlationId });
-
+            // Step 2: Authenticate (IP check, user fetch, status, rate limit, password,
+            // device, session: sab AuthService.login ke andar)
             const result = await AuthService.login(
                 validation.data!.email,
                 validation.data!.password,
@@ -696,58 +570,35 @@ class AuthController {
                 userId: result.userId,
                 sessionId: result.sessionId,
                 deviceId: result.deviceId,
-                correlationId
+                correlationId,
             });
 
-            // ✅ Step 4 (removed): the old User.findOne({ userId })
-            // re-fetch is gone. `result` from AuthService.login() now
-            // already contains email, role, firstName, lastName,
-            // profilePhotoId, headlineId — everything this handler
-            // needs to build the response and cache payload.
-
-            // Step 5: Generate JWT tokens
+            // Step 3: Tokens
             const payload: UserPayload = {
                 userId: result.userId,
                 role: result.role || 'user',
                 sessionId: result.sessionId,
-                deviceId: result.deviceId
+                deviceId: result.deviceId,
             };
-
-            LoggerUtil.debug('Generating JWT tokens', { userId: result.userId, correlationId });
 
             const accessToken = User.generateAccessToken(payload);
             const refreshToken = User.generateRefreshToken(payload);
 
-            LoggerUtil.debug('JWT tokens generated successfully', {
-                userId: result.userId,
-                hasAccessToken: !!accessToken,
-                hasRefreshToken: !!refreshToken,
-                correlationId
-            });
+            await saveRefreshTokenHash(result.sessionId, refreshToken, correlationId);
 
-            // Step 6: ✅ Cache session and user data — the 3 independent
-            // cache writes now run in PARALLEL instead of sequentially.
+            // Step 4: Cache writes (parallel)
             try {
                 const sessionTTL = rememberMe
                     ? Constants.CACHE_TTLS.SESSION_LONG
                     : Constants.CACHE_TTLS.SESSION;
 
-                // ✅ FIX: this used to write to the SAME "user:<userId>"
-                // cache key that AuthService.getUserById() reads for the
-                // full public profile ("/profile/[userId]"). Since this
-                // object only has 7 fields (no location, coverPhotoId,
-                // experienceIds, etc.), it was silently overwriting the
-                // full profile cache for 24h after every login — so
-                // anyone viewing that user's profile during that window
-                // got a stripped-down object missing location/cover photo.
-                // Now it writes to its own "session:user:<userId>" key.
                 await Promise.all([
                     CacheUtil.set(
                         `${Constants.CACHE_PREFIXES.SESSION}${result.sessionId}`,
                         {
                             userId: result.userId,
                             sessionId: result.sessionId,
-                            ipAddress
+                            ipAddress,
                         },
                         sessionTTL
                     ),
@@ -766,90 +617,49 @@ class AuthController {
                     ),
                     CacheUtil.set(
                         `access_token:${accessToken}`,
-                        {
-                            ...payload,
-                            ipAddress,
-                            userAgent
-                        },
-                        900
+                        { ...payload, ipAddress, userAgent },
+                        ACCESS_TOKEN_TTL_SECONDS
                     ),
                 ]);
-
-                LoggerUtil.debug('Cache updated successfully', {
-                    userId: result.userId,
-                    sessionId: result.sessionId,
-                    correlationId
-                });
             } catch (cacheError: any) {
                 LoggerUtil.error('Cache update failed (non-critical)', {
                     error: cacheError.message,
                     userId: result.userId,
-                    correlationId
+                    correlationId,
                 });
             }
 
-            // Step 7: ✅ Log successful login audit — now fire-and-forget
-            // (setImmediate) instead of blocking the response, matching
-            // the pattern used everywhere else in this file.
-            setImmediate(() => {
-                AuditLog.logAction({
-                    userId: result.userId,
-                    userEmail: result.email,
-                    action: 'LOGIN_SUCCESS',
-                    ipAddress,
-                    userAgent,
-                    sessionId: result.sessionId,
-                    status: 'SUCCESS',
-                    severity: 'LOW',
-                    metadata: new Map<string, any>(Object.entries({
-                        rememberMe: !!rememberMe,
-                        tokenType: 'JWT',
-                        correlationId,
-                        duration: Date.now() - startTime
-                    })),
-                }).catch((err: any) =>
-                    LoggerUtil.error('Login success audit log failed (non-critical)', {
-                        error: err.message,
-                        userId: result.userId,
-                    })
-                );
+            // Step 5: Success audit (non-blocking)
+            logAuditSafe({
+                userId: result.userId,
+                userEmail: result.email,
+                action: 'LOGIN_SUCCESS',
+                ipAddress,
+                userAgent,
+                sessionId: result.sessionId,
+                status: 'SUCCESS',
+                severity: 'LOW',
+                metadata: new Map<string, any>(Object.entries({
+                    rememberMe: !!rememberMe,
+                    tokenType: 'JWT',
+                    correlationId,
+                    duration: Date.now() - startTime,
+                })),
             });
 
-            // Step 8: Log performance metrics
             const duration = Date.now() - startTime;
             LoggerUtil.performance('user_login', duration, {
                 userId: result.userId,
-                correlationId
+                correlationId,
             });
-
-            LoggerUtil.info('User logged in successfully', {
-                userId: result.userId,
-                email: result.email,
-                duration,
-                correlationId
-            });
-
-            // Step 9: ✅ Return success response
-            const accessTokenExpiresIn = 15 * 60; // 15 minutes
-            const refreshTokenExpiresIn = rememberMe
-                ? 90 * 24 * 60 * 60  // 90 days (remember me)
-                : 30 * 24 * 60 * 60; // 30 days default (persistent login)
 
             ResponseUtil.success(res, {
                 user: {
                     userId: result.userId,
                     email: result.email,
-                    role: result.role || 'user'
+                    role: result.role || 'user',
                 },
-                tokens: {
-                    accessToken: accessToken,
-                    refreshToken: refreshToken,
-                    tokenType: 'Bearer',                    // ✅ NEW
-                    expiresIn: accessTokenExpiresIn,       // ✅ NEW
-                    expiresAt: new Date(Date.now() + accessTokenExpiresIn * 1000).toISOString(), // ✅ NEW
-                    refreshExpiresIn: refreshTokenExpiresIn,  // ✅ NEW
-                    refreshExpiresAt: new Date(Date.now() + refreshTokenExpiresIn * 1000).toISOString(), // ✅ NEW
-                },
+                tokens: buildTokensResponse(accessToken, refreshToken),
             }, 'Welcome To Throne8', 200);
             return;
 
@@ -858,53 +668,60 @@ class AuthController {
 
             LoggerUtil.error('Login failed', {
                 error: error.message,
-                stack: error.stack,
-                email: req.body.email,
+                email: req.body?.email,
                 ipAddress: req.ip,
                 duration,
-                correlationId
+                correlationId,
             });
 
-            await AuditLog.logAction({
-                userId: String(null),
-                userEmail: req.body.email,
+            // Audit fire-and-forget: audit fail hone par login ka 401 kabhi 500 nahi banega
+            logAuditSafe({
+                userId: 'unknown',
+                userEmail: req.body?.email,
                 action: 'LOGIN_FAILED',
                 ipAddress: req.ip || '0.0.0.0',
-                userAgent: req.headers['user-agent'] as string || 'Unknown',
+                userAgent: (req.headers['user-agent'] as string) || 'Unknown',
                 status: 'FAILURE',
                 severity: 'MEDIUM',
                 metadata: new Map<string, any>(Object.entries({
                     reason: error.message,
-                    correlationId
+                    correlationId,
                 })),
             });
 
-            // Return appropriate error responses
-            if (error.message.includes('Account locked') ||
-                error.message.includes('failed attempts') ||
-                error.message.includes('too many attempts') ||
-                error.message.includes('Too many attempts')) {
+            const message: string = String(error?.message || '');
+            const lower = message.toLowerCase();
+
+            if (
+                lower.includes('account locked') ||
+                lower.includes('failed attempts') ||
+                lower.includes('too many attempts')
+            ) {
                 ResponseUtil.tooManyRequests(
                     res,
-                    'Account temporarily locked due to multiple failed login attempts',
+                    'Too many failed login attempts. Please try again in 15 minutes.',
                     { retryAfter: 900 }
                 );
                 return;
             }
 
-            if (error.message.includes('disabled') ||
-                error.message.includes('suspended') ||
-                error.message.includes('not active') ||
-                error.message.includes('Contact support')) {
+            if (
+                lower.includes('disabled') ||
+                lower.includes('suspended') ||
+                lower.includes('not active') ||
+                lower.includes('contact support')
+            ) {
                 ResponseUtil.forbidden(
                     res,
-                    'Your account has been disabled. Please contact support.'
+                    'Your account is not active. Please contact support.'
                 );
                 return;
             }
 
-            if (error.message.includes('unable to retrieve user data') ||
-                error.message.includes('User data not found')) {
+            if (
+                lower.includes('unable to retrieve user data') ||
+                lower.includes('user data not found')
+            ) {
                 ResponseUtil.error(
                     res,
                     'An error occurred during login. Please try again.',
@@ -918,115 +735,138 @@ class AuthController {
         }
     }
 
+    // ==================== REFRESH TOKEN (DB ROTATION) ====================
+
     /**
- * ✅ NEW: Refresh Token with Rotation
- * POST /api/v1/auth/refresh
- */
+     * POST /api/v1/auth/refresh-token
+     * Session ke andar stored hash se rotation + reuse detection.
+     */
     static async refreshToken(req: Request, res: Response): Promise<void> {
         const startTime = Date.now();
         const correlationId = (req as any).correlationId || uuidv4();
 
         try {
-            const { refreshToken } = req.body;
+            const { refreshToken } = req.body || {};
 
-            if (!refreshToken) {
+            if (!refreshToken || typeof refreshToken !== 'string') {
                 ResponseUtil.badRequest(res, 'Refresh token is required');
                 return;
             }
 
-            LoggerUtil.info('Token refresh attempt', { correlationId });
-
-            // Step 1: Verify refresh token
+            // Step 1: JWT verify
             let decoded: any;
             try {
                 decoded = User.verifyToken(refreshToken, 'refresh');
             } catch (error: any) {
-                LoggerUtil.warn('Invalid refresh token', { error: error.message });
+                LoggerUtil.warn('Invalid refresh token', { error: error.message, correlationId });
                 ResponseUtil.unauthorized(res, 'Invalid or expired refresh token');
                 return;
             }
 
-            // Step 2: ✅ Check if refresh token is blacklisted (reuse detection)
-            const isBlacklisted = await TokenBlacklistUtil.isRefreshTokenBlacklisted(refreshToken);
-            if (isBlacklisted) {
-                LoggerUtil.error('🚨 SECURITY ALERT: Blacklisted refresh token reused', {
-                    userId: decoded.userId,
-                    sessionId: decoded.sessionId,
-                });
-
-                // ✅ Blacklist all user tokens (potential token theft)
-                await TokenBlacklistUtil.blacklistAllUserTokens(decoded.userId);
-                await Session.revokeAllUserSessions(decoded.userId, 'security_breach');
-
-                ResponseUtil.unauthorized(
-                    res,
-                    'Security alert: This token has been used before. All your sessions have been terminated for security.'
-                );
+            // Session ke bina bane purane tokens ab accept nahi hote
+            if (!decoded?.userId || !decoded?.sessionId) {
+                ResponseUtil.unauthorized(res, 'Session not found. Please login again.');
                 return;
             }
 
-            // Step 3: Fetch user and validate
-            const user = await User.findOne({ userId: decoded.userId })
-                .select('userId email role status')
+            // Step 2: User validate
+            const user: any = await User.findOne({ userId: decoded.userId })
+                .select('userId email role status accountStatus flags')
                 .lean();
 
-            if (!user || user.status !== 'active') {
+            if (
+                !user ||
+                user.status !== 'active' ||
+                user.flags?.isDeleted ||
+                (user.accountStatus && user.accountStatus !== 'active')
+            ) {
                 LoggerUtil.warn('User not found or inactive during refresh', {
                     userId: decoded.userId,
+                    correlationId,
                 });
                 ResponseUtil.unauthorized(res, 'User account not found or inactive');
                 return;
             }
 
-            // Step 4: Validate session still exists
-            const session = await Session.findById(decoded.sessionId);
-            if (!session || !session.isActive) {
-                LoggerUtil.warn('Session not found or inactive', {
-                    sessionId: decoded.sessionId,
-                });
-                ResponseUtil.unauthorized(res, 'Session has been terminated');
-                return;
-            }
-
-            // Step 5: ✅ BLACKLIST OLD REFRESH TOKEN (Token Rotation)
-            await TokenBlacklistUtil.blacklistRefreshToken(
-                refreshToken,
-                decoded.userId,
-                'token_rotation'
-            );
-
-            // Step 6: ✅ GENERATE NEW TOKENS
-            const newPayload = {
+            // Step 3: Naye tokens + atomic rotation
+            const newPayload: UserPayload = {
                 userId: user.userId,
-                role: user.role,
-                sessionId: session._id,
+                role: user.role || 'user',
+                sessionId: decoded.sessionId,
                 deviceId: decoded.deviceId,
             };
 
             const newAccessToken = User.generateAccessToken(newPayload);
             const newRefreshToken = User.generateRefreshToken(newPayload);
 
-            // Step 7: Cache new tokens
-            const accessTokenExpiresIn = 15 * 60; // 15 minutes
-            const refreshTokenExpiresIn = 7 * 24 * 60 * 60; // 7 days
+            const rotation = await Session.rotateRefreshToken({
+                sessionId: decoded.sessionId,
+                userId: decoded.userId,
+                presentedToken: refreshToken,
+                newToken: newRefreshToken,
+                graceMs: REFRESH_GRACE_MS,
+            });
 
-            await CacheUtil.set(
-                `access_token:${newAccessToken}`,
-                {
-                    ...newPayload,
-                    ipAddress: req.ip,
-                    userAgent: req.headers['user-agent'],
-                },
-                accessTokenExpiresIn
-            );
+            if (!rotation.ok) {
+                if (rotation.reason === 'reuse') {
+                    LoggerUtil.error('SECURITY ALERT: refresh token reuse detected, session revoked', {
+                        userId: decoded.userId,
+                        sessionId: decoded.sessionId,
+                        correlationId,
+                    });
 
-            // Step 8: Update session refresh token
-            session.refreshToken = newRefreshToken;
-            session.lastActivity = new Date();
-            await session.save();
+                    sendAudit({
+                        eventId: uuidv4(),
+                        userId: decoded.userId,
+                        action: 'REFRESH_TOKEN_REUSE_DETECTED',
+                        ipAddress: req.ip || '0.0.0.0',
+                        status: 'FAILURE',
+                        severity: 'HIGH',
+                        timestamp: new Date().toISOString(),
+                        metadata: { sessionId: decoded.sessionId, correlationId },
+                    });
 
-            // Step 9: Audit log
-            await AuditLog.logAction({
+                    ResponseUtil.unauthorized(
+                        res,
+                        'Your session was ended for security reasons. Please login again.'
+                    );
+                    return;
+                }
+
+                if (rotation.reason === 'conflict') {
+                    ResponseUtil.error(res, 'Please retry', 409);
+                    return;
+                }
+
+                LoggerUtil.warn('Refresh rejected', {
+                    reason: rotation.reason,
+                    sessionId: decoded.sessionId,
+                    correlationId,
+                });
+                ResponseUtil.unauthorized(res, 'Session has been terminated');
+                return;
+            }
+
+            // Step 4: Cache (non-critical)
+            try {
+                await CacheUtil.set(
+                    `access_token:${newAccessToken}`,
+                    {
+                        ...newPayload,
+                        ipAddress: req.ip,
+                        userAgent: req.headers['user-agent'],
+                    },
+                    ACCESS_TOKEN_TTL_SECONDS
+                );
+            } catch (cacheError: any) {
+                LoggerUtil.warn('Token cache failed (non-critical)', {
+                    error: cacheError.message,
+                    correlationId,
+                });
+            }
+
+            // Step 5: Audit (non-blocking)
+            logAuditSafe({
                 userId: user.userId,
                 userEmail: user.email,
                 action: 'TOKEN_REFRESH_SUCCESS',
@@ -1034,77 +874,50 @@ class AuthController {
                 userAgent: req.headers['user-agent'] as string,
                 status: 'SUCCESS',
                 severity: 'LOW',
-                metadata: new Map([
-                    ['sessionId', session._id],
+                metadata: new Map<string, any>([
+                    ['sessionId', decoded.sessionId],
+                    ['graceUsed', String(rotation.graceUsed)],
                     ['correlationId', correlationId],
                 ]),
             });
 
-            const duration = Date.now() - startTime;
             LoggerUtil.info('Token refreshed successfully', {
                 userId: user.userId,
-                duration,
+                graceUsed: rotation.graceUsed,
+                duration: Date.now() - startTime,
                 correlationId,
             });
 
-            // Step 10: ✅ Return new tokens with expiry info
             ResponseUtil.success(
                 res,
-                {
-                    tokens: {
-                        accessToken: newAccessToken,
-                        refreshToken: newRefreshToken,
-                        tokenType: 'Bearer',
-                        expiresIn: accessTokenExpiresIn,
-                        expiresAt: new Date(Date.now() + accessTokenExpiresIn * 1000).toISOString(),
-                        refreshExpiresIn: refreshTokenExpiresIn,
-                        refreshExpiresAt: new Date(Date.now() + refreshTokenExpiresIn * 1000).toISOString(),
-                    },
-                },
+                { tokens: buildTokensResponse(newAccessToken, newRefreshToken) },
                 'Token refreshed successfully',
                 200
             );
             return;
-        } catch (error: any) {
-            const duration = Date.now() - startTime;
 
+        } catch (error: any) {
             LoggerUtil.error('Token refresh failed', {
                 error: error.message,
                 stack: error.stack,
-                duration,
+                duration: Date.now() - startTime,
                 correlationId,
             });
 
-            await AuditLog.logAction({
-                userId: String(null),
-                action: 'TOKEN_REFRESH_FAILED',
-                ipAddress: req.ip || '0.0.0.0',
-                status: 'FAILURE',
-                severity: 'MEDIUM',
-                metadata: new Map([
-                    ['error', error.message],
-                    ['correlationId', correlationId],
-                ]),
-            });
-
+            // 500: frontend isse logout nahi karta (sirf 400/401/403 par karta hai)
             ResponseUtil.internalError(
                 res,
-                'Token refresh failed. Please login again.',
+                'Token refresh failed. Please try again.',
                 error
             );
             return;
         }
     }
 
-    // ==================== GET USER PROFILE ====================
+    // ==================== GET USER PROFILE (SELF) ====================
 
     /**
-     * GET /api/v1/user/profile
-     * Get authenticated user's profile
-     * 
-     * @param {Request} req - Express request
-     * @param {Response} res - Express response
-     * @returns {Promise<void>}
+     * GET /api/v1/auth/profile
      */
     static async getUserProfile(req: Request & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
@@ -1112,43 +925,31 @@ class AuthController {
         const ipAddress = req.ip || 'unknown';
 
         try {
-            // ✅ Validate authentication
             if (!userId) {
                 ResponseUtil.unauthorized(res, 'Authentication required');
                 return;
             }
 
-            LoggerUtil.info('Get profile request', { userId, correlationId });
-
-            // ✅ Parse query options
             const includeStats = req.query.includeStats === 'true';
             const includeSessions = req.query.includeSessions === 'true';
 
-            // ✅ Fetch profile from service
             const profile = await AuthService.getUserProfile(userId, {
                 includeStats,
                 includeSessions,
             });
 
-            // ✅ Audit log (non-blocking)
-            setImmediate(() => {
-                AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(),
-                    userId,
-                    action: 'PROFILE_VIEWED',
-                    ipAddress,
-                    status: 'SUCCESS',
-                    severity: 'LOW',
-                    timestamp: new Date().toISOString(),
-                    metadata: { correlationId },
-                }).catch((err: any) => LoggerUtil.error('Audit log failed', { error: err.message }));
+            sendAudit({
+                eventId: uuidv4(),
+                userId,
+                action: 'PROFILE_VIEWED',
+                ipAddress,
+                status: 'SUCCESS',
+                severity: 'LOW',
+                timestamp: new Date().toISOString(),
+                metadata: { correlationId },
             });
 
-            ResponseUtil.success(
-                res,
-                profile,
-                'Profile fetched successfully'
-            );
+            ResponseUtil.success(res, profile, 'Profile fetched successfully');
             return;
 
         } catch (error: any) {
@@ -1158,71 +959,60 @@ class AuthController {
                 correlationId,
             });
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Failed to fetch profile',
-                500
-            );
+            ResponseUtil.error(res, error.message || 'Failed to fetch profile', 500);
             return;
         }
     }
 
+    // ==================== GET USER BY ID ====================
+
     /**
- * @route   GET /api/v1/auth/users/:userId
- * @desc    Get user by ID (UUID)
- * @access  Public (can be changed to Private if needed)
- * @param   {String} userId - User UUID
- * @query   {Boolean} includeStats - Include statistics
- * @query   {Boolean} includeSessions - Include active sessions
- */
+     * GET /api/v1/auth/get-user/:userId
+     * Self ya admin ko full profile, baaki sabko sirf public profile.
+     * Route par authenticateOptional lagi honi chahiye.
+     */
     static async getUserById(req: Request, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
         const { userId } = req.params;
+        const viewer = (req as any).user as UserPayload | undefined;
 
         try {
-            LoggerUtil.info('Get user by ID request', { userId, correlationId });
-
-            // ✅ Validate userId parameter
             if (!userId) {
                 ResponseUtil.badRequest(res, 'User ID is required');
                 return;
             }
 
-            // ✅ Parse query options
+            if (!UUID_REGEX.test(userId)) {
+                ResponseUtil.badRequest(res, 'Invalid user ID format');
+                return;
+            }
+
             const includeStats = req.query.includeStats === 'true';
             const includeSessions = req.query.includeSessions === 'true';
 
-            // ✅ Fetch user from service
-            const user = await AuthService.getUserById(userId, {
-                includeStats,
-                includeSessions,
+            const isSelfOrAdmin =
+                !!viewer && (viewer.userId === userId || viewer.role === 'admin');
+
+            const user = isSelfOrAdmin
+                ? await AuthService.getUserProfile(userId, { includeStats, includeSessions })
+                : await AuthService.getUserById(userId, {});
+
+            sendAudit({
+                eventId: uuidv4(),
+                userId: viewer?.userId || null,
+                action: 'USER_VIEWED_BY_ID',
+                ipAddress: req.ip || 'unknown',
+                status: 'SUCCESS',
+                severity: 'LOW',
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    viewedUserId: userId,
+                    fullProfile: isSelfOrAdmin,
+                    correlationId,
+                },
             });
 
-            // ✅ Audit log (non-blocking)
-            setImmediate(() => {
-                AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(),
-                    userId: userId,
-                    action: 'USER_VIEWED_BY_ID',
-                    ipAddress: req.ip || 'unknown',
-                    status: 'SUCCESS',
-                    severity: 'LOW',
-                    timestamp: new Date().toISOString(),
-                    metadata: {
-                        correlationId,
-                        includeStats,
-                        includeSessions
-                    },
-                }).catch((err: any) =>
-                    LoggerUtil.error('Audit log failed', { error: err.message })
-                );
-            });
-
-            ResponseUtil.success(
-                res,
-                user,
-                'User fetched successfully'
-            );
+            ResponseUtil.success(res, user, 'User fetched successfully');
             return;
 
         } catch (error: any) {
@@ -1233,7 +1023,6 @@ class AuthController {
                 correlationId,
             });
 
-            // Handle specific errors
             if (error.message === 'Invalid user ID format') {
                 ResponseUtil.badRequest(res, 'Invalid user ID format');
                 return;
@@ -1249,76 +1038,83 @@ class AuthController {
                 return;
             }
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Failed to fetch user',
-                500
-            );
+            ResponseUtil.error(res, error.message || 'Failed to fetch user', 500);
             return;
         }
     }
 
+    // ==================== GET USERS BULK (PUBLIC FIELDS) ====================
 
+    /**
+     * POST /api/v1/auth/get-users-bulk (route par authenticate zaroori)
+     */
     static async getUsersBulk(req: Request, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
-        const { userIds } = req.body;
+        const viewer = (req as any).user as UserPayload | undefined;
+        const { userIds } = req.body || {};
+
         try {
-            LoggerUtil.info('Get users bulk request', { count: userIds?.length, correlationId });
             if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
                 ResponseUtil.badRequest(res, 'userIds must be a non-empty array');
                 return;
             }
+
             if (userIds.length > 100) {
                 ResponseUtil.badRequest(res, 'Cannot request more than 100 userIds at once');
                 return;
             }
+
             const users = await AuthService.getUsersByIds(userIds);
-            setImmediate(() => {
-                AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(), userId: null, action: 'USERS_VIEWED_BULK',
-                    ipAddress: req.ip || 'unknown', status: 'SUCCESS', severity: 'LOW',
-                    timestamp: new Date().toISOString(),
-                    metadata: { requested: userIds.length, found: users.length, correlationId },
-                }).catch((err: any) => LoggerUtil.error('Audit log failed', { error: err.message }));
+
+            sendAudit({
+                eventId: uuidv4(),
+                userId: viewer?.userId || null,
+                action: 'USERS_VIEWED_BULK',
+                ipAddress: req.ip || 'unknown',
+                status: 'SUCCESS',
+                severity: 'LOW',
+                timestamp: new Date().toISOString(),
+                metadata: { requested: userIds.length, found: users.length, correlationId },
             });
+
             ResponseUtil.success(res, { users }, 'Users fetched successfully');
             return;
+
         } catch (error: any) {
-            LoggerUtil.error('Get users bulk failed', { error: error.message, stack: error.stack, correlationId });
+            LoggerUtil.error('Get users bulk failed', {
+                error: error.message,
+                stack: error.stack,
+                correlationId,
+            });
             ResponseUtil.error(res, error.message || 'Failed to fetch users', 500);
             return;
         }
     }
 
+    // ==================== GET ALL USERS (ADMIN ONLY) ====================
+
     /**
-     * ==================== GET ALL USERS (ADMIN ONLY) ====================
-     * 
      * GET /api/v1/auth/users
-     * 
-     * Query Parameters:
-     * - page: number (default: 1)
-     * - limit: number (default: 20, max: 100)
-     * - status: 'active' | 'inactive' | 'suspended' | 'deleted'
-     * - role: 'user' | 'admin' | 'moderator'
-     * - userType: 'working' | 'student' | 'fresher'
-     * - location: string
-     * - search: string (searches email, firstName, lastName)
-     * - sortBy: 'newest' | 'oldest' | 'name' | 'email'
-     * 
-     * @access Private (Admin only)
-    */
+     * Query: page, limit, status, role, userType, location, search, sortBy
+     */
     static async getAllUsers(req: Request & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
         const userId = req.user?.userId;
         const userRole = req.user?.role;
+
         try {
-            // ✅ Step 1: Verify user
             if (!userId) {
                 ResponseUtil.unauthorized(res, 'Authentication required');
                 return;
             }
 
-            // ✅ Step 2: Parse and validate query parameters
+            // Defense in depth: route par authorize('admin') ke saath yahan bhi check
+            if (userRole !== 'admin') {
+                LoggerUtil.warn('Non-admin tried to list users', { userId, userRole, correlationId });
+                ResponseUtil.forbidden(res, 'Admin privileges required');
+                return;
+            }
+
             const page = Math.max(1, parseInt(req.query.page as string) || 1);
             const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
             const skip = (page - 1) * limit;
@@ -1331,64 +1127,38 @@ class AuthController {
                 search: req.query.search as string,
             };
 
-            // ✅ FIX: GetAllUsersParams.sortBy expects a specific union
-            // type ('newest' | 'oldest' | 'name' | 'email'), not a
-            // generic string — cast against the interface's own field
-            // type instead of hardcoding the union here, so it stays in
-            // sync if that type ever changes.
             const sortBy = (req.query.sortBy as GetAllUsersParams['sortBy']) || 'newest';
 
             LoggerUtil.info('Admin fetching all users', {
                 userId,
-                userRole,
                 page,
                 limit,
                 filters: Object.entries(filters)
                     .filter(([_, v]) => v !== undefined)
                     .map(([k]) => k),
                 sortBy,
-                correlationId
+                correlationId,
             });
 
-            // ✅ Step 3: Fetch users from service
             const result = await AuthService.getAllUsers({
                 page,
                 limit,
                 skip,
                 filters,
-                sortBy
+                sortBy,
             });
 
-            // ✅ Step 4: Audit log (non-blocking)
-            setImmediate(() => {
-                AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(),
-                    userId: userId,
-                    action: 'ADMIN_VIEW_ALL_USERS',
-                    ipAddress: req.ip || 'unknown',
-                    status: 'SUCCESS',
-                    severity: 'LOW',
-                    timestamp: new Date().toISOString(),
-                    metadata: {
-                        page,
-                        limit,
-                        totalUsers: result.total,
-                        filters,
-                        correlationId,
-                    },
-                }).catch((err: any) => LoggerUtil.error('Audit log failed', { error: err.message }));
-            });
-
-            LoggerUtil.info('Users fetched successfully', {
+            sendAudit({
+                eventId: uuidv4(),
                 userId,
-                page,
-                limit,
-                total: result.total,
-                returned: result.users.length,
-                correlationId
+                action: 'ADMIN_VIEW_ALL_USERS',
+                ipAddress: req.ip || 'unknown',
+                status: 'SUCCESS',
+                severity: 'LOW',
+                timestamp: new Date().toISOString(),
+                metadata: { page, limit, totalUsers: result.total, correlationId },
             });
 
-            // ✅ Step 5: Return response
             ResponseUtil.success(
                 res,
                 {
@@ -1413,32 +1183,22 @@ class AuthController {
             LoggerUtil.error('Get all users failed', {
                 error: error.message,
                 stack: error.stack,
-                userId: userId,
+                userId,
                 correlationId,
             });
 
-            // ✅ Audit log for failure (non-blocking)
-            setImmediate(() => {
-                AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(),
-                    userId: userId || null,
-                    action: 'ADMIN_VIEW_ALL_USERS_FAILED',
-                    ipAddress: req.ip || 'unknown',
-                    status: 'FAILURE',
-                    severity: 'MEDIUM',
-                    timestamp: new Date().toISOString(),
-                    metadata: {
-                        error: error.message,
-                        correlationId,
-                    },
-                }).catch((err: any) => LoggerUtil.error('Audit log failed', { error: err.message }));
+            sendAudit({
+                eventId: uuidv4(),
+                userId: userId || null,
+                action: 'ADMIN_VIEW_ALL_USERS_FAILED',
+                ipAddress: req.ip || 'unknown',
+                status: 'FAILURE',
+                severity: 'MEDIUM',
+                timestamp: new Date().toISOString(),
+                metadata: { error: error.message, correlationId },
             });
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Failed to fetch users',
-                500
-            );
+            ResponseUtil.error(res, error.message || 'Failed to fetch users', 500);
             return;
         }
     }
@@ -1446,12 +1206,8 @@ class AuthController {
     // ==================== UPDATE USER PROFILE ====================
 
     /**
-     * PUT /api/v1/user/profile
-     * Update authenticated user's profile
-     * 
-     * @param {Request} req - Express request
-     * @param {Response} res - Express response
-     * @returns {Promise<void>}
+     * PUT /api/v1/auth/update-profile
+     * Email aur password yahan se nahi badalte (verified OTP flow use hota hai).
      */
     static async updateUserProfile(req: Request<{}, any, UpdateProfileBody> & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
@@ -1459,15 +1215,12 @@ class AuthController {
         const ipAddress = req.ip || 'unknown';
 
         try {
-            // ✅ Validate authentication
             if (!userId) {
                 ResponseUtil.unauthorized(res, 'Authentication required');
                 return;
             }
 
             const {
-                email,
-                password,
                 phoneNumber,
                 firstName,
                 lastName,
@@ -1477,15 +1230,17 @@ class AuthController {
                 education,
                 pronouns,
                 onboarding,
-                preferences
+                preferences,
             } = req.body;
 
-            // ✅ Validate at least one field is provided
-            if (!email && !password && !phoneNumber && !firstName && !lastName &&
-                !location && !currentPosition && !company && !education && !pronouns && !onboarding && !preferences) {
+            if (
+                phoneNumber === undefined && firstName === undefined && lastName === undefined &&
+                location === undefined && currentPosition === undefined && company === undefined &&
+                education === undefined && pronouns === undefined && !onboarding && !preferences
+            ) {
                 ResponseUtil.validationError(
                     res,
-                    ['At least one field (email, password, phoneNumber, firstName, lastName, location, currentPosition, company, education, pronouns, onboarding, preferences) is required'],
+                    ['At least one field (phoneNumber, firstName, lastName, location, currentPosition, company, education, pronouns, onboarding, preferences) is required'],
                     'No fields provided'
                 );
                 return;
@@ -1494,14 +1249,11 @@ class AuthController {
             LoggerUtil.info('Update profile request', {
                 userId,
                 fields: Object.keys(req.body),
-                correlationId
+                correlationId,
             });
 
-            // ✅ Build updates object
             const updates: Partial<UpdateProfileBody> = {};
 
-            if (email !== undefined) updates.email = email;
-            if (password !== undefined) updates.password = password;
             if (phoneNumber !== undefined) updates.phoneNumber = phoneNumber;
             if (firstName !== undefined) updates.firstName = firstName;
             if (lastName !== undefined) updates.lastName = lastName;
@@ -1513,7 +1265,6 @@ class AuthController {
             if (onboarding !== undefined) updates.onboarding = onboarding;
             if (preferences !== undefined) updates.preferences = preferences;
 
-            // ✅ Update profile via service
             const updatedProfile = await AuthService.updateUserProfile(
                 userId,
                 updates,
@@ -1523,14 +1274,10 @@ class AuthController {
             LoggerUtil.info('Profile updated successfully', {
                 userId,
                 updatedFields: updatedProfile.updatedFields,
-                correlationId
+                correlationId,
             });
 
-            ResponseUtil.success(
-                res,
-                updatedProfile,
-                'Profile updated successfully'
-            );
+            ResponseUtil.success(res, updatedProfile, 'Profile updated successfully');
             return;
 
         } catch (error: any) {
@@ -1541,28 +1288,18 @@ class AuthController {
                 correlationId,
             });
 
-            // ✅ Audit log for failed update (non-blocking)
-            setImmediate(() => {
-                AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(),
-                    userId: userId || null,
-                    action: 'PROFILE_UPDATE_FAILED',
-                    ipAddress,
-                    status: 'FAILURE',
-                    severity: 'MEDIUM',
-                    timestamp: new Date().toISOString(),
-                    metadata: {
-                        error: error.message,
-                        correlationId,
-                    },
-                }).catch((err: any) => LoggerUtil.error('Audit log failed', { error: err.message }));
+            sendAudit({
+                eventId: uuidv4(),
+                userId: userId || null,
+                action: 'PROFILE_UPDATE_FAILED',
+                ipAddress,
+                status: 'FAILURE',
+                severity: 'MEDIUM',
+                timestamp: new Date().toISOString(),
+                metadata: { error: error.message, correlationId },
             });
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Failed to update profile',
-                400
-            );
+            ResponseUtil.error(res, error.message || 'Failed to update profile', 400);
             return;
         }
     }
@@ -1570,12 +1307,7 @@ class AuthController {
     // ==================== DEACTIVATE ACCOUNT ====================
 
     /**
-     * POST /api/v1/user/deactivate
-     * Deactivate authenticated user's account
-     * 
-     * @param {Request} req - Express request
-     * @param {Response} res - Express response
-     * @returns {Promise<void>}
+     * POST /api/v1/auth/user-account-deactivate
      */
     static async deactivateAccount(req: Request<{}, any, DeactivateBody> & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
@@ -1583,7 +1315,6 @@ class AuthController {
         const ipAddress = req.ip || 'unknown';
 
         try {
-            // ✅ Validate authentication
             if (!userId) {
                 ResponseUtil.unauthorized(res, 'Authentication required');
                 return;
@@ -1591,7 +1322,6 @@ class AuthController {
 
             const { reason, confirmation } = req.body;
 
-            // ✅ Validate confirmation
             if (confirmation !== 'DEACTIVATE_MY_ACCOUNT') {
                 ResponseUtil.validationError(
                     res,
@@ -1601,24 +1331,15 @@ class AuthController {
                 return;
             }
 
-            LoggerUtil.warn('Account deactivation request', {
-                userId,
-                reason,
-                correlationId
-            });
+            LoggerUtil.warn('Account deactivation request', { userId, reason, correlationId });
 
-            // ✅ Deactivate via service
             const result = await AuthService.deactivateAccount(
                 userId,
                 ipAddress,
                 reason || 'user_requested'
             );
 
-            ResponseUtil.success(
-                res,
-                result,
-                'Account deactivated successfully'
-            );
+            ResponseUtil.success(res, result, 'Account deactivated successfully');
             return;
 
         } catch (error: any) {
@@ -1628,11 +1349,7 @@ class AuthController {
                 correlationId,
             });
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Failed to deactivate account',
-                500
-            );
+            ResponseUtil.error(res, error.message || 'Failed to deactivate account', 500);
             return;
         }
     }
@@ -1640,12 +1357,7 @@ class AuthController {
     // ==================== DELETE USER (ADMIN ONLY) ====================
 
     /**
-     * DELETE /api/v1/user/:userId
-     * Permanently delete user account (admin only)
-     * 
-     * @param {Request} req - Express request
-     * @param {Response} res - Express response
-     * @returns {Promise<void>}
+     * DELETE /api/v1/auth/user-delete/:userId
      */
     static async deleteUser(req: Request<{ userId: string }, any, DeleteBody> & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
@@ -1654,31 +1366,20 @@ class AuthController {
         const ipAddress = req.ip || 'unknown';
 
         try {
-            // ✅ Validate admin authentication
             if (!adminId || adminRole !== 'admin') {
                 LoggerUtil.warn('Unauthorized delete attempt', { adminId, adminRole, correlationId });
-
-                ResponseUtil.forbidden(
-                    res,
-                    'Admin privileges required'
-                );
+                ResponseUtil.forbidden(res, 'Admin privileges required');
                 return;
             }
 
             const { userId } = req.params;
             const { reason, confirmation } = req.body;
 
-            // ✅ Validate userId
             if (!userId) {
-                ResponseUtil.validationError(
-                    res,
-                    ['User ID is required'],
-                    'Missing user ID'
-                );
+                ResponseUtil.validationError(res, ['User ID is required'], 'Missing user ID');
                 return;
             }
 
-            // ✅ Prevent self-deletion
             if (userId === adminId) {
                 ResponseUtil.validationError(
                     res,
@@ -1688,7 +1389,6 @@ class AuthController {
                 return;
             }
 
-            // ✅ Validate confirmation
             if (confirmation !== 'DELETE_USER_PERMANENTLY') {
                 ResponseUtil.validationError(
                     res,
@@ -1698,7 +1398,6 @@ class AuthController {
                 return;
             }
 
-            // ✅ Validate reason
             if (!reason || reason.length < 10) {
                 ResponseUtil.validationError(
                     res,
@@ -1712,22 +1411,12 @@ class AuthController {
                 adminId,
                 targetUserId: userId,
                 reason,
-                correlationId
+                correlationId,
             });
 
-            // ✅ Delete user via service
-            const result = await AuthService.deleteUser(
-                userId,
-                adminId,
-                ipAddress,
-                reason
-            );
+            const result = await AuthService.deleteUser(userId, adminId, ipAddress, reason);
 
-            ResponseUtil.success(
-                res,
-                result,
-                'User deleted permanently'
-            );
+            ResponseUtil.success(res, result, 'User deleted permanently');
             return;
 
         } catch (error: any) {
@@ -1738,37 +1427,27 @@ class AuthController {
                 correlationId,
             });
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Failed to delete user',
-                500
-            );
+            ResponseUtil.error(res, error.message || 'Failed to delete user', 500);
             return;
         }
     }
 
-    // ==================== USER LOGOUT (WITH BLACKLIST) ====================
+    // ==================== LOGOUT ====================
+
     /**
-    * Authenticate user and terminate session
-    * POST /api/v1/auth/logout
-    * 
-    * @param {Request} req - Express request
-    * @param {Response} res - Express response
-    * @returns {Promise<void>}
-    */
+     * POST /api/v1/auth/logout
+     */
     static async logout(req: Request & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
         const userId = req.user?.userId;
         const sessionId = req.user?.sessionId;
-        const deviceId = req.user?.deviceId || req.headers['x-device-id'] as string;
+        const deviceId = req.user?.deviceId || (req.headers['x-device-id'] as string);
         const ipAddress = req.ip || (req as any).connection?.remoteAddress || 'unknown';
 
-        // ✅ CRITICAL: Extract access token from Authorization header
         const authHeader = req.headers.authorization as string;
         const accessToken = authHeader ? authHeader.split(' ')[1] : null;
 
         try {
-            // ✅ Validate required data
             if (!userId) {
                 LoggerUtil.warn('Logout failed - No userId', { correlationId });
                 ResponseUtil.unauthorized(res, 'Authentication required');
@@ -1785,21 +1464,18 @@ class AuthController {
                 userId,
                 sessionId,
                 deviceId,
-                tokenPrefix: accessToken.substring(0, 20),
-                correlationId
+                correlationId,
             });
 
-            // ✅ Call logout service with access token
             const result = await AuthService.logout(
                 userId,
                 sessionId || '',
                 deviceId || '',
-                accessToken, // ✅ Pass the actual token
+                accessToken,
                 ipAddress,
                 correlationId
             );
 
-            // ✅ Clear cookies (if using cookie-based auth)
             res.clearCookie('accessToken', {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
@@ -1812,17 +1488,9 @@ class AuthController {
                 sameSite: 'strict',
             });
 
-            LoggerUtil.info('Logout successful', {
-                userId,
-                sessionId,
-                correlationId
-            });
+            LoggerUtil.info('Logout successful', { userId, sessionId, correlationId });
 
-            ResponseUtil.success(
-                res,
-                result,
-                'Logged out successfully'
-            );
+            ResponseUtil.success(res, result, 'Logged out successfully');
             return;
 
         } catch (error: any) {
@@ -1834,7 +1502,6 @@ class AuthController {
                 correlationId,
             });
 
-            // ✅ Handle specific error cases
             if (error.message === 'Session not found') {
                 ResponseUtil.error(res, 'Invalid session', 400);
                 return;
@@ -1844,27 +1511,20 @@ class AuthController {
                 ResponseUtil.success(res, {
                     success: true,
                     message: 'Already logged out',
-                    loggedOut: false
+                    loggedOut: false,
                 }, 'Session already terminated');
                 return;
             }
 
-            ResponseUtil.error(
-                res,
-                error.message || 'Logout failed',
-                500
-            );
+            ResponseUtil.error(res, error.message || 'Logout failed', 500);
             return;
         }
     }
 
+    // ==================== LOGOUT ALL DEVICES ====================
+
     /**
      * POST /api/v1/auth/logout-all
-     * Logout from all devices
-     * 
-     * @param {Request} req - Express request
-     * @param {Response} res - Express response
-     * @returns {Promise<void>}
      */
     static async logoutAllDevices(req: Request & { user?: UserPayload }, res: Response): Promise<void> {
         const correlationId = (req as any).correlationId || uuidv4();
@@ -1872,12 +1532,10 @@ class AuthController {
         const currentSessionId = req.user?.sessionId;
         const ipAddress = req.ip || (req as any).connection?.remoteAddress || 'unknown';
 
-        // ✅ CRITICAL: Extract current access token from Authorization header
         const authHeader = req.headers.authorization as string;
         const currentAccessToken = authHeader ? authHeader.split(' ')[1] : null;
 
         try {
-            // ✅ Validate authentication
             if (!userId) {
                 LoggerUtil.warn('Logout all failed - No userId', { correlationId });
                 ResponseUtil.unauthorized(res, 'Authentication required');
@@ -1893,19 +1551,16 @@ class AuthController {
             LoggerUtil.info('Logout all devices request received', {
                 userId,
                 currentSessionId,
-                tokenPrefix: currentAccessToken.substring(0, 20),
-                correlationId
+                correlationId,
             });
 
-            // ✅ Call logout all service with current access token
             const result = await AuthService.logoutAll(
                 userId,
-                currentAccessToken,  // ✅ Pass current token to blacklist
+                currentAccessToken,
                 ipAddress,
                 correlationId
             );
 
-            // ✅ Clear cookies (if using cookie-based auth)
             res.clearCookie('accessToken', {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
@@ -1920,16 +1575,12 @@ class AuthController {
 
             LoggerUtil.info('Logout all devices successful', {
                 userId,
-                devicesLoggedOut: result.devicesLoggedOut,
+                devicesDeactivated: result.devicesDeactivated,
                 sessionsTerminated: result.sessionsTerminated,
-                correlationId
+                correlationId,
             });
 
-            ResponseUtil.success(
-                res,
-                result,
-                'Logged out from all devices successfully'
-            );
+            ResponseUtil.success(res, result, 'Logged out from all devices successfully');
             return;
 
         } catch (error: any) {
@@ -1941,12 +1592,11 @@ class AuthController {
                 correlationId,
             });
 
-            // ✅ Handle specific error cases
-            if (error.message.includes('No active sessions')) {
+            if (String(error.message).includes('No active sessions')) {
                 ResponseUtil.success(res, {
                     success: true,
                     message: 'No active sessions to logout',
-                    devicesLoggedOut: 0
+                    devicesLoggedOut: 0,
                 }, 'No active sessions found');
                 return;
             }
