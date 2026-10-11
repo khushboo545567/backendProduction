@@ -10,6 +10,10 @@ import {
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ConflictError, NotFoundError, ForbiddenError } from '@/shared/errors/app.error';
 
+/**
+ * NOTE: NotFoundError appends " not found" to the message itself, so pass only
+ * the resource name here (e.g. "Application" -> "Application not found").
+ */
 class SeniorMentorApplicationService {
   /**
    * Submit a new "Become Senior Mentor" application.
@@ -106,7 +110,7 @@ class SeniorMentorApplicationService {
   async getBySeniorMentorId(seniorMentorId: string): Promise<any> {
     const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
-      throw new NotFoundError('Application not found');
+      throw new NotFoundError('Application');
     }
     return application;
   }
@@ -114,7 +118,7 @@ class SeniorMentorApplicationService {
   async getByUserId(userId: string): Promise<any> {
     const application = await seniorMentorApplicationRepository.findByUserId(userId);
     if (!application) {
-      throw new NotFoundError('You have not applied to become a Senior Mentor yet');
+      throw new NotFoundError('Senior Mentor application');
     }
     return application;
   }
@@ -135,7 +139,7 @@ class SeniorMentorApplicationService {
   ): Promise<any> {
     const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
-      throw new NotFoundError('Application not found');
+      throw new NotFoundError('Application');
     }
     if (application.userId !== userId) {
       throw new ForbiddenError('You can only edit your own application');
@@ -161,7 +165,7 @@ class SeniorMentorApplicationService {
   async withdraw(seniorMentorId: string, userId: string): Promise<void> {
     const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
-      throw new NotFoundError('Application not found');
+      throw new NotFoundError('Application');
     }
     if (application.userId !== userId) {
       throw new ForbiddenError('You can only withdraw your own application');
@@ -194,7 +198,7 @@ class SeniorMentorApplicationService {
   async approve(seniorMentorId: string, adminUserId: string): Promise<any> {
     const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
-      throw new NotFoundError('Application not found');
+      throw new NotFoundError('Application');
     }
     if (application.verificationStatus === ApplicationStatus.VERIFIED) {
       throw new BadRequestError('Application is already verified');
@@ -218,7 +222,7 @@ class SeniorMentorApplicationService {
 
     const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
-      throw new NotFoundError('Application not found');
+      throw new NotFoundError('Application');
     }
 
     const updated = await seniorMentorApplicationRepository.updateBySeniorMentorId(seniorMentorId, {
@@ -235,7 +239,7 @@ class SeniorMentorApplicationService {
   async markUnderReview(seniorMentorId: string, adminUserId: string): Promise<any> {
     const application = await seniorMentorApplicationRepository.findBySeniorMentorId(seniorMentorId);
     if (!application) {
-      throw new NotFoundError('Application not found');
+      throw new NotFoundError('Application');
     }
     if (application.verificationStatus !== ApplicationStatus.PENDING) {
       throw new BadRequestError('Only pending applications can be moved to under review');
