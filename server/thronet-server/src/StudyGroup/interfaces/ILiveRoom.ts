@@ -2,14 +2,16 @@
  * ====================================
  * LIVE ROOM INTERFACE
  * ====================================
+ * group, host and participants[].user are UUID strings (not ObjectIds).
+ * The room's own _id stays an ObjectId.
  */
 
 import { Document, Types } from 'mongoose';
 
 export interface IParticipant {
-  user: Types.ObjectId;
+  user: string;
   joinedAt: Date;
-  leftAt?: Date;
+  leftAt?: Date | null;
   cameraOn: boolean;
   micOn: boolean;
   screenSharing: boolean;
@@ -18,17 +20,17 @@ export interface IParticipant {
 
 export interface ILiveRoom extends Document {
   _id: Types.ObjectId;
-  group: Types.ObjectId;
+  group: string;
   title: string;
   description?: string;
-  host: Types.ObjectId;
+  host: string;
   participants: IParticipant[];
   maxParticipants: number;
   isActive: boolean;
   startedAt: Date;
-  endedAt?: Date;
+  endedAt?: Date | null;
   duration?: number; // in minutes
-  recordingUrl?: string;
+  recordingUrl?: string | null;
   isRecording: boolean;
   settings: {
     allowCamera: boolean;
@@ -47,11 +49,11 @@ export interface ILiveRoom extends Document {
 }
 
 export interface ILiveRoomMethods {
-  addParticipant(userId: Types.ObjectId): Promise<void>;
-  removeParticipant(userId: Types.ObjectId): Promise<void>;
-  toggleCamera(userId: Types.ObjectId, cameraOn: boolean): Promise<void>;
-  toggleMic(userId: Types.ObjectId, micOn: boolean): Promise<void>;
-  toggleScreenShare(userId: Types.ObjectId, sharing: boolean): Promise<void>;
+  addParticipant(userId: string): Promise<void>;
+  removeParticipant(userId: string): Promise<void>;
+  toggleCamera(userId: string, cameraOn: boolean): Promise<void>;
+  toggleMic(userId: string, micOn: boolean): Promise<void>;
+  toggleScreenShare(userId: string, sharing: boolean): Promise<void>;
   endSession(): Promise<void>;
   getActiveParticipants(): IParticipant[];
 }

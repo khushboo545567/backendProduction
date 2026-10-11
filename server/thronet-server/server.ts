@@ -2,22 +2,16 @@
  * /server/thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
  */
-import dns from 'dns';
-import dotenv from 'dotenv';
-import path from 'path';
-
-// Fix for Node on Windows DNS resolving MongoDB Atlas SRV records.
-// ⚠️ ONLY apply this in local/dev — on Railway (or any Linux container
-// production environment) this can break SRV DNS resolution entirely.
-// Removed dns.setServers because it breaks local Windows DNS resolution on restricted networks.
+import dotenv from "dotenv";
+import path from "path";
 
 // ============================================================
 // ENVIRONMENT
 // ============================================================
 
-if (process.env['NODE_ENV'] !== 'production') {
+if (process.env["NODE_ENV"] !== "production") {
   dotenv.config({
-    path: path.join(__dirname, '../../.env'),
+    path: path.join(__dirname, "../../.env"),
   });
 }
 
@@ -25,21 +19,24 @@ if (process.env['NODE_ENV'] !== 'production') {
 // IMPORTS
 // ============================================================
 
-import { Server } from 'http';
-import mongoose from 'mongoose';
+import { Server } from "http";
+import mongoose from "mongoose";
 
 // App
-import { app, NotificationService } from './src/app';
+import { app, NotificationService } from "./src/app";
+
+// Feature flags
+import { FEATURES, enabledFeatures } from "./src/config/features";
 
 // Database
-import MongoConnection from './src/database/sharding/connection';
+import MongoConnection from "./src/database/sharding/connection";
 
 // Utils
-import CacheUtil from './src/shared/cache.util';
-import { LoggerUtil } from './src/shared/logger.util';
+import CacheUtil from "./src/shared/cache.util";
+import { LoggerUtil } from "./src/shared/logger.util";
 
 // Socket
-import { initializeSocketIO } from './src/socket';
+import { initializeSocketIO } from "./src/socket";
 
 // ============================================================
 // LOGGER
@@ -65,143 +62,147 @@ async function initializeApp(): Promise<void> {
     // STEP 1 — APPLICATION START
     // ========================================================
 
-    logger.info('========================================');
-    logger.info('Starting application initialization');
-    logger.info('========================================');
+    logger.info("========================================");
+    logger.info("Starting application initialization");
+    logger.info("========================================");
 
-    logger.info('Environment information', {
-      nodeEnv: process.env['NODE_ENV'],
+    logger.info("Environment information", {
+      nodeEnv: process.env["NODE_ENV"],
       nodeVersion: process.version,
-      port: process.env['PORT'] || '4000',
+      port: process.env["PORT"] || "4000",
+      enabledFeatures: enabledFeatures(),
     });
 
     // ========================================================
     // STEP 2 — MONGODB
     // ========================================================
 
-    logger.info('STEP 1: Starting MongoDB connection...');
+    logger.info("STEP 1: Starting MongoDB connection...");
 
     await MongoConnection.connect();
 
-    logger.info('MongoDB connected');
+    logger.info("MongoDB connected");
 
     // ========================================================
     // STEP 3 — REDIS / CACHE
     // ========================================================
 
-    logger.info('STEP 2: Starting Redis initialization...');
+    logger.info("STEP 2: Starting Redis initialization...");
 
     try {
       const cacheResult = await CacheUtil.init();
 
-      logger.info('CACHE INIT FINISHED', {
+      logger.info("CACHE INIT FINISHED", {
         result: cacheResult,
         status: CacheUtil.status,
       });
 
       if (cacheResult) {
-        logger.info('Redis cache initialized successfully');
+        logger.info("Redis cache initialized successfully");
       } else {
         logger.warn(
-          'Redis cache initialization returned false. Using in-memory fallback.'
+          "Redis cache initialization returned false. Using in-memory fallback.",
         );
       }
     } catch (err: any) {
-      logger.error('CACHE INIT ERROR', {
-        error: err?.message || 'Unknown Redis error',
+      logger.error("CACHE INIT ERROR", {
+        error: err?.message || "Unknown Redis error",
         stack: err?.stack,
       });
 
       logger.warn(
-        'Cache initialization failed, continuing with in-memory fallback'
+        "Cache initialization failed, continuing with in-memory fallback",
       );
     }
 
     // ========================================================
-    // STEP 4 — MUTUAL CONNECTIONS SERVICE
+    // STEP 4 — MUTUAL CONNECTIONS SERVICE (only if connections on)
     // ========================================================
 
-    logger.info('STEP 3: Starting Mutual Connections Service...');
+    if (FEATURES.connections) {
+      logger.info("STEP 3: Starting Mutual Connections Service...");
 
-    try {
-      const { mutualService } = await import(
-        './src/connections/services/mutual.service'
-      );
+      try {
+        const { mutualService } =
+          await import("./src/connections/services/mutual.service");
 
-      await mutualService.initialize();
+        await mutualService.initialize();
 
-      logger.info('Mutual connections service initialized');
-    } catch (err: any) {
-      logger.warn(
-        'Mutual service initialization failed, using mock mode',
-        {
-          error: err?.message || 'Unknown mutual service error',
+        logger.info("Mutual connections service initialized");
+      } catch (err: any) {
+        logger.warn("Mutual service initialization failed, using mock mode", {
+          error: err?.message || "Unknown mutual service error",
           stack: err?.stack,
-        }
-      );
+        });
+      }
+    } else {
+      logger.info("STEP 3: Mutual Connections Service skipped (connections disabled)");
     }
 
     // ========================================================
     // STEP 5 — NOTIFICATION SERVICE
     // ========================================================
 
-    logger.info('STEP 4: Starting Notification Service...');
-    
+    logger.info("STEP 4: Starting Notification Service...");
+
     try {
-      const notificationInitialized =
-        await NotificationService.initialize();
+      const notificationInitialized = await NotificationService.initialize();
 
       if (notificationInitialized) {
-        logger.info('Notification service initialized');
+        logger.info("Notification service initialized");
       } else {
         logger.warn(
-          'Notification service initialization failed (non-critical)'
+          "Notification service initialization failed (non-critical)",
         );
       }
     } catch (error: any) {
-      logger.warn(
-        'Notification service initialization failed (non-critical)',
-        {
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Unknown notification error',
+      logger.warn("Notification service initialization failed (non-critical)", {
+        error:
+          error instanceof Error ? error.message : "Unknown notification error",
 
-          stack:
-            error instanceof Error
-              ? error.stack
-              : undefined,
-        }
-      );
-    }
-
-        // ========================================================
-    // STEP 5.5 — SCHEDULED JOBS (SESSION REMINDER CRON)
-    // ========================================================
-
-    logger.info('STEP 4.5: Starting scheduled jobs...');
-
-    try {
-      const { default: ReminderCron } = await import('./src/jobs/reminderCron');
-      ReminderCron.init();
-      logger.info('Session reminder cron initialized');
-
-      // TEMP (sirf testing ke liye, baad mein hata dena)
-      ReminderCron.triggerManually().catch(console.error);
-    } catch (error: any) {
-      logger.error('Session reminder cron failed to initialize (non-critical)', {
-        error: error instanceof Error ? error.message : 'Unknown cron error',
         stack: error instanceof Error ? error.stack : undefined,
       });
     }
 
+    // ========================================================
+    // STEP 5.5 — SCHEDULED JOBS (mentorship crons)
+    // ========================================================
+
+    logger.info("STEP 4.5: Starting scheduled jobs...");
+
     try {
-      const { default: waitlistCron } = await import('./src/jobs/waitlistCron');
-      waitlistCron.init();
-      logger.info('Waitlist cron initialized');
+      const { default: ReminderCron } = await import("./src/jobs/reminderCron");
+      ReminderCron.init();
+      logger.info("Session reminder cron initialized");
+
+      // Sirf explicit testing ke liye. Production me ye env set mat karna.
+      if (process.env["RUN_REMINDER_ON_BOOT"] === "true") {
+        ReminderCron.triggerManually().catch((err: unknown) =>
+          logger.error("Manual reminder trigger failed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
     } catch (error: any) {
-      logger.error('Waitlist cron failed to initialize (non-critical)', {
-        error: error instanceof Error ? error.message : 'Unknown waitlist cron error',
+      logger.error(
+        "Session reminder cron failed to initialize (non-critical)",
+        {
+          error: error instanceof Error ? error.message : "Unknown cron error",
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+      );
+    }
+
+    try {
+      const { default: waitlistCron } = await import("./src/jobs/waitlistCron");
+      waitlistCron.init();
+      logger.info("Waitlist cron initialized");
+    } catch (error: any) {
+      logger.error("Waitlist cron failed to initialize (non-critical)", {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown waitlist cron error",
         stack: error instanceof Error ? error.stack : undefined,
       });
     }
@@ -210,19 +211,19 @@ async function initializeApp(): Promise<void> {
     // STEP 6 — HTTP SERVER
     // ========================================================
 
-    logger.info('STEP 5: Starting HTTP server...');
+    logger.info("STEP 5: Starting HTTP server...");
 
-    const port: number = Number(process.env['PORT']) || 4000;
+    const port: number = Number(process.env["PORT"]) || 4000;
 
     const server = app.listen(port, () => {
-      logger.info('========================================');
-      logger.info('Server started successfully');
-      logger.info('========================================');
+      logger.info("========================================");
+      logger.info("Server started successfully");
+      logger.info("========================================");
 
-      logger.info('Server information', {
+      logger.info("Server information", {
         port,
-        environment: process.env['NODE_ENV'],
-        version: process.env['APP_VERSION'] || '1.0.0',
+        environment: process.env["NODE_ENV"],
+        version: process.env["APP_VERSION"] || "1.0.0",
       });
 
       // ====================================================
@@ -230,28 +231,23 @@ async function initializeApp(): Promise<void> {
       // ====================================================
 
       try {
-        logger.info('Starting Socket.IO initialization...');
+        logger.info("Starting Socket.IO initialization...");
 
         initializeSocketIO(server);
 
-        logger.info('Socket.IO initialized');
+        logger.info("Socket.IO initialized");
       } catch (error: any) {
-        logger.error('Socket.IO initialization failed', {
+        logger.error("Socket.IO initialization failed", {
           error:
-            error instanceof Error
-              ? error.message
-              : 'Unknown Socket.IO error',
+            error instanceof Error ? error.message : "Unknown Socket.IO error",
 
-          stack:
-            error instanceof Error
-              ? error.stack
-              : undefined,
+          stack: error instanceof Error ? error.stack : undefined,
         });
       }
     });
 
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      logger.error('HTTP server emitted an error event', {
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      logger.error("HTTP server emitted an error event", {
         code: err?.code,
         message: err?.message,
       });
@@ -263,22 +259,17 @@ async function initializeApp(): Promise<void> {
 
     (app.locals as AppLocals).server = server;
 
-    logger.info('Application initialization complete');
+    logger.info("Application initialization complete");
 
-    logger.info('========================================');
-    logger.info('APPLICATION READY');
-    logger.info('========================================');
+    logger.info("========================================");
+    logger.info("APPLICATION READY");
+    logger.info("========================================");
   } catch (error: any) {
-    logger.error('Application initialization failed', {
+    logger.error("Application initialization failed", {
       error:
-        error instanceof Error
-          ? error.message
-          : 'Unknown initialization error',
+        error instanceof Error ? error.message : "Unknown initialization error",
 
-      stack:
-        error instanceof Error
-          ? error.stack
-          : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
     });
 
     process.exit(1);
@@ -296,7 +287,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     const locals = app.locals as AppLocals;
 
     if (locals.server) {
-      logger.info('Closing HTTP server...');
+      logger.info("Closing HTTP server...");
 
       await new Promise<void>((resolve) => {
         locals.server!.close(() => {
@@ -304,47 +295,41 @@ async function gracefulShutdown(signal: string): Promise<void> {
         });
       });
 
-      logger.info('HTTP server closed');
+      logger.info("HTTP server closed");
     }
 
     try {
-      logger.info('Closing MongoDB connection...');
+      logger.info("Closing MongoDB connection...");
 
       await mongoose.connection.close();
 
-      logger.info('MongoDB disconnected');
+      logger.info("MongoDB disconnected");
     } catch (error: any) {
-      logger.warn('MongoDB shutdown failed', {
+      logger.warn("MongoDB shutdown failed", {
         error: error?.message,
       });
     }
 
     try {
-      logger.info('Closing Redis connection...');
+      logger.info("Closing Redis connection...");
 
       await CacheUtil.shutdown();
 
-      logger.info('Cache shutdown complete');
+      logger.info("Cache shutdown complete");
     } catch (err: any) {
-      logger.warn('Cache shutdown failed', {
+      logger.warn("Cache shutdown failed", {
         error: err?.message,
       });
     }
 
-    logger.info('Graceful shutdown complete');
+    logger.info("Graceful shutdown complete");
 
     process.exit(0);
   } catch (error: any) {
-    logger.error('Error during graceful shutdown', {
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Unknown shutdown error',
+    logger.error("Error during graceful shutdown", {
+      error: error instanceof Error ? error.message : "Unknown shutdown error",
 
-      stack:
-        error instanceof Error
-          ? error.stack
-          : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
     });
 
     process.exit(1);
@@ -355,34 +340,29 @@ async function gracefulShutdown(signal: string): Promise<void> {
 // PROCESS SIGNAL HANDLERS
 // ============================================================
 
-process.on('SIGTERM', () => {
-  gracefulShutdown('SIGTERM');
+process.on("SIGTERM", () => {
+  gracefulShutdown("SIGTERM");
 });
 
-process.on('SIGINT', () => {
-  gracefulShutdown('SIGINT');
+process.on("SIGINT", () => {
+  gracefulShutdown("SIGINT");
 });
 
 // ============================================================
 // UNHANDLED PROMISE REJECTION
 // ============================================================
 
-process.on('unhandledRejection', (reason: unknown) => {
-  const errorMessage =
-    (reason as any)?.message ||
-    String(reason);
+process.on("unhandledRejection", (reason: unknown) => {
+  const errorMessage = (reason as any)?.message || String(reason);
 
-  const errorStack =
-    (reason as any)?.stack;
+  const errorStack = (reason as any)?.stack;
 
-  if (errorMessage.includes('schemas/ids')) {
-    logger.warn(
-      'Schema validation error ignored (OpenTelemetry)'
-    );
+  if (errorMessage.includes("schemas/ids")) {
+    logger.warn("Schema validation error ignored (OpenTelemetry)");
     return;
   }
 
-  logger.error('Unhandled promise rejection', {
+  logger.error("Unhandled promise rejection", {
     reason: errorMessage,
     stack: errorStack,
   });
@@ -392,23 +372,20 @@ process.on('unhandledRejection', (reason: unknown) => {
 // UNCAUGHT EXCEPTION
 // ============================================================
 
-process.on('uncaughtException', (error: Error) => {
-  logger.error('Uncaught exception in server file', {
+process.on("uncaughtException", (error: Error) => {
+  logger.error("Uncaught exception in server file", {
     error: error.message,
     stack: error.stack,
   });
 
-  const criticalErrors = [
-    'EADDRINUSE',
-    'MODULE_NOT_FOUND',
-  ];
+  const criticalErrors = ["EADDRINUSE", "MODULE_NOT_FOUND"];
 
   const isCritical = criticalErrors.some((criticalError) =>
-    error.message.includes(criticalError)
+    error.message.includes(criticalError),
   );
 
   if (isCritical) {
-    gracefulShutdown('UNCAUGHT_EXCEPTION');
+    gracefulShutdown("UNCAUGHT_EXCEPTION");
   }
 });
 
@@ -416,6 +393,6 @@ process.on('uncaughtException', (error: Error) => {
 // START APPLICATION
 // ============================================================
 
-logger.info('BOOTSTRAP: Calling initializeApp()');
+logger.info("BOOTSTRAP: Calling initializeApp()");
 
 initializeApp();

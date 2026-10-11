@@ -1,10 +1,9 @@
 /**
  * auth.repository.ts
- * All direct database and cache interactions for auth module.
- * Business logic stays in AuthService; only data-access lives here.
+ * Auth module ki saari direct database aur cache access yahin hai.
+ * Business logic AuthService mein rehta hai.
  */
 
-import { v4 as uuidv4 } from 'uuid';
 import CacheUtil from '@/shared/cache.util';
 import logger, { LoggerUtil } from '@/shared/logger.util.js';
 import {
@@ -17,36 +16,41 @@ import {
 } from '@/shared/models/index.models';
 import Constants from '@/shared/constants.util.js';
 import {
-    ProfileOptions,
     GetAllUsersParams,
     GetAllUsersResult,
     UserForVerification,
     DeviceData,
 } from '../interfaces/auth.interfaces';
 
+const MAX_ACTIVE_DEVICES = Number(process.env['MAX_ACTIVE_DEVICES']) || 3;
+const VALID_DEVICE_TYPES = ['desktop', 'mobile', 'tablet', 'unknown'];
+
+const escapeRegex = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const asString = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? value : undefined;
+
 // ==================== USER QUERIES ====================
 
 export class UserRepository {
 
-    /**
-     * Find user by email (without sensitive fields)
-     */
     static async findByEmail(email: string): Promise<any | null> {
-        return User.findOne({ email }).lean().exec();
+        return User.findOne({ email: (email || '').trim().toLowerCase() }).lean().exec();
     }
 
     /**
-     * Find user by email WITH password fields (for login)
+     * Password fields ke saath (login ke liye)
      */
     static async findByEmailWithPassword(email: string): Promise<any | null> {
-        return User.findOne({ email })
+        return User.findOne({
+            email: (email || '').trim().toLowerCase(),
+            'flags.isDeleted': { $ne: true },
+        })
             .select('+passwordHash +passwordSalt')
             .exec();
     }
 
-    /**
-     * Find user by userId (excludes sensitive fields)
-     */
     static async findByUserId(userId: string): Promise<any | null> {
         return User.findOne({ userId, 'flags.isDeleted': false })
             .select('-passwordHash -passwordSalt -backupCodes -twoFactorSecret -__v')
@@ -54,9 +58,6 @@ export class UserRepository {
             .exec();
     }
 
-    /**
-     * Find user by userId for profile (includes more fields)
-     */
     static async findByUserIdForProfile(userId: string): Promise<any | null> {
         return User.findOne({ userId })
             .select('-passwordHash -passwordSalt -backupCodes -__v')
@@ -64,19 +65,13 @@ export class UserRepository {
             .exec();
     }
 
-    /**
-     * Find user by userId with password (for profile update validation)
-     */
     static async findByUserIdWithPassword(userId: string): Promise<any | null> {
         return User.findOne({ userId })
-            .select('+passwordHash +passwordSalt preferences onboarding')
+            .select('+passwordHash +passwordSalt preferences onboarding phoneNumber email')
             .lean()
             .exec();
     }
 
-    /**
-     * Find user by email or OAuth providerId
-     */
     static async findByEmailOrOAuth(
         email: string,
         provider: string,
@@ -93,31 +88,22 @@ export class UserRepository {
         });
     }
 
-    /**
-     * Check if email exists for another user (update conflict check)
-     */
     static async emailExistsForOtherUser(
         email: string,
         currentUserId: string
     ): Promise<boolean> {
         const user = await User.findOne({
-            email,
+            email: email.trim().toLowerCase(),
             userId: { $ne: currentUserId },
         });
         return !!user;
     }
 
-    /**
-     * Check if username exists (for uniqueness)
-     */
     static async usernameExists(username: string): Promise<boolean> {
         const user = await User.findOne({ username });
         return !!user;
     }
 
-    /**
-     * Update user by userId with partial data
-     */
     static async updateByUserId(
         userId: string,
         updates: Record<string, any>
@@ -133,9 +119,6 @@ export class UserRepository {
         ).lean();
     }
 
-    /**
-     * Update last active timestamp
-     */
     static async updateLastActive(userId: string): Promise<void> {
         await User.findOneAndUpdate(
             { userId },
@@ -143,31 +126,35 @@ export class UserRepository {
         );
     }
 
-    /**
-     * Delete user permanently
-     */
     static async deleteByUserId(userId: string): Promise<any> {
         return User.deleteOne({ userId });
     }
 
     /**
-     * Get paginated list of all users
+     * Admin: paginated users. Filters sirf strings maane jaate hain (operator injection nahi),
+     * aur regex escape hota hai.
      */
     static async findAllPaginated(
         params: GetAllUsersParams
     ): Promise<GetAllUsersResult> {
-        const { page, limit, skip, filters, sortBy } = params;
+        const { limit, skip, filters, sortBy } = params;
 
         const query: any = { 'flags.isDeleted': false };
 
-        if (filters.status) query.status = filters.status;
-        if (filters.role) query.role = filters.role;
-        if (filters.userType) query['onboarding.userType'] = filters.userType;
-        if (filters.location) {
-            query.location = { $regex: filters.location, $options: 'i' };
+        const status = asString((filters as any)?.status);
+        const role = asString((filters as any)?.role);
+        const userType = asString((filters as any)?.userType);
+        const location = asString((filters as any)?.location);
+        const search = asString((filters as any)?.search);
+
+        if (status) query.status = status;
+        if (role) query.role = role;
+        if (userType) query['onboarding.userType'] = userType;
+        if (location) {
+            query.location = { $regex: escapeRegex(location), $options: 'i' };
         }
-        if (filters.search) {
-            const searchRegex = { $regex: filters.search, $options: 'i' };
+        if (search) {
+            const searchRegex = { $regex: escapeRegex(search), $options: 'i' };
             query.$or = [
                 { email: searchRegex },
                 { firstName: searchRegex },
@@ -204,9 +191,6 @@ export class UserRepository {
         };
     }
 
-    /**
-     * Find user by userId for verification (status-checked)
-     */
     static async findForVerification(
         userId: string
     ): Promise<UserForVerification | null> {
@@ -229,9 +213,6 @@ export class UserRepository {
 
 export class LoginAttemptRepository {
 
-    /**
-     * Count recent failed attempts for an IP
-     */
     static async countRecentByIp(
         ipAddress: string,
         windowMs: number = 15 * 60 * 1000
@@ -243,9 +224,6 @@ export class LoginAttemptRepository {
         });
     }
 
-    /**
-     * Count recent failed attempts for a specific user+IP
-     */
     static async countRecentByUserAndIp(
         userId: string,
         ipAddress: string,
@@ -259,9 +237,6 @@ export class LoginAttemptRepository {
         });
     }
 
-    /**
-     * Record a login attempt (safe - swallows errors)
-     */
     static async recordSafe(
         userId: string | null,
         ipAddress: string,
@@ -280,22 +255,18 @@ export class LoginAttemptRepository {
 }
 
 // ==================== SESSION QUERIES ====================
+// Session model ke asli fields: _id (sessionId), isActive, lastActivity,
+// terminatedAt, terminationReason.
 
 export class SessionRepository {
 
-    /**
-     * Find session by sessionId + userId
-     */
     static async findSession(
         sessionId: string,
         userId: string
     ): Promise<any | null> {
-        return Session.findOne({ sessionId, userId });
+        return Session.findOne({ _id: sessionId, userId });
     }
 
-    /**
-     * Create new session
-     */
     static async createSession(data: {
         userId: string;
         ipAddress: string;
@@ -306,53 +277,41 @@ export class SessionRepository {
         return Session.createSession(data);
     }
 
-    /**
-     * Terminate all active sessions for a user
-     */
     static async terminateAllForUser(
         userId: string,
         reason: string
     ): Promise<void> {
+        const now = new Date();
         await Session.updateMany(
-            { userId, status: 'active' },
+            { userId, isActive: true },
             {
                 $set: {
-                    status: 'terminated',
-                    terminatedAt: new Date(),
+                    isActive: false,
+                    terminatedAt: now,
                     terminationReason: reason,
+                    revokedAt: now,
+                    revokedReason: reason,
                 },
             }
         );
     }
 
-    /**
-     * Get all active sessions for a user
-     */
     static async findAllActive(userId: string): Promise<any[]> {
-        return Session.find({ userId, status: 'active' });
+        return Session.find({ userId, isActive: true });
     }
 
-    /**
-     * Count active sessions for a user
-     */
     static async countActive(userId: string): Promise<number> {
-        return Session.countDocuments({ userId, status: 'active' });
+        return Session.countDocuments({ userId, isActive: true });
     }
 
-    /**
-     * Get recent sessions for profile display
-     */
     static async findRecentForProfile(userId: string): Promise<any[]> {
-        return Session.find({ userId, status: 'active' })
-            .select('sessionId deviceId ipAddress createdAt lastActivityAt')
-            .sort({ lastActivityAt: -1 })
+        return Session.find({ userId, isActive: true })
+            .select('_id deviceId ipAddress createdAt lastActivity sessionType')
+            .sort({ lastActivity: -1 })
             .limit(10)
             .lean();
     }
 
-    /**
-     * Update session activity timestamp
-     */
     static async updateActivity(sessionMongoId: string): Promise<void> {
         await Session.updateActivity(sessionMongoId);
     }
@@ -360,21 +319,99 @@ export class SessionRepository {
 
 // ==================== DEVICE QUERIES ====================
 
+const normalizeDeviceData = (deviceData: DeviceData | any): any => {
+    const data: any = deviceData || {};
+    const userAgent: string = String(data.userAgent || '');
+
+    let deviceType = String(data.deviceType || '').toLowerCase();
+    if (!VALID_DEVICE_TYPES.includes(deviceType)) {
+        deviceType = /mobile|android|iphone/i.test(userAgent)
+            ? 'mobile'
+            : userAgent
+                ? 'desktop'
+                : 'unknown';
+    }
+
+    return {
+        ...data,
+        deviceType,
+        deviceName: data.deviceName ? String(data.deviceName).slice(0, 100) : data.deviceName,
+    };
+};
+
 export class DeviceRepository {
 
     /**
-     * Register or find device
+     * Device register karo aur limit enforce karo (fire-and-forget).
      */
     static async registerDevice(
         userId: string,
         deviceData: DeviceData
     ): Promise<any> {
-        return Device.registerDevice(userId, deviceData);
+        const device = await Device.registerDevice(userId, normalizeDeviceData(deviceData));
+
+        DeviceRepository.enforceLimit(userId, device.deviceId).catch((err: any) =>
+            logger.error('Device limit enforcement failed (non-critical)', {
+                error: err.message,
+                userId,
+            })
+        );
+
+        return device;
     }
 
     /**
-     * Deactivate a single device
+     * Current device ko chhodkar sabse purane devices revoke karo (aur unke sessions band).
      */
+    static async enforceLimit(
+        userId: string,
+        keepDeviceId: string,
+        max: number = MAX_ACTIVE_DEVICES
+    ): Promise<void> {
+        const others = await Device.find({
+            userId,
+            isActive: true,
+            deviceId: { $ne: keepDeviceId },
+        }).sort({ lastSeenAt: 1 });
+
+        const allowedOthers = Math.max(0, max - 1);
+        if (others.length <= allowedOthers) return;
+
+        const toRevoke = others.slice(0, others.length - allowedOthers);
+        const deviceIds = toRevoke.map((d: any) => d.deviceId);
+        const now = new Date();
+
+        await Device.updateMany(
+            { userId, deviceId: { $in: deviceIds } },
+            {
+                $set: {
+                    isActive: false,
+                    revokedAt: now,
+                    revokedReason: 'device_limit_exceeded',
+                },
+            }
+        );
+
+        await Session.updateMany(
+            { userId, deviceId: { $in: deviceIds }, isActive: true },
+            {
+                $set: {
+                    isActive: false,
+                    terminatedAt: now,
+                    terminationReason: 'device_limit_exceeded',
+                    revokedAt: now,
+                    revokedReason: 'device_limit_exceeded',
+                },
+            }
+        );
+
+        logger.info('Old devices revoked (device limit)', {
+            userId,
+            revokedDeviceIds: deviceIds,
+            keepDeviceId,
+        });
+    }
+
     static async deactivateDevice(
         deviceId: string,
         userId: string
@@ -386,9 +423,6 @@ export class DeviceRepository {
         );
     }
 
-    /**
-     * Deactivate all devices for a user
-     */
     static async deactivateAllForUser(userId: string): Promise<number> {
         const result = await Device.updateMany(
             { userId, isActive: true },
@@ -397,16 +431,10 @@ export class DeviceRepository {
         return result.modifiedCount || 0;
     }
 
-    /**
-     * Count active devices for a user
-     */
     static async countActive(userId: string): Promise<number> {
         return Device.countDocuments({ userId, isActive: true });
     }
 
-    /**
-     * Delete all devices for a user (hard delete)
-     */
     static async deleteAllForUser(userId: string): Promise<any> {
         return Device.deleteMany({ userId });
     }
@@ -416,9 +444,6 @@ export class DeviceRepository {
 
 export class UserProfileRepository {
 
-    /**
-     * Create user profile document
-     */
     static async create(data: Record<string, any>): Promise<any> {
         return UserProfile.create(data);
     }
@@ -428,9 +453,6 @@ export class UserProfileRepository {
 
 export class AuditLogRepository {
 
-    /**
-     * Log an action to AuditLog model
-     */
     static async logAction(data: {
         userId: string;
         userEmail: string;
@@ -448,16 +470,10 @@ export class AuditLogRepository {
 
 export class AuthCacheRepository {
 
-    /**
-     * Blacklist an access token
-     */
     static async blacklistAccessToken(token: string, ttl: number = 900): Promise<void> {
         await CacheUtil.set(`blacklist:access:${token}`, 'true', ttl);
     }
 
-    /**
-     * Blacklist a refresh token
-     */
     static async blacklistRefreshToken(token: string): Promise<void> {
         await CacheUtil.set(
             `blacklist:refresh:${token}`,
@@ -466,32 +482,22 @@ export class AuthCacheRepository {
         );
     }
 
-    /**
-     * Check if a token is blacklisted
-     */
     static async isBlacklisted(type: 'access' | 'refresh', token: string): Promise<boolean> {
         return CacheUtil.exists(`blacklist:${type}:${token}`);
     }
 
-    /**
-     * Get cached user profile
-     */
     static async getCachedProfile(userId: string): Promise<any | null> {
         const data = await CacheUtil.get(`user:profile:${userId}`);
         if (!data) return null;
         return typeof data === 'string' ? JSON.parse(data) : data;
     }
 
-    /**
-     * Set cached user profile
-     */
     static async setCachedProfile(userId: string, profile: any): Promise<void> {
         await CacheUtil.set(`user:profile:${userId}`, profile, 900);
     }
 
     /**
-     * Get cached user by userId (generic) — this is the FULL profile
-     * cache read by AuthService.getUserById(), used by /profile/[userId].
+     * "user:<userId>" key: sirf PUBLIC profile (AuthService.getUserById).
      */
     static async getCachedUser(userId: string): Promise<any | null> {
         const data = await CacheUtil.get(`user:${userId}`);
@@ -499,21 +505,11 @@ export class AuthCacheRepository {
         return typeof data === 'string' ? JSON.parse(data) : data;
     }
 
-    /**
-     * Set cached user
-     */
     static async setCachedUser(userId: string, user: any): Promise<void> {
         await CacheUtil.set(`user:${userId}`, JSON.stringify(user), 900);
     }
 
-    // ✅ FIX: login() writes a small, session-scoped subset of user fields
-    // (used for JWT/session bookkeeping, not the public profile view).
-    // Previously it wrote to the SAME "user:<userId>" key that
-    // getCachedUser()/getUserById() reads for the full public profile —
-    // so for up to 24h after any login, viewing that user's profile
-    // returned the stripped-down login snapshot instead of the real
-    // profile (location, coverPhotoId, etc. silently missing).
-    // This gives login its own key namespace so the two never collide.
+    // Login ka session-scoped user snapshot (public profile cache se alag key)
     static async setLoginSessionUser(userId: string, data: any, ttl: number): Promise<void> {
         await CacheUtil.set(`session:user:${userId}`, data, ttl);
     }
@@ -524,15 +520,12 @@ export class AuthCacheRepository {
         return typeof data === 'string' ? JSON.parse(data) : data;
     }
 
-    /**
-     * Invalidate all user-related caches
-     */
     static async invalidateUserCaches(userId: string): Promise<void> {
         try {
             await Promise.all([
                 CacheUtil.del(`user:profile:${userId}`),
                 CacheUtil.del(`user:${userId}`),
-                CacheUtil.del(`session:user:${userId}`), // ✅ FIX: also clear the new login-session key
+                CacheUtil.del(`session:user:${userId}`),
                 CacheUtil.del(`${Constants.CACHE_PREFIXES.USER}${userId}`),
                 CacheUtil.clearByPattern(`session:user:${userId}:*`),
                 CacheUtil.clearByPattern(`user:*:${userId}:*`),
@@ -545,9 +538,6 @@ export class AuthCacheRepository {
         }
     }
 
-    /**
-     * Invalidate session-specific caches
-     */
     static async invalidateSessionCache(
         userId: string,
         sessionId: string
@@ -557,7 +547,7 @@ export class AuthCacheRepository {
                 CacheUtil.del(`session:${sessionId}`),
                 CacheUtil.del(`user:session:${userId}:${sessionId}`),
                 CacheUtil.del(`user:profile:${userId}`),
-                CacheUtil.del(`session:user:${userId}`), // ✅ FIX
+                CacheUtil.del(`session:user:${userId}`),
                 CacheUtil.del(`${Constants.CACHE_PREFIXES?.USER}${userId}`),
                 CacheUtil.del(`${Constants.CACHE_PREFIXES?.SESSION}${sessionId}`),
             ]);
@@ -570,15 +560,7 @@ export class AuthCacheRepository {
         }
     }
 
-       // ✅ FIX: getUserForVerification() used to cache its minimal
-    // verification-only subset (userId, email, firstName, lastName,
-    // status, accountStatus) under the SAME "user:<userId>" key that
-    // getCachedUser()/getUserById() reads for the FULL public profile.
-    // For 5 minutes after any verification check, profile lookups would
-    // silently get this stripped-down object instead of the real
-    // profile — exactly the same collision that login() had (see the
-    // fix note on setLoginSessionUser above). Giving verification its
-    // own namespace stops the two from ever colliding.
+    // Verification ke liye alag cache namespace ("verify:user:<userId>")
     static async getCachedVerificationUser(userId: string): Promise<any | null> {
         const data = await CacheUtil.get(`verify:user:${userId}`);
         if (!data) return null;
@@ -589,37 +571,22 @@ export class AuthCacheRepository {
         await CacheUtil.set(`verify:user:${userId}`, JSON.stringify(user), ttl);
     }
 
-    /**
-     * Get rate limit counter
-     */
     static async getRateLimit(key: string): Promise<number> {
         return parseInt((await CacheUtil.get(key)) as string) || 0;
     }
 
-    /**
-     * Increment and set rate limit counter
-     */
     static async setRateLimit(key: string, count: number, ttl: number): Promise<void> {
         await CacheUtil.set(key, count, ttl);
     }
 
-    /**
-     * Delete a cache key
-     */
     static async del(key: string): Promise<void> {
         await CacheUtil.del(key);
     }
 
-    /**
-     * Get a raw cache value
-     */
     static async get(key: string): Promise<any> {
         return CacheUtil.get(key);
     }
 
-    /**
-     * Set a raw cache value
-     */
     static async set(key: string, value: any, ttl: number): Promise<void> {
         await CacheUtil.set(key, value, ttl);
     }

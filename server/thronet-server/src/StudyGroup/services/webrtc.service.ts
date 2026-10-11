@@ -6,7 +6,6 @@
  * Fixed: race condition in joinLiveRoom, lean() consistency
  */
 
-import { Types } from 'mongoose';
 import groupRepository from '../repositories/group.repository';
 import groupMemberRepository from '../repositories/groupMember.repository';
 import liveRoomRepository from '../repositories/liveroom.repository';
@@ -58,9 +57,7 @@ export const createLiveRoom = async (
       startedAt: new Date(),
     });
 
-    await liveRoom.addParticipant(new Types.ObjectId(userId));
-    await liveRoom.populate('host', 'name avatar email');
-    await liveRoom.populate('participants.user', 'name avatar email');
+    await liveRoom.addParticipant(userId);
 
     LoggerUtil.info(`✅ Live room created successfully: ${liveRoom._id}`);
     return formatLiveRoomResponse(liveRoom);
@@ -165,8 +162,6 @@ export const updateLiveRoom = async (
     }
 
     await liveRoom.save();
-    await liveRoom.populate('host', 'name avatar email');
-    await liveRoom.populate('participants.user', 'name avatar email');
 
     LoggerUtil.info(`✅ Live room updated: ${roomId}`);
     return formatLiveRoomResponse(liveRoom);
@@ -199,7 +194,7 @@ export const joinLiveRoom = async (
     if (!membership) throw new ForbiddenError('You are not a member of this group');
 
     // FIX: addParticipant first
-    await liveRoom.addParticipant(new Types.ObjectId(userId));
+    await liveRoom.addParticipant(userId);
 
     // FIX: Atomic update for camera/mic — no extra save() call
     if (options.cameraOn !== undefined || options.micOn !== undefined) {
@@ -234,7 +229,7 @@ export const leaveLiveRoom = async (
     const liveRoom = await liveRoomRepository.findRawById(roomId);
     if (!liveRoom) throw new NotFoundError('Live room not found');
 
-    await liveRoom.removeParticipant(new Types.ObjectId(userId));
+    await liveRoom.removeParticipant(userId);
 
     // Host ne leave kiya — room end karo
     if (liveRoom.host.toString() === userId.toString() && liveRoom.isActive) {
@@ -265,8 +260,6 @@ export const endLiveRoom = async (
     if (!liveRoom.isActive) throw new BadRequestError('Live room has already ended');
 
     await liveRoom.endSession();
-    await liveRoom.populate('host', 'name avatar email');
-    await liveRoom.populate('participants.user', 'name avatar email');
 
     LoggerUtil.info(`✅ Live room ended: ${roomId}`);
     return formatLiveRoomResponse(liveRoom);
@@ -329,14 +322,15 @@ export const getLiveRoomStats = async (
 const formatLiveRoomResponse = (liveRoom: any): LiveRoomResponse => {
   return {
     _id: liveRoom._id,
+    roomId: String(liveRoom._id),
     group: liveRoom.group,
     title: liveRoom.title,
     description: liveRoom.description,
     host: liveRoom.host,
     participants: liveRoom.participants.map((p: any) => ({
-      userId: p.user._id || p.user,
-      userName: p.user.name,
-      userAvatar: p.user.avatar,
+      userId: p.user?._id ? String(p.user._id) : (p.user || ''),
+      userName: p.user?.name || '',
+      userAvatar: p.user?.avatar || '',
       joinedAt: p.joinedAt,
       leftAt: p.leftAt,
       cameraOn: p.cameraOn,

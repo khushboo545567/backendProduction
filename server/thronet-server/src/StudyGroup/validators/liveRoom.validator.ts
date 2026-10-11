@@ -155,7 +155,7 @@ export const liveRoomQuerySchema = Joi.object({
  */
 export const liveRoomIdSchema = Joi.object({
   roomId: Joi.string()
-    .uuid()
+    .regex(/^[0-9a-fA-F]{24}$/)
     .required()
     .messages({
       'string.pattern.base': 'Invalid room ID format',

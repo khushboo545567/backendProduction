@@ -1,33 +1,15 @@
-
 /**
  * auth.service.ts
- * Business logic only — all DB/cache access via repositories,
- * all types via interfaces/types files.
+ * Business logic only. Saari DB/cache access repositories ke through,
+ * saare types interfaces/types files se.
  *
- * Changes from original:
- * 1. Types & interfaces moved to auth.types.ts / auth.interfaces.ts
- * 2. DB + cache calls moved to auth.repository.ts
- * 3. Only business logic remains here
- *
- * ✅ PERFORMANCE FIX (this version):
- *    - login() previously required the controller to call
- *      checkAccountLocked() FIRST (which fetched the user + did a
- *      rate-limit check), and THEN login() fetched the user AGAIN and
- *      did the SAME rate-limit check again. That's 2x user fetches +
- *      2x rate-limit queries for one login request.
- *    - login() now does a single user fetch, a single rate-limit
- *      check (covers both IP-level and user-level), and returns the
- *      full user object so the controller never needs to fetch the
- *      user a second/third time.
- *    - checkAccountLocked() is kept (unchanged) for backward
- *      compatibility in case anything else calls it, but the
- *      controller's login flow should stop calling it separately —
- *      login() now does all of that internally.
- *
- * ✅ VALIDATION RELAXED (this version):
- *    - register(): password minlength 8 -> 6
- *    - updateUserProfile(): password/firstName/lastName/location no
- *      longer enforce regex patterns, only basic length checks remain
+ * Version notes:
+ * - login(): ek hi user fetch, ek hi rate-limit pass, full user data return
+ *   (controller ko dobara user fetch nahi karna padta).
+ * - Lock: 5 failed attempts par 15 min ka temporary lock (pehle 24h, 3 attempts).
+ * - Public endpoints (getUserById, getUsersByIds) sirf public fields return karte hain.
+ * - updateUserProfile: email/password yahan se nahi badalte.
+ * - Email OTP: per-user scoped, attempt limit ke saath.
  */
 
 import bcrypt from 'bcrypt';
@@ -74,46 +56,66 @@ import {
 
 import { VerificationType } from '../types/auth.types';
 
+// ==================== CONSTANTS ====================
+
+const MAX_FAILED_ATTEMPTS = 5;               // ek user + IP ke liye (15 min window)
+const MAX_FAILED_ATTEMPTS_PER_IP = 20;       // ek IP ke liye (campus/NAT ka dhyan rakha)
+const LOCK_DURATION_MS = 15 * 60 * 1000;     // temporary lock
+const MAX_OTP_ATTEMPTS = 5;
+const OTP_TTL_SECONDS = 600;
+const MAX_BULK_USER_IDS = 100;
+
+const PUBLIC_PROFILE_SELECT =
+    'userId firstName lastName location coverPhotoId profilePhotoId headlineId aboutId ' +
+    'companyId experienceIds activityStats onboarding role emailVerified createdAt';
+
+const parseCached = (value: any): any =>
+    typeof value === 'string' ? JSON.parse(value) : value;
+
+const sha256 = (value: string): string =>
+    crypto.createHash('sha256').update(value).digest('hex');
+
+const safeEqualHex = (a: string, b: string): boolean => {
+    try {
+        const bufA = Buffer.from(a, 'hex');
+        const bufB = Buffer.from(b, 'hex');
+        return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+    } catch {
+        return false;
+    }
+};
+
 // ==================== AUTH SERVICE ====================
 
 class AuthService {
 
     /**
-     * Check if account is locked (IP or user+IP based)
-     *
-     * ⚠️ Kept for backward compatibility only. The login() flow below no
-     * longer depends on this being called first — it does its own
-     * single-pass IP + user + rate-limit check internally. If nothing
-     * else in the codebase calls this, it's safe to remove later.
+     * Kept for backward compatibility. login() ab ye sab khud karta hai,
+     * isliye controller ko ise alag se call nahi karna chahiye.
      */
     static async checkAccountLocked(
         email: string,
         ipAddress: string
     ): Promise<boolean> {
         try {
-            // 1. Check IP-level block
             const ipAttempts = await LoginAttemptRepository.countRecentByIp(ipAddress);
-            if (ipAttempts >= 3) {
-                logger.warn('IP blocked after 3 attempts', { ipAddress });
+            if (ipAttempts >= MAX_FAILED_ATTEMPTS_PER_IP) {
+                logger.warn('IP blocked after too many attempts', { ipAddress });
                 return true;
             }
 
-            // 2. Check user-level
-            const user = await User.findOne({ email }).select(
+            const user = await User.findOne({ email: email.trim().toLowerCase() }).select(
                 'userId accountStatus lockUntil'
             );
             if (!user) return false;
 
             if (user.accountStatus === 'locked') {
-                logger.warn('Account locked', { userId: user.userId, email });
+                logger.warn('Account locked', { userId: user.userId });
                 return true;
             }
 
             if (user.lockUntil && user.lockUntil > new Date()) {
-                logger.warn('Account temporarily locked', {
-                    userId: user.userId,
-                    email,
-                });
+                logger.warn('Account temporarily locked', { userId: user.userId });
                 return true;
             }
 
@@ -121,12 +123,11 @@ class AuthService {
                 user.userId,
                 ipAddress
             );
-            return userAttempts >= 3;
+            return userAttempts >= MAX_FAILED_ATTEMPTS;
 
         } catch (error: any) {
             logger.error('Account lock check failed', {
                 error: error.message,
-                email,
             });
             return false;
         }
@@ -144,9 +145,13 @@ class AuthService {
         },
         deviceData: DeviceData = {}
     ): Promise<RegisterResult> {
+        let createdUserId: string | null = null;
+
         try {
+            email = (email || '').trim().toLowerCase();
+
             if (!validator.isEmail(email)) throw new Error('Invalid email format');
-            if (password.length < 6)
+            if (!password || password.length < 6)
                 throw new Error('Password must be at least 6 characters');
 
             const existingUser = await UserRepository.findByEmail(email);
@@ -225,6 +230,7 @@ class AuthService {
             });
 
             await user.save();
+            createdUserId = user.userId;
 
             // Generate username
             const username =
@@ -274,7 +280,7 @@ class AuthService {
                 },
             });
 
-            // Audit log
+            // Audit log (phone number store nahi karte, sirf flag)
             await AuditLogRepository.logAction({
                 userId: user.userId,
                 userEmail: email,
@@ -287,7 +293,7 @@ class AuthService {
                     ['firstName', user.firstName],
                     ['location', user.location],
                     ['userType', user.onboarding?.userType],
-                    ['phoneNumber', user.phoneNumber],
+                    ['hasPhoneNumber', String(!!user.phoneNumber)],
                     ['deviceId', device.deviceId],
                 ]),
             });
@@ -312,6 +318,17 @@ class AuthService {
             };
 
         } catch (error: any) {
+            // User save ho chuka tha par aage kuch fail hua: orphan user hata do,
+            // warna dobara register karne par "User already exists" aayega.
+            if (createdUserId) {
+                await UserRepository.deleteByUserId(createdUserId).catch((cleanupErr: any) =>
+                    logger.error('Registration rollback failed', {
+                        error: cleanupErr?.message,
+                        userId: createdUserId,
+                    })
+                );
+            }
+
             logger.error('User registration failed', {
                 error: error.message,
                 email,
@@ -323,21 +340,8 @@ class AuthService {
     // ==================== LOGIN ====================
 
     /**
-     * ✅ OPTIMIZED LOGIN
-     *
-     * Before: controller called checkAccountLocked() (1x user fetch +
-     * 1x rate-limit query), then this method fetched the user AGAIN
-     * and ran the SAME rate-limit query again. Then, after a successful
-     * login, the controller fetched the user a THIRD time to build the
-     * response. That's 3 user fetches + 2 rate-limit queries for one
-     * login.
-     *
-     * Now: single user fetch, single rate-limit check (covers both
-     * IP-level and user-level in one pass), non-blocking
-     * (fire-and-forget) writes for things that don't need to block the
-     * response (last-login timestamp, success audit row), and the full
-     * user object is returned so the controller doesn't need to fetch
-     * it again.
+     * Single user fetch, single rate-limit pass. Full user fields return hote hain
+     * taaki controller ko dobara DB nahi jaana pade.
      */
     static async login(
         email: string,
@@ -355,18 +359,17 @@ class AuthService {
         let userId: string | null = null;
 
         try {
+            email = (email || '').trim().toLowerCase();
             logger.info('Login process started', { email, ipAddress });
 
-            // Step 1: IP-level block check + user fetch run in PARALLEL.
-            // (Previously: controller checked IP block, THEN this method
-            // fetched the user separately — now both happen at once.)
+            // Step 1: IP-level check + user fetch parallel
             const [ipAttempts, user] = await Promise.all([
                 LoginAttemptRepository.countRecentByIp(ipAddress),
                 UserRepository.findByEmailWithPassword(email),
             ]);
 
-            if (ipAttempts >= 3) {
-                logger.warn('IP blocked after 3 attempts', { ipAddress });
+            if (ipAttempts >= MAX_FAILED_ATTEMPTS_PER_IP) {
+                logger.warn('IP blocked after too many attempts', { ipAddress });
                 await LoginAttemptRepository.recordSafe(null, ipAddress, 'login', 'blocked', {
                     userAgent: deviceData.userAgent,
                     failureReason: 'ip_blocked',
@@ -388,8 +391,7 @@ class AuthService {
             userId = user.userId;
             logger.debug('User found', { userId, email });
 
-            // Step 2: Account status checks (using the user we already
-            // fetched — no second DB call needed here)
+            // Step 2: Account status checks
             if (user.accountStatus === 'locked') {
                 await LoginAttemptRepository.recordSafe(userId, ipAddress, 'login', 'blocked', {
                     userAgent: deviceData.userAgent,
@@ -414,22 +416,26 @@ class AuthService {
                     failureReason: 'account_temporarily_locked',
                     metadata: { reason: 'lock_until_active' },
                 });
-                throw new Error('Account is temporarily locked. Please try again later.');
+                throw new Error(
+                    'Too many attempts. Account temporarily locked, please try again in 15 minutes.'
+                );
             }
 
-            if (user.status === 'deleted' || user.status === 'suspended') {
+            if (
+                user.status === 'deleted' ||
+                user.status === 'suspended' ||
+                user.status === 'inactive'
+            ) {
                 throw new Error('Account is not active. Contact support.');
             }
 
-            // Step 3: Rate limit check — SINGLE call now (this used to
-            // run once inside checkAccountLocked() in the controller,
-            // and AGAIN here — now it only runs once, right here).
+            // Step 3: Rate limit check (sirf failed attempts count hote hain)
             const recentAttempts = await LoginAttemptRepository.countRecentByUserAndIp(
                 user.userId,
                 ipAddress
             );
 
-            if (recentAttempts >= 3) {
+            if (recentAttempts >= MAX_FAILED_ATTEMPTS) {
                 logger.warn('Login blocked: Too many attempts', {
                     userId,
                     attempts: recentAttempts,
@@ -439,8 +445,21 @@ class AuthService {
                     failureReason: 'rate_limited',
                     metadata: { attempts: recentAttempts },
                 });
-                await User.lockAccount(user.userId, 'too_many_attempts');
-                throw new Error('Account locked after 3 failed attempts');
+                try {
+                    await User.lockAccount(
+                        user.userId,
+                        'too_many_attempts',
+                        LOCK_DURATION_MS
+                    );
+                } catch (lockErr: any) {
+                    logger.error('Temporary lock failed (non-critical)', {
+                        error: lockErr.message,
+                        userId,
+                    });
+                }
+                throw new Error(
+                    'Too many attempts. Account temporarily locked, please try again in 15 minutes.'
+                );
             }
 
             // Step 4: Password verification
@@ -465,8 +484,23 @@ class AuthService {
 
             logger.info('Password verified successfully', { userId });
 
-            // Step 5: Update last login — fire-and-forget. Doesn't need
-            // to block the response; failure here is non-critical.
+            // Purane (expire ho chuke) lock fields saaf karo
+            if (user.lockUntil || user.accountLockedReason) {
+                User.updateOne(
+                    { userId: user.userId },
+                    {
+                        $unset: { lockUntil: 1, accountLockedReason: 1 },
+                        $set: { loginAttempts: 0 },
+                    }
+                ).catch((err: any) =>
+                    logger.error('Lock reset failed (non-critical)', {
+                        error: err.message,
+                        userId,
+                    })
+                );
+            }
+
+            // Step 5: Last login update (fire-and-forget)
             user.updateLastLogin(ipAddress).catch((err: any) =>
                 logger.error('updateLastLogin failed (non-critical)', {
                     error: err.message,
@@ -480,10 +514,7 @@ class AuthService {
                 deviceData
             );
 
-            // Step 7: Create session (needs device.deviceId, so this
-            // stays sequential after device registration — cannot be
-            // parallelized safely without knowing whether deviceId is
-            // enforced as a hard FK at write time)
+            // Step 7: Create session
             const session = await SessionRepository.createSession({
                 userId: user.userId,
                 ipAddress,
@@ -493,8 +524,7 @@ class AuthService {
 
             logger.info('Session created', { userId, sessionId: session._id });
 
-            // Step 8: Record success — fire-and-forget. The response
-            // doesn't need to wait for this audit row to be written.
+            // Step 8: Success record (fire-and-forget)
             LoginAttemptRepository.recordSafe(
                 userId,
                 ipAddress,
@@ -515,8 +545,6 @@ class AuthService {
 
             logger.info('Login successful', { userId, sessionId: session._id });
 
-            // ✅ Return the full user object so the controller NEVER
-            // needs to fetch the user a second/third time.
             return {
                 userId: user.userId,
                 sessionId: session._id,
@@ -552,12 +580,14 @@ class AuthService {
             const githubId = githubProfile.id;
             const githubUsername = githubProfile.username;
 
-            let email =
-                githubProfile.emails?.find((e) => e.primary)?.value ||
-                githubProfile.emails?.[0]?.value;
+            // Sirf verified email se link/create karo (unverified email se account takeover ho sakta hai)
+            const emailEntry =
+                githubProfile.emails?.find((e: any) => e.primary && e.verified !== false) ||
+                githubProfile.emails?.find((e: any) => e.verified !== false);
+            const email = emailEntry?.value?.trim().toLowerCase();
 
             if (!email) {
-                throw new Error('No email found in GitHub profile');
+                throw new Error('No verified email found in GitHub profile');
             }
 
             logger.info('GitHub OAuth authentication started', {
@@ -572,7 +602,7 @@ class AuthService {
                 githubId
             );
 
-            // Existing user — link GitHub if not already linked
+            // Existing user: GitHub link karo agar already linked nahi
             if (user) {
                 const githubLinked = user.oauthProviders?.some(
                     (p: any) => p.provider === 'github' && p.providerId === githubId
@@ -597,7 +627,6 @@ class AuthService {
                 await user.updateLastLogin(ipAddress);
 
             } else {
-                // New user via GitHub OAuth
                 logger.info('Creating new user from GitHub OAuth', {
                     email,
                     githubId,
@@ -615,7 +644,7 @@ class AuthService {
                 );
 
                 user = new User({
-                    email: email.toLowerCase(),
+                    email,
                     username,
                     firstName: firstName || githubUsername,
                     lastName,
@@ -750,7 +779,7 @@ class AuthService {
     }
 
     /**
-     * Generate unique username (helper)
+     * Unique username generate karo (helper)
      */
     private static async generateUniqueUsername(base: string): Promise<string> {
         const cleanBase = base.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
@@ -760,12 +789,18 @@ class AuthService {
         while (await UserRepository.usernameExists(username)) {
             username = `${cleanBase}_${counter}`;
             counter++;
+
+            // Bahut collisions ho to random suffix lagao, infinite loop se bachne ke liye
+            if (counter > 50) {
+                username = `${cleanBase}_${crypto.randomBytes(3).toString('hex')}`;
+                break;
+            }
         }
 
         return username;
     }
 
-    // ==================== GET USER PROFILE ====================
+    // ==================== GET USER PROFILE (SELF) ====================
 
     static async getUserProfile(
         userId: string,
@@ -798,7 +833,7 @@ class AuthService {
 
             const profile = this.buildProfileResponse(user);
 
-            // Fetch Contact to determine hasDateOfBirth
+            // hasDateOfBirth
             const contact = await Contact.findOne({ userId }).select('birthday').lean();
             if (contact && contact.birthday && contact.birthday.day && contact.birthday.month) {
                 profile.hasDateOfBirth = true;
@@ -855,11 +890,16 @@ class AuthService {
         }
     }
 
-    // ==================== GET USER BY ID ====================
+    // ==================== GET USER BY ID (PUBLIC VIEW) ====================
 
+    /**
+     * Doosre users ko dikhne wala PUBLIC profile. email, phone, IP, sessions,
+     * preferences yahan kabhi nahi aate. Self/admin ke liye controller
+     * getUserProfile() call karta hai.
+     */
     static async getUserById(
         userId: string,
-        options: ProfileOptions = {}
+        _options: ProfileOptions = {}
     ): Promise<any> {
         const correlationId = uuidv4();
 
@@ -872,7 +912,7 @@ class AuthService {
                 throw new Error('Invalid user ID format');
             }
 
-            // L1: Cache
+            // L1: Cache (ye key ab sirf public profile hold karti hai)
             const cached = await AuthCacheRepository.getCachedUser(userId);
             if (cached) {
                 LoggerUtil.debug('User cache HIT', { userId, correlationId });
@@ -894,34 +934,13 @@ class AuthService {
                 throw new Error('User account is not active');
             }
 
-            const userResponse = this.buildProfileResponse(user);
+            const userResponse = this.buildPublicProfile(user);
 
-            // Fetch Contact to determine hasDateOfBirth
             const contact = await Contact.findOne({ userId }).select('birthday').lean();
             if (contact && contact.birthday && contact.birthday.day && contact.birthday.month) {
                 userResponse.hasDateOfBirth = true;
             } else {
                 userResponse.hasDateOfBirth = false;
-            }
-
-            if (options.includeStats) {
-                const [activeSessions, activeDevices] = await Promise.all([
-                    SessionRepository.countActive(userId),
-                    DeviceRepository.countActive(userId),
-                ]);
-                userResponse.stats = {
-                    activeSessions,
-                    activeDevices,
-                    accountAge: Math.floor(
-                        (Date.now() - new Date(user.createdAt).getTime()) /
-                        (1000 * 60 * 60 * 24)
-                    ),
-                };
-            }
-
-            if (options.includeSessions) {
-                userResponse.activeSessions =
-                    await SessionRepository.findRecentForProfile(userId);
             }
 
             await AuthCacheRepository.setCachedUser(userId, userResponse);
@@ -945,12 +964,11 @@ class AuthService {
         }
     }
 
-    // ==================== 🆕 NEW - ADDED FOR BULK FIX (429 error) ====================
+    // ==================== GET USERS BY IDS (BULK, PUBLIC VIEW) ====================
 
     /**
-     * Get MULTIPLE users by their IDs in ONE query.
-     * This replaces N parallel calls to getUserById() which was causing
-     * 429 "Too many auth attempts" errors on the dashboard/home feed.
+     * Ek hi query mein multiple users (public fields). N parallel getUserById
+     * calls se hone wale 429 errors ko rokta hai.
      */
     static async getUsersByIds(userIds: string[]): Promise<any[]> {
         const correlationId = uuidv4();
@@ -965,15 +983,22 @@ class AuthService {
                 return [];
             }
 
-            const uniqueIds = [...new Set(userIds)];
+            const uniqueIds = [
+                ...new Set(userIds.filter((id) => typeof id === 'string' && id.length > 0)),
+            ].slice(0, MAX_BULK_USER_IDS);
+
+            if (uniqueIds.length === 0) return [];
 
             const users = await User.find({
                 userId: { $in: uniqueIds },
                 status: 'active',
-            }).lean();
+                'flags.isDeleted': false,
+            })
+                .select(PUBLIC_PROFILE_SELECT)
+                .lean();
 
             const formattedUsers = users.map((user: any) =>
-                this.buildProfileResponse(user)
+                this.buildPublicProfile(user)
             );
 
             LoggerUtil.info('Bulk users fetched successfully', {
@@ -993,10 +1018,39 @@ class AuthService {
         }
     }
 
-    // ==================== END NEW CODE ====================
+    // ==================== PROFILE BUILDERS ====================
 
     /**
-     * Build the common profile response object from a user document
+     * Public view: sirf wahi jo doosre users ko dikhna chahiye.
+     */
+    private static buildPublicProfile(user: any): Record<string, any> {
+        return {
+            userId: user.userId,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            location: user.location,
+            coverPhotoId: user.coverPhotoId,
+            profilePhotoId: user.profilePhotoId,
+            headlineId: user.headlineId,
+            aboutId: user.aboutId,
+            companyId: user.companyId,
+            experienceIds: user.experienceIds,
+            activityStats: {
+                totalPosts: user.activityStats?.totalPosts || 0,
+                totalComments: user.activityStats?.totalComments || 0,
+                totalVideos: user.activityStats?.totalVideos || 0,
+                totalImages: user.activityStats?.totalImages || 0,
+                totalDocuments: user.activityStats?.totalDocuments || 0,
+            },
+            onboarding: this.buildOnboardingSection(user.onboarding),
+            role: user.role,
+            emailVerified: !!user.emailVerified,
+            createdAt: user.createdAt,
+        };
+    }
+
+    /**
+     * Full view: sirf user ke apne profile (ya admin) ke liye.
      */
     private static buildProfileResponse(user: any): Record<string, any> {
         return {
@@ -1046,7 +1100,7 @@ class AuthService {
     }
 
     /**
-     * Build onboarding section based on userType
+     * userType ke hisaab se onboarding section
      */
     private static buildOnboardingSection(onboarding: any): Record<string, any> {
         const base: Record<string, any> = {
@@ -1083,7 +1137,7 @@ class AuthService {
         return base;
     }
 
-    // ==================== GET ALL USERS ====================
+    // ==================== GET ALL USERS (ADMIN) ====================
 
     static async getAllUsers(
         params: GetAllUsersParams
@@ -1150,11 +1204,30 @@ class AuthService {
                 correlationId,
             });
 
-            const allowedFields = [
-                'email', 'password', 'phoneNumber', 'firstName',
-                'lastName', 'location', 'onboarding', 'preferences',
-                'currentPosition', 'company', 'education', 'pronouns',
+            // Password yahan se kabhi nahi badalta (verified change flow use karo)
+            if (updates.password !== undefined) {
+                throw new Error(
+                    'Password cannot be changed here. Please use the change password option.'
+                );
+            }
 
+            // Email: same email ignore, alag email reject (verified change flow use karo)
+            if (updates.email !== undefined) {
+                const requestedEmail = updates.email?.trim().toLowerCase();
+                const currentEmail = (
+                    await User.findOne({ userId }).select('email').lean()
+                )?.email;
+                if (requestedEmail && requestedEmail !== currentEmail) {
+                    throw new Error(
+                        'Email cannot be changed here. Please use the verified email change option.'
+                    );
+                }
+            }
+
+            const allowedFields = [
+                'phoneNumber', 'firstName', 'lastName', 'location',
+                'onboarding', 'preferences', 'currentPosition',
+                'company', 'education', 'pronouns',
             ];
 
             const updateFields = Object.keys(updates).filter((k) =>
@@ -1164,43 +1237,18 @@ class AuthService {
                 throw new Error('No valid fields to update');
             }
 
-            const currentUser = await UserRepository.findByUserIdWithPassword(userId);
+            const currentUser: any = await User.findOne({
+                userId,
+                'flags.isDeleted': false,
+            })
+                .select('email phoneNumber preferences onboarding')
+                .lean()
+                .exec();
             if (!currentUser) throw new Error('User not found');
 
             const validatedUpdates: any = {};
 
-            // Email
-            if (updates.email !== undefined) {
-                const email = updates.email?.trim().toLowerCase();
-                if (!email) throw new Error('Email cannot be empty');
-                if (!validator.isEmail(email)) throw new Error('Invalid email format');
-
-                const exists = await UserRepository.emailExistsForOtherUser(
-                    email,
-                    userId
-                );
-                if (exists) throw new Error('Email already exists');
-
-                validatedUpdates.email = email;
-                validatedUpdates.emailVerified = false;
-                validatedUpdates.emailVerifiedAt = null;
-            }
-
-            // Password (relaxed — only length check)
-            if (updates.password !== undefined) {
-                const password = updates.password?.trim();
-                if (!password) throw new Error('Password cannot be empty');
-                if (password.length < 6 || password.length > 128) {
-                    throw new Error('Password must be 6-128 characters');
-                }
-
-                const salt = await bcrypt.genSalt(12);
-                validatedUpdates.passwordHash = await bcrypt.hash(password, salt);
-                validatedUpdates.passwordSalt = salt;
-                validatedUpdates.passwordChangedAt = new Date();
-            }
-
-            // Phone number
+            // Phone number (verification sirf tab reset hota hai jab number sach mein badle)
             if (updates.phoneNumber !== undefined) {
                 const phoneNumber = updates.phoneNumber?.trim();
                 if (phoneNumber && !validator.isMobilePhone(phoneNumber, 'any')) {
@@ -1208,14 +1256,15 @@ class AuthService {
                         'Invalid phone number format (use E.164 format, e.g., +919876543210)'
                     );
                 }
-                validatedUpdates.phoneNumber = phoneNumber || null;
-                if (phoneNumber !== currentUser.phoneNumber) {
+                const nextPhone = phoneNumber || null;
+                if (nextPhone !== (currentUser.phoneNumber || null)) {
+                    validatedUpdates.phoneNumber = nextPhone;
                     validatedUpdates.phoneVerified = false;
                     validatedUpdates.phoneVerifiedAt = null;
                 }
             }
 
-            // First name (relaxed — only length check)
+            // First name
             if (updates.firstName !== undefined) {
                 const firstName = updates.firstName?.trim();
                 if (firstName && firstName.length > 50) {
@@ -1224,7 +1273,7 @@ class AuthService {
                 validatedUpdates.firstName = firstName || null;
             }
 
-            // Last name (relaxed — only length check)
+            // Last name
             if (updates.lastName !== undefined) {
                 const lastName = updates.lastName?.trim();
                 if (lastName && lastName.length > 50) {
@@ -1233,7 +1282,7 @@ class AuthService {
                 validatedUpdates.lastName = lastName || null;
             }
 
-            // Location (relaxed — only length check)
+            // Location
             if (updates.location !== undefined) {
                 const location = updates.location?.trim();
                 if (location && location.length > 100) {
@@ -1377,6 +1426,7 @@ class AuthService {
 
             // Invalidate caches
             await AuthCacheRepository.invalidateUserCaches(userId);
+            await AuthCacheRepository.del(`verify:user:${userId}`);
 
             // Audit log (non-blocking)
             setImmediate(() => {
@@ -1390,9 +1440,7 @@ class AuthService {
                     timestamp: new Date().toISOString(),
                     metadata: {
                         updatedFields: Object.keys(validatedUpdates),
-                        hasEmailChange: !!updates.email,
-                        hasPasswordChange: !!updates.password,
-                        hasPhoneChange: !!updates.phoneNumber,
+                        hasPhoneChange: 'phoneNumber' in validatedUpdates,
                         correlationId,
                     },
                 }).catch((err: any) =>
@@ -1455,6 +1503,7 @@ class AuthService {
             await SessionRepository.terminateAllForUser(userId, 'account_deactivated');
             await DeviceRepository.deactivateAllForUser(userId);
             await AuthCacheRepository.invalidateUserCaches(userId);
+            await AuthCacheRepository.del(`verify:user:${userId}`);
 
             setImmediate(() => {
                 AuditProducer.sendAuditEvent({
@@ -1511,12 +1560,13 @@ class AuthService {
 
             await UserRepository.deleteByUserId(userId);
 
-            const [deletedSessions, deletedDevices] = await Promise.all([
+            await Promise.all([
                 SessionRepository.terminateAllForUser(userId, 'user_logout'),
                 DeviceRepository.deleteAllForUser(userId),
             ]);
 
             await AuthCacheRepository.invalidateUserCaches(userId);
+            await AuthCacheRepository.del(`verify:user:${userId}`);
 
             await AuditProducer.sendAuditEvent({
                 eventId: uuidv4(),
@@ -1815,6 +1865,11 @@ class AuthService {
 
     // ==================== REFRESH ACCESS TOKEN ====================
 
+    /**
+     * Note: actual refresh flow AuthController.refreshToken() mein hai (rotation +
+     * reuse detection). Ye method backward compatibility ke liye rakha hai.
+     * Device limit yahan nahi lagta; wo auth middleware handle karta hai.
+     */
     static async refreshAccessToken(
         refreshToken: string,
         ipAddress: string,
@@ -1835,11 +1890,6 @@ class AuthService {
 
             if (!session) {
                 throw new Error('Session not found or expired');
-            }
-
-            const activeDevices = await DeviceRepository.countActive(decoded.userId);
-            if (activeDevices > 2) {
-                throw new Error('Device limit exceeded (max 2 active devices)');
             }
 
             await SessionRepository.updateActivity(session._id);
@@ -1870,9 +1920,7 @@ class AuthService {
                 return null;
             }
 
-            // ✅ FIX: own cache namespace ("verify:user:<userId>") instead
-            // of the shared "user:<userId>" key that getUserById() reads
-            // for the full profile — see fix note in auth.repository.ts.
+            // Apna alag cache namespace ("verify:user:<userId>")
             const cached = await AuthCacheRepository.getCachedVerificationUser(userId);
 
             if (cached && cached.status === 'active') {
@@ -1898,6 +1946,7 @@ class AuthService {
             throw error;
         }
     }
+
     // ==================== VERIFY EMAIL ====================
 
     static async verifyEmail(
@@ -1914,16 +1963,24 @@ class AuthService {
             }
 
             user.emailVerified = true;
+            user.emailVerifiedAt = new Date();
             user.emailVerificationToken = undefined;
             user.emailVerificationExpires = undefined;
             await user.save();
 
+            // Saare user-related caches saaf karo (profile, public, verification)
+            await AuthCacheRepository.invalidateUserCaches(userId);
+            await AuthCacheRepository.del(`verify:user:${userId}`);
             await AuthCacheRepository.del(
                 `${Constants.CACHE_PREFIXES.USER}${userId}`
             );
 
+            // Used token/OTP keys hata do (dobara use na ho sake)
+            await AuthCacheRepository.del(`email_verify_otp_user:${userId}`);
+            await AuthCacheRepository.del(`email_verify_otp_attempts:${userId}`);
             if (tokenHash) {
                 await AuthCacheRepository.del(`email_verify_token:${tokenHash}`);
+                await AuthCacheRepository.del(`email_verify_otp:${tokenHash}`);
             }
 
             try {
@@ -1953,11 +2010,8 @@ class AuthService {
     ): Promise<EmailVerificationResult> {
         try {
             if (type === 'otp') {
-                const otp = Math.floor(100000 + Math.random() * 900000).toString();
-                const otpHash = crypto
-                    .createHash('sha256')
-                    .update(otp)
-                    .digest('hex');
+                const otp = crypto.randomInt(100000, 1000000).toString();
+                const otpHash = sha256(otp);
 
                 const data: EmailVerificationTokenData = {
                     userId,
@@ -1965,18 +2019,28 @@ class AuthService {
                     createdAt: Date.now(),
                     type: 'otp',
                 };
+
+                // Per-user scoped record (verification yahin se hoti hai jab userId pata ho)
+                await AuthCacheRepository.set(
+                    `email_verify_otp_user:${userId}`,
+                    JSON.stringify({ ...data, otpHash }),
+                    OTP_TTL_SECONDS
+                );
+
+                // Legacy hash-keyed record (sirf un callers ke liye jo userId pass nahi karte)
                 await AuthCacheRepository.set(
                     `email_verify_otp:${otpHash}`,
                     JSON.stringify(data),
-                    600
+                    OTP_TTL_SECONDS
                 );
-                return { otp, expiryMinutes: 10 };
+
+                // Naya OTP = attempts counter reset
+                await AuthCacheRepository.del(`email_verify_otp_attempts:${userId}`);
+
+                return { otp, expiryMinutes: OTP_TTL_SECONDS / 60 };
             } else {
                 const token = crypto.randomBytes(32).toString('hex');
-                const tokenHash = crypto
-                    .createHash('sha256')
-                    .update(token)
-                    .digest('hex');
+                const tokenHash = sha256(token);
 
                 const data: EmailVerificationTokenData = {
                     userId,
@@ -2008,17 +2072,51 @@ class AuthService {
 
     // ==================== VERIFY EMAIL TOKEN/OTP ====================
 
+    /**
+     * OTP verify karte waqt userId hamesha pass karo (controller mein req.user se).
+     * userId diya ho to per-user record + 5 attempts ki limit lagti hai.
+     */
     static async verifyEmailToken(
         tokenOrOtp: string,
         type: VerificationType = 'link',
         userId: string | null = null
     ): Promise<EmailTokenResult> {
         try {
-            const hash = crypto
-                .createHash('sha256')
-                .update(tokenOrOtp)
-                .digest('hex');
+            const hash = sha256(tokenOrOtp);
 
+            // OTP + userId: scoped, attempt-limited path
+            if (type === 'otp' && userId) {
+                const attemptsKey = `email_verify_otp_attempts:${userId}`;
+                const attempts = await AuthCacheRepository.getRateLimit(attemptsKey);
+
+                if (attempts >= MAX_OTP_ATTEMPTS) {
+                    throw new Error('Too many invalid attempts. Please request a new code.');
+                }
+
+                const scopedRaw = await AuthCacheRepository.get(
+                    `email_verify_otp_user:${userId}`
+                );
+                const scoped = scopedRaw ? parseCached(scopedRaw) : null;
+
+                if (!scoped || !scoped.otpHash || !safeEqualHex(scoped.otpHash, hash)) {
+                    await AuthCacheRepository.setRateLimit(
+                        attemptsKey,
+                        attempts + 1,
+                        OTP_TTL_SECONDS
+                    );
+                    throw new Error('Invalid or expired OTP');
+                }
+
+                await AuthCacheRepository.del(attemptsKey);
+
+                return {
+                    userId: scoped.userId,
+                    email: scoped.email,
+                    tokenHash: hash,
+                };
+            }
+
+            // Link token ya legacy OTP (userId ke bina)
             const cacheKey =
                 type === 'otp'
                     ? `email_verify_otp:${hash}`
@@ -2031,21 +2129,10 @@ class AuthService {
                 );
             }
 
-            const tokenData =
-                typeof cachedData === 'string'
-                    ? JSON.parse(cachedData)
-                    : cachedData;
+            const tokenData = parseCached(cachedData);
 
             if (tokenData.type !== type) {
                 throw new Error('Invalid verification type');
-            }
-
-            if (
-                type === 'otp' &&
-                userId &&
-                tokenData.userId !== userId
-            ) {
-                throw new Error('OTP does not belong to this user');
             }
 
             return {
@@ -2168,6 +2255,9 @@ class AuthService {
             user.phoneVerifiedAt = new Date();
             await user.save();
 
+            // Saare user-related caches saaf karo (profile, public, verification)
+            await AuthCacheRepository.invalidateUserCaches(userId);
+            await AuthCacheRepository.del(`verify:user:${userId}`);
             await AuthCacheRepository.del(
                 `${Constants.CACHE_PREFIXES.USER}${userId}`
             );
@@ -2191,6 +2281,7 @@ class AuthService {
 
     static async invalidateUserCache(userId: string): Promise<void> {
         await AuthCacheRepository.invalidateUserCaches(userId);
+        await AuthCacheRepository.del(`verify:user:${userId}`);
     }
 }
 

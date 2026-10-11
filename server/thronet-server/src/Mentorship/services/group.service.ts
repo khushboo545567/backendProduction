@@ -8,7 +8,7 @@ import groupRepository from "../repositories/group.repository";
 import mentorRepository from "../repositories/mentor.repository";
 import availabilityRepository from "../repositories/availability.repository";
 import availabilityService from "./availability.service";
-import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
+import cloudinary, { normalizeCloudinaryError } from '@/config/images/store/cloudinary/cloudinary.config';
 
 import mongoose from 'mongoose';
 import { DateTime } from 'luxon';
@@ -24,7 +24,7 @@ interface CreateGroupSessionInput {
   description: string;
   topic: string;
   category?: string;
-  scheduledAt?: Date;   // ✅ CHANGED: optional — isTemplate: true pe absent hota hai
+  scheduledAt?: Date;   // optional: absent when isTemplate is true
   duration: number;
   timezone: string;
   maxParticipants: number;
@@ -38,42 +38,81 @@ interface CreateGroupSessionInput {
     periodDays: number;
   };
   bufferTimeMinutes?: number;
-  isTemplate?: boolean;   // ✅ NEW
+  isTemplate?: boolean;
+  meetingUrl?: string;
+  meeting?: {
+    platform?: string;
+    meetingUrl?: string;
+  };
 }
+
+const MEET_URL_REGEX = /^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3}|lookup\/[A-Za-z0-9]+)(\?.*)?$/;
 
 
 class GroupService {
-  private async uploadImageToCloudinary(buffer: Buffer, identifier: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'group-session-thumbnails',
-          public_id: `group_session_${identifier}_${Date.now()}`,
-          resource_type: 'image',
-          transformation: [
-            { width: 1200, height: 1200, crop: 'limit' },
-            { quality: 'auto:good' },
-          ],
-          overwrite: true,
-        },
-        (error: any, result: any) => {
-          if (error) return reject(error);
-          resolve(result.secure_url);
-        }
+  /**
+   * Uploads a thumbnail to Cloudinary using the promise API (not
+   * upload_stream). The stream variant let the SDK surface a rejection
+   * outside our callback, which showed up as "unhandledRejection" and a
+   * misleading 500. With `await`, every failure lands in our catch.
+   */
+  private async uploadImageToCloudinary(
+    file: { buffer: Buffer; mimetype?: string },
+    identifier: string
+  ): Promise<string> {
+    const mime = file.mimetype || 'image/jpeg';
+    const dataUri = `data:${mime};base64,${file.buffer.toString('base64')}`;
+
+    try {
+      const result = await cloudinary.uploader.upload(dataUri, {
+        folder: 'group-session-thumbnails',
+        public_id: `group_session_${identifier}_${Date.now()}`,
+        resource_type: 'image',
+        transformation: [
+          { width: 1200, height: 1200, crop: 'limit' },
+          { quality: 'auto:good' },
+        ],
+        overwrite: true,
+      });
+
+      return result.secure_url;
+    } catch (error: any) {
+      const details = normalizeCloudinaryError(error);
+      logger.error('Cloudinary upload failed', {
+        identifier,
+        bytes: file.buffer?.length,
+        ...details,
+      });
+      throw new Error(
+        `Cloudinary upload failed${details.httpCode ? ` (${details.httpCode})` : ''}: ${details.message}`
       );
-      uploadStream.end(buffer);
-    });
+    }
+  }
+
+  /**
+   * Thumbnail is optional. If the upload fails, the session itself should
+   * still be created/updated, so this swallows the error (already logged
+   * in uploadImageToCloudinary) and returns undefined.
+   */
+  private async tryUploadThumbnail(file: any, identifier: string): Promise<string | undefined> {
+    if (!file?.buffer) return undefined;
+    try {
+      return await this.uploadImageToCloudinary(file, identifier);
+    } catch (error: any) {
+      logger.warn(`Thumbnail upload skipped for ${identifier}: ${error.message}`);
+      return undefined;
+    }
   }
 
   /**
    * Fire-and-forget notifier for every registered participant of a session.
-   * Used on start/cancel/complete so mentees are not left in the dark —
-   * previously only the mentor ever got notified (on join). Never throws.
+   * Used on start/cancel/complete so mentees are not left in the dark
+   * (previously only the mentor ever got notified on join). Never throws.
    *
-   * Only notifies participants whose join request has been
-   * ACCEPTED by the mentor. Pending/rejected requesters never joined the
-   * session, so they must never receive "session started" / "session
-   * cancelled" notifications or be allowed into the live room.
+   * Only notifies participants whose join request has been ACCEPTED by the
+   * mentor. Pending/rejected requesters never joined the session, so they
+   * must never receive "session started" / "session cancelled"
+   * notifications or be allowed into the live room.
    */
   private async notifyParticipants(
     session: any,
@@ -118,10 +157,9 @@ class GroupService {
         throw new NotFoundError('Mentor profile not found for this user');
       }
 
-      // ✅ CHANGED: template (isTemplate: true) ke paas fixed scheduledAt
-      // hota hi nahi — is validation aur date-parsing ko skip karo. Sirf
-      // fixed-date group session (legacy / isTemplate: false) ke liye hi
-      // future-date check chalta hai.
+      // A template (isTemplate: true) has no fixed scheduledAt, so skip the
+      // date validation and parsing for it. Only a fixed-date group session
+      // (legacy / isTemplate: false) gets the future-date check.
       let scheduledDate: Date | undefined = undefined;
       if (!input.isTemplate) {
         if (!input.scheduledAt) {
@@ -133,10 +171,14 @@ class GroupService {
         }
       }
 
-      let thumbnailUrl: string | undefined = undefined;
-      if (file) {
-        thumbnailUrl = await this.uploadImageToCloudinary(file.buffer, input.mentorId);
+      // Validate the meeting link before doing any external upload work.
+      const rawMeetUrl = input.meetingUrl || input.meeting?.meetingUrl;
+      if (!rawMeetUrl || typeof rawMeetUrl !== 'string' || !MEET_URL_REGEX.test(rawMeetUrl.trim())) {
+        throw new BadRequestError('A valid Google Meet link is required (e.g. https://meet.google.com/abc-defg-hij)');
       }
+      const meetingUrl = rawMeetUrl.trim();
+
+      const thumbnailUrl = await this.tryUploadThumbnail(file, input.mentorId);
 
       const session = new GroupSession({
         sessionId: generateSecureId(),
@@ -170,6 +212,10 @@ class GroupService {
           },
           bufferTimeMinutes: input.bufferTimeMinutes || 0,
         },
+        meeting: {
+          platform: 'google_meet',
+          meetingUrl: meetingUrl,
+        },
         agenda: input.agenda,
         outcomes: input.outcomes,
         chat: {
@@ -184,7 +230,11 @@ class GroupService {
 
       return session;
     } catch (error: any) {
-      logger.error(`Failed to create group session:${error}`);
+      logger.error(`Failed to create group session: ${error?.message || error}`, {
+        name: error?.name,
+        httpCode: error?.http_code,
+        stack: error?.stack,
+      });
       throw error;
     }
   }
@@ -278,12 +328,12 @@ class GroupService {
   }
 
   /**
-   * This no longer registers the mentee directly into the
-   * session. It creates a PENDING join request (via session.addParticipant,
-   * whose internal behaviour changed in the model) and notifies the mentor
-   * that a new request is waiting — mirroring the same "new request"
-   * notification pattern used by 1:1 bookSession(). The mentee is told the
-   * request was sent, not that they're confirmed.
+   * This no longer registers the mentee directly into the session. It
+   * creates a PENDING join request (via session.addParticipant, whose
+   * internal behaviour changed in the model) and notifies the mentor that a
+   * new request is waiting, mirroring the "new request" notification
+   * pattern used by 1:1 bookSession(). The mentee is told the request was
+   * sent, not that they're confirmed.
    */
   async joinGroupSession(
     sessionId: string,
@@ -343,7 +393,7 @@ class GroupService {
             },
           });
         } catch (notifyErr: any) {
-          logger.error('Notification failed (joinGroupSession → mentor):', notifyErr);
+          logger.error('Notification failed (joinGroupSession -> mentor):', notifyErr);
         }
       })();
 
@@ -359,7 +409,7 @@ class GroupService {
             },
           });
         } catch (notifyErr: any) {
-          logger.error('Notification failed (joinGroupSession → mentee):', notifyErr);
+          logger.error('Notification failed (joinGroupSession -> mentee):', notifyErr);
         }
       })();
 
@@ -371,8 +421,8 @@ class GroupService {
   }
 
   /**
-   * Returns the logged-in mentee's own join-request status for a session —
-   * powers the Join Group / Request Pending / Joined button state on the
+   * Returns the logged-in mentee's own join-request status for a session.
+   * Powers the Join Group / Request Pending / Joined button state on the
    * mentor-card page. Returns null when the mentee has never requested to
    * join (controller maps that to a 404), otherwise returns the
    * participant's current status.
@@ -408,8 +458,8 @@ class GroupService {
   }
 
   /**
-   * Mentor accepts a mentee's pending join request. This is the
-   * only place a mentee actually becomes a confirmed participant.
+   * Mentor accepts a mentee's pending join request. This is the only place
+   * a mentee actually becomes a confirmed participant.
    */
   async acceptJoinRequest(
     sessionId: string,
@@ -443,7 +493,7 @@ class GroupService {
             },
           });
         } catch (notifyErr: any) {
-          logger.error('Notification failed (acceptJoinRequest → mentee):', notifyErr);
+          logger.error('Notification failed (acceptJoinRequest -> mentee):', notifyErr);
         }
       })();
 
@@ -489,7 +539,7 @@ class GroupService {
             },
           });
         } catch (notifyErr: any) {
-          logger.error('Notification failed (rejectJoinRequest → mentee):', notifyErr);
+          logger.error('Notification failed (rejectJoinRequest -> mentee):', notifyErr);
         }
       })();
 
@@ -501,8 +551,8 @@ class GroupService {
   }
 
   /**
-   * List of pending join requests across all of a mentor's group
-   * sessions — powers the "Join Requests" panel in the mentor dashboard.
+   * List of pending join requests across all of a mentor's group sessions.
+   * Powers the "Join Requests" panel in the mentor dashboard.
    */
   async getPendingJoinRequestsForMentor(userId: string): Promise<any[]> {
     try {
@@ -557,14 +607,11 @@ class GroupService {
   /**
    * Leave a group session (mentee-initiated cancellation).
    *
-   * ✅ FIX: the 24-hour lock-in only makes sense for a participant who
-   * actually holds a CONFIRMED seat (requestStatus === 'accepted'). A
-   * mentee whose join request is still PENDING — never accepted by the
-   * mentor, never occupying a seat, never counted in currentParticipants —
-   * must always be able to cancel that request, even inside the 24-hour
-   * window. Previously this check ran unconditionally, so a mentee with a
-   * pending request on a session starting soon could never cancel it
-   * (the "Cancel Request" button in the UI would just throw).
+   * The 24-hour lock-in only makes sense for a participant who actually
+   * holds a CONFIRMED seat (requestStatus === 'accepted'). A mentee whose
+   * join request is still PENDING (never accepted by the mentor, never
+   * occupying a seat, never counted in currentParticipants) must always be
+   * able to cancel that request, even inside the 24-hour window.
    */
   async leaveGroupSession(
     sessionId: string,
@@ -596,9 +643,9 @@ class GroupService {
 
       logger.info(`User ${menteeId} left group session: ${sessionId}`);
 
-      // Only notify the mentor when an actual accepted seat was freed — a
-      // pending request being cancelled never occupied a seat, so there's
-      // nothing for the mentor to act on here.
+      // Only notify the mentor when an actual accepted seat was freed. A
+      // pending request being cancelled never occupied a seat, so there is
+      // nothing for the mentor to act on.
       if (wasAccepted) {
         (async () => {
           try {
@@ -616,7 +663,7 @@ class GroupService {
               },
             });
           } catch (notifyErr: any) {
-            logger.error('Notification failed (leaveGroupSession → mentor):', notifyErr);
+            logger.error('Notification failed (leaveGroupSession -> mentor):', notifyErr);
           }
         })();
       }
@@ -641,54 +688,72 @@ class GroupService {
 
       const session = await this.getGroupSessionById(sessionId, authToken);
 
-      if (session.mentorId !== mentor.mentorId) {
+      if (session.mentorId !== mentor.mentorId && session.mentorId !== mentorId) {
         throw new ForbiddenError('Only the mentor can start this session');
       }
 
-      // ✅ FIX: mentor ko decide karne do — kam participants ke sath bhi
-      // session start ho sakti hai. Sirf time-window ab startSession()
-      // ke andar model level pe check hota hai (15 min pehle se scheduled
-      // time ke 5 min baad tak).
-      await session.startSession();
+      if (session.isTemplate) {
+        throw new BadRequestError('Cannot start a template session');
+      }
+
+      if (!session.scheduledAt) {
+        throw new BadRequestError('Cannot start session: session has no scheduled date');
+      }
+
+      if (!session.meeting?.meetingUrl) {
+        throw new BadRequestError('Add a Google Meet link before starting');
+      }
+
+      try {
+        await session.startSession();
+      } catch (err: any) {
+        if (err instanceof BadRequestError || err instanceof ForbiddenError || err instanceof NotFoundError) {
+          throw err;
+        }
+        throw new BadRequestError(err.message || 'Cannot start session');
+      }
+
       logger.info(`Group session started: ${sessionId}`);
 
-      // notifyParticipants already filters to requestStatus === 'accepted'
-      await this.notifyParticipants(
-        session,
-        NotificationType.SESSION_STARTED,
-        'Group Session Started',
-        `"${session.title}" has started. Join now.`
-      );
+      // Notifications and socket emits in their own try/catch (warn only)
+      try {
+        await this.notifyParticipants(
+          session,
+          NotificationType.SESSION_STARTED,
+          'Group Session Started',
+          `"${session.title}" has started. Join now.`
+        );
+      } catch (notifyErr: any) {
+        logger.warn('Failed to notify participants on group session start:', notifyErr);
+      }
 
-      // ✅ FIX: notifyParticipants sirf DB notification save karta hai aur
-      // generic 'notification:new' (bell icon) event emit karta hai.
-      // Frontend ka incoming-call popup + ringtone (MentorshipCallProvider.tsx)
-      // aur useSocket ka SessionStartedEvent 'session:started' /
-      // 'mentorship:session:started' events sunte hain — jo yaha kabhi emit
-      // hi nahi ho rahe the. Isliye student ko sirf bell notification milti
-      // thi, popup kabhi nahi aata tha.
-      const acceptedMenteeIds: string[] = (session.participants || [])
-        .filter((p: any) => p.attendanceStatus !== 'cancelled' && p.requestStatus === 'accepted')
-        .map((p: any) => p.menteeId);
+      try {
+        const acceptedMenteeIds: string[] = (session.participants || [])
+          .filter((p: any) => p.attendanceStatus !== 'cancelled' && p.requestStatus === 'accepted')
+          .map((p: any) => p.menteeId);
 
-      const sessionStartedPayload = {
-        sessionId: session.sessionId,
-        bookingId: session.sessionId, // group session me alag bookingId nahi hota — sessionId hi reuse
-        roomId: session.sessionId,    // room name = sessionId (1:1 wale convention jaisa hi)
-        title: session.title,
-        startedAt: new Date().toISOString(),
-        scheduledAt: session.scheduledAt,
-        meetingUrl: session.meeting?.meetingUrl || null,
-      };
+        const sessionStartedPayload = {
+          sessionId: session.sessionId,
+          roomId: session.sessionId,
+          title: session.title,
+          startedAt: new Date().toISOString(),
+          scheduledAt: session.scheduledAt,
+        };
 
-      acceptedMenteeIds.forEach((menteeId) => {
-        emitToUser(menteeId, 'session:started', sessionStartedPayload);
-        emitToUser(menteeId, 'mentorship:session:started', sessionStartedPayload);
-      });
+        acceptedMenteeIds.forEach((menteeId) => {
+          emitToUser(menteeId, 'session:started', sessionStartedPayload);
+          emitToUser(menteeId, 'mentorship:session:started', sessionStartedPayload);
+        });
+      } catch (socketErr: any) {
+        logger.warn('Failed to emit session started sockets:', socketErr);
+      }
 
       return session;
     } catch (error: any) {
-      logger.error(`Failed to start group session:${error}`);
+      if (error instanceof BadRequestError || error instanceof ForbiddenError || error instanceof NotFoundError) {
+        throw error;
+      }
+      logger.error(`Failed to start group session: ${error}`);
       throw error;
     }
   }
@@ -810,7 +875,10 @@ class GroupService {
       const updatePayload: any = { $set: {} };
 
       if (file) {
-        updatePayload.$set.thumbnailImage = await this.uploadImageToCloudinary(file.buffer, sessionId);
+        const thumbnailUrl = await this.tryUploadThumbnail(file, sessionId);
+        if (thumbnailUrl) {
+          updatePayload.$set.thumbnailImage = thumbnailUrl;
+        }
       }
 
       if (updates.title) updatePayload.$set.title = updates.title;
@@ -841,6 +909,14 @@ class GroupService {
 
       if (updates.status) {
         updatePayload.$set.status = updates.status;
+      }
+
+      if (updates.meetingUrl) {
+        if (!MEET_URL_REGEX.test(updates.meetingUrl.trim())) {
+          throw new BadRequestError('Must be a valid Google Meet link (e.g. https://meet.google.com/abc-defg-hij)');
+        }
+        updatePayload.$set['meeting.platform'] = 'google_meet';
+        updatePayload.$set['meeting.meetingUrl'] = updates.meetingUrl.trim();
       }
 
       const updatedSession = await GroupSession.findOneAndUpdate(
@@ -931,25 +1007,28 @@ class GroupService {
           .sort({ scheduledAt: -1 })
           .lean();
       }
-      return await groupRepository.findByUserId(userId, role);
+      const sessions = await groupRepository.findByUserId(userId, role);
+      return await Promise.all(
+        sessions.map((s: any) => this.sanitizeGroupSession(s, userId))
+      );
     } catch (error: any) {
       logger.error(`Failed to fetch my group sessions: ${error}`);
       throw error;
     }
   }
 
-   /**
-   * Group-session participants across a mentor's sessions — grouped into
-   * ONE row per session (not one row per participant), each row carrying
-   * the full accepted-participant list so the mentor's Booking dashboard
-   * can show "2/7 Enrolled" plus a "View Participants" list, instead of
+  /**
+   * Group-session participants across a mentor's sessions, grouped into ONE
+   * row per session (not one row per participant), each row carrying the
+   * full accepted-participant list so the mentor's Booking dashboard can
+   * show "2/7 Enrolled" plus a "View Participants" list, instead of
    * spawning a duplicate table row per student in the same session.
    *
-   * Only ACCEPTED participants are counted/listed here — pending
-   * requests belong in the Join Requests panel
-   * (getPendingJoinRequestsForMentor), not in the confirmed-bookings list.
-   * Sessions with zero accepted participants are skipped — nothing for
-   * the mentor to manage yet on those.
+   * Only ACCEPTED participants are counted/listed here. Pending requests
+   * belong in the Join Requests panel (getPendingJoinRequestsForMentor),
+   * not in the confirmed-bookings list. Sessions with zero accepted
+   * participants are skipped, since there is nothing for the mentor to
+   * manage yet on those.
    */
   async getGroupSessionParticipantsForMentor(userId: string): Promise<any[]> {
     try {
@@ -1015,8 +1094,15 @@ class GroupService {
               ? 'completed'
               : session.status === 'in_progress'
               ? 'in_progress'
+              : session.status === 'full'
+              ? 'full'
+              : session.status === 'open'
+              ? 'open'
               : 'confirmed',
           isGroupSession: true,
+          isTemplate: !!session.isTemplate,
+          meetingUrl: session.meeting?.meetingUrl,
+          meeting: session.meeting,
           participants,
         });
       }
@@ -1042,11 +1128,11 @@ class GroupService {
   /**
    * Bookable slots for a group-session TEMPLATE on a given date, derived
    * from the mentor's Availability. A slot comes back one of two ways:
-   *  - status 'available' — free slot, joining it will spawn a brand-new
+   *  - status 'available': free slot, joining it will spawn a brand-new
    *    instance and book this exact range in Availability.
-   *  - status 'joinable'  — an OPEN instance of THIS template already
-   *    exists for that slot (someone else requested it first); joining it
-   *    just adds a pending request to that same instance, no re-booking.
+   *  - status 'joinable': an OPEN instance of THIS template already exists
+   *    for that slot (someone else requested it first); joining it just
+   *    adds a pending request to that same instance, no re-booking.
    * Slots booked by anything else (a 1:1 session, another template, a
    * closed/full instance) or blocked by the mentor are left out entirely.
    */
@@ -1055,7 +1141,7 @@ class GroupService {
       const template = await this.getGroupSessionById(templateId);
 
       if (!template.isTemplate) {
-        throw new BadRequestError('This session is not a template — it has a fixed date/time');
+        throw new BadRequestError('This session is not a template; it has a fixed date/time');
       }
 
       const targetDate = new Date(date);
@@ -1115,7 +1201,7 @@ class GroupService {
           const inst = openInstances.find(
             (i: any) => i.availabilityId === availability.availabilityId && i.sessionId === slot.sessionId
           );
-          if (!inst) continue; // booked by something else — hide it
+          if (!inst) continue; // booked by something else, hide it
 
           const acceptedCount = (inst.participants || []).filter(
             (p: any) => p.requestStatus === 'accepted'
@@ -1179,7 +1265,7 @@ class GroupService {
       const template = await this.getGroupSessionById(templateId, authToken);
 
       if (!template.isTemplate) {
-        throw new BadRequestError('This session is not a template — it has a fixed date/time. Use the regular join endpoint.');
+        throw new BadRequestError('This session is not a template; it has a fixed date/time. Use the regular join endpoint.');
       }
 
       const slotDate = new Date(scheduledAt);
@@ -1190,12 +1276,12 @@ class GroupService {
         throw new BadRequestError('Selected slot must be in the future');
       }
 
-      // ✅ FIX: startTime ko server ke local timezone (Date.getHours()) se
-      // nikalna production me galat tha — server UTC me chalta hai jabki
-      // availability.slots ka startTime mentor ki timezone (IST) ke
-      // wall-clock me stored hota hai. Ye mismatch "This slot is not
-      // available" error deta tha chahe slot actually free ho.
-      // Luxon se hamesha template.timezone ke hisaab se hi HH:mm nikalo.
+      // FIX: deriving startTime from the server's local timezone
+      // (Date.getHours()) was wrong in production. The server runs in UTC
+      // while availability.slots startTime is stored in the mentor's
+      // wall-clock time (IST). That mismatch caused a "This slot is not
+      // available" error even when the slot was actually free. Always
+      // derive HH:mm via Luxon using template.timezone.
       const zone = template.timezone || 'Asia/Kolkata';
       const slotDT = DateTime.fromJSDate(slotDate, { zone });
 
@@ -1256,7 +1342,7 @@ class GroupService {
       let instance: any;
 
       if (slot.isBooked) {
-        // Slot is taken — only proceed if it's an OPEN instance of THIS template
+        // Slot is taken. Only proceed if it's an OPEN instance of THIS template
         instance = await GroupSession.findOne({
           sessionId: slot.sessionId,
           templateId,
@@ -1272,7 +1358,7 @@ class GroupService {
           throw new BadRequestError('This time slot is already full');
         }
       } else {
-        // Free slot — book it in Availability first, then spawn the instance
+        // Free slot: book it in Availability first, then spawn the instance
         const endTime = this.minutesToTime(this.timeToMinutes(startTime) + template.duration);
         const newSessionId = generateSecureId();
 
@@ -1310,7 +1396,12 @@ class GroupService {
           pricing: template.pricing,
           payment: template.payment,
           settings: template.settings,
-          meeting: template.meeting,
+          meeting: {
+            platform: 'google_meet',
+            meetingUrl: template.meeting?.meetingUrl,
+            meetingId: template.meeting?.meetingId,
+            passcode: template.meeting?.passcode,
+          },
           agenda: template.agenda,
           outcomes: template.outcomes,
           chat: { enabled: true, messageCount: 0 },
@@ -1329,6 +1420,120 @@ class GroupService {
       return await this.joinGroupSession(instance.sessionId, menteeId, transactionId, authToken);
     } catch (error: any) {
       logger.error(`Failed to join group session by slot: ${error}`);
+      throw error;
+    }
+  }
+
+  async sanitizeGroupSession(session: any, currentUserId?: string): Promise<any> {
+    if (!session) return session;
+    const doc = session.toObject ? session.toObject({ virtuals: true }) : { ...session };
+
+    const origParticipants = Array.isArray(doc.participants) ? doc.participants : [];
+    const acceptedCount = origParticipants.filter((p: any) => p.requestStatus === 'accepted').length;
+    const maxParticipants = doc.maxParticipants || 0;
+
+    // Keep virtuals (isFull, spotsRemaining) and currentParticipants intact
+    if (doc.isFull === undefined) {
+      doc.isFull = acceptedCount >= maxParticipants;
+    }
+    if (doc.spotsRemaining === undefined) {
+      doc.spotsRemaining = Math.max(0, maxParticipants - acceptedCount);
+    }
+    if (doc.currentParticipants === undefined) {
+      doc.currentParticipants = acceptedCount;
+    }
+
+    let isMentor = false;
+    if (currentUserId) {
+      if (doc.mentorId === currentUserId) {
+        isMentor = true;
+      } else {
+        const mentor = await mentorRepository.findByUserId(currentUserId);
+        if (mentor && mentor.mentorId === doc.mentorId) {
+          isMentor = true;
+        }
+      }
+    }
+
+    const isAcceptedMenteeDuringSession = Boolean(
+      currentUserId &&
+      doc.status === 'in_progress' &&
+      origParticipants.some(
+        (p: any) => (p.menteeId === currentUserId || p.menteeId?.toString() === currentUserId) && p.requestStatus === 'accepted'
+      )
+    );
+
+    const canSeeMeeting = isMentor || isAcceptedMenteeDuringSession;
+
+    if (!canSeeMeeting) {
+      if (doc.meeting) {
+        const { meetingUrl, meetingId, passcode, ...safeMeeting } = doc.meeting;
+        doc.meeting = safeMeeting;
+      }
+      if (doc.meetingUrl) {
+        delete doc.meetingUrl;
+      }
+    }
+
+    // For callers who are not the session's mentor, replace doc.participants with only
+    // the caller's own entry (menteeId === currentUserId); anonymous callers get [].
+    // Strip transactionId from entries returned to non-mentors. Mentor keeps full list.
+    if (!isMentor) {
+      if (currentUserId) {
+        doc.participants = origParticipants
+          .filter(
+            (p: any) =>
+              p.menteeId === currentUserId ||
+              p.menteeId?.toString() === currentUserId
+          )
+          .map((p: any) => {
+            const item = typeof p.toObject === 'function' ? p.toObject() : { ...p };
+            delete item.transactionId;
+            return item;
+          });
+      } else {
+        doc.participants = [];
+      }
+    }
+
+    return doc;
+  }
+
+  async markMenteeAttendance(
+    sessionId: string,
+    menteeId: string,
+    authToken?: string
+  ): Promise<any> {
+    try {
+      const session = await this.getGroupSessionById(sessionId, authToken);
+
+      if (session.status !== 'in_progress') {
+        throw new BadRequestError('Attendance can only be marked while session is in progress');
+      }
+
+      const participant = (session.participants || []).find(
+        (p: any) => p.menteeId === menteeId
+      );
+
+      if (!participant) {
+        throw new NotFoundError('Join request not found for this participant');
+      }
+
+      if (participant.requestStatus !== 'accepted') {
+        throw new ForbiddenError('Only accepted participants can attend');
+      }
+
+      if (participant.attendanceStatus !== 'attended') {
+        participant.attendanceStatus = 'attended';
+        await session.save({ validateModifiedOnly: true });
+      }
+
+      return await this.sanitizeGroupSession(session, menteeId);
+    } catch (error: any) {
+      if (error instanceof BadRequestError || error instanceof ForbiddenError || error instanceof NotFoundError) {
+        throw error;
+      }
+      logger.error(`Failed to mark mentee attendance: ${error}`);
       throw error;
     }
   }

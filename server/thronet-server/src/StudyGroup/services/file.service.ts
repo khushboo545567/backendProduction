@@ -4,37 +4,45 @@
  * ====================================
  */
 
-import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
-import fileRepository from '../repositories/file.repository';
-import groupRepository from '../repositories/group.repository';
-import groupMemberRepository from '../repositories/groupMember.repository';
-import { NotFoundError, BadRequestError, ForbiddenError } from '@/shared/errors/app.error';
-import { getFileType } from '../utils/fileHelper';
-import { GROUP_CONSTANTS } from '../utils/constants';
-import { FileResponse, FileListQuery, CloudinaryUploadResponse } from '../types/file.types';
-import { LoggerUtil } from '@/shared/logger.util';
+import cloudinary from "@/config/images/store/cloudinary/cloudinary.config";
+import fileRepository from "../repositories/file.repository";
+import groupRepository from "../repositories/group.repository";
+import groupMemberRepository from "../repositories/groupMember.repository";
+import {
+  NotFoundError,
+  BadRequestError,
+  ForbiddenError,
+} from "@/shared/errors/app.error";
+import { getFileType } from "../utils/fileHelper";
+import { GROUP_CONSTANTS } from "../utils/constants";
+import {
+  FileResponse,
+  FileListQuery,
+  CloudinaryUploadResponse,
+} from "../types/file.types";
+import { LoggerUtil } from "@/shared/logger.util";
 
 /**
  * Upload file to Cloudinary
  */
 export const uploadToCloudinary = async (
   file: Express.Multer.File,
-  folder: string = 'study-group-uploads'
+  folder: string = "study-group-uploads",
 ): Promise<CloudinaryUploadResponse> => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder,
-        resource_type: 'auto',
+        resource_type: "auto",
       },
       (error, result) => {
         if (error) {
-          LoggerUtil.error('❌ Cloudinary upload error:', error);
+          LoggerUtil.error("❌ Cloudinary upload error:", error);
           reject(error);
         } else {
           resolve(result as CloudinaryUploadResponse);
         }
-      }
+      },
     );
 
     uploadStream.end(file.buffer);
@@ -47,18 +55,18 @@ export const uploadToCloudinary = async (
 export const uploadFile = async (
   groupId: string,
   userId: string,
-  file: Express.Multer.File
+  file: Express.Multer.File,
 ): Promise<FileResponse> => {
   // Verify group exists
   const group = await groupRepository.findByGroupId(groupId);
   if (!group) {
-    throw new NotFoundError('Group not found');
+    throw new NotFoundError("Group not found");
   }
 
   // Verify user is a member
   const membership = await groupMemberRepository.findActiveOne(groupId, userId);
   if (!membership) {
-    throw new ForbiddenError('You are not a member of this group');
+    throw new ForbiddenError("You are not a member of this group");
   }
 
   // Upload to Cloudinary
@@ -80,19 +88,56 @@ export const uploadFile = async (
     cloudinaryPublicId: uploadResult.public_id,
   });
 
-  // Populate uploader details
-  const populated = await fileRepository.findByFileId(fileRecord.fileId);
+  // // Populate uploader details
+  // const populated = await fileRepository.findByFileId(fileRecord.fileId);
 
-  LoggerUtil.info(`✅ File uploaded: ${fileRecord._id} by user ${userId}`);
+  // LoggerUtil.info(`✅ File uploaded: ${fileRecord._id} by user ${userId}`);
+
+  // return {
+  //   _id: fileRecord._id.toString(),
+  //   groupId: fileRecord.groupId.toString(),
+  //   uploadedBy: {
+  //     _id: (fileRecord.uploadedBy as any)._id.toString(),
+  //     name: (fileRecord.uploadedBy as any).name,
+  //     avatar: (fileRecord.uploadedBy as any).avatar,
+  //   },
+  //   fileName: fileRecord.fileName,
+  //   originalName: fileRecord.originalName,
+  //   fileType: fileRecord.fileType,
+  //   mimeType: fileRecord.mimeType,
+  //   fileSize: fileRecord.fileSize,
+  //   fileUrl: fileRecord.fileUrl,
+  //   isPinned: fileRecord.isPinned,
+  //   downloadCount: fileRecord.downloadCount,
+  //   createdAt: fileRecord.createdAt,
+  //   updatedAt: fileRecord.updatedAt,
+  // };
+
+  // Uploader details (best effort: never fail the upload because of this)
+  let uploader: any = null;
+  try {
+    const populated: any = await fileRepository.findByFileId(fileRecord.fileId);
+    uploader = populated?.uploadedBy;
+  } catch {
+    uploader = null;
+  }
+
+  const uploadedBy =
+    uploader && typeof uploader === "object"
+      ? {
+          userId: String(uploader.userId ?? uploader._id ?? userId),
+          name: uploader.name ?? uploader.username ?? "Unknown",
+          avatar: uploader.avatar ?? null,
+        }
+      : { userId: String(userId), name: "You", avatar: null };
+
+  LoggerUtil.info(`✅ File uploaded: ${fileRecord.fileId} by user ${userId}`);
 
   return {
     _id: fileRecord._id.toString(),
-    groupId: fileRecord.groupId.toString(),
-    uploadedBy: {
-      _id: (fileRecord.uploadedBy as any)._id.toString(),
-      name: (fileRecord.uploadedBy as any).name,
-      avatar: (fileRecord.uploadedBy as any).avatar,
-    },
+    fileId: fileRecord.fileId,
+    groupId: String(fileRecord.groupId),
+    uploadedBy,
     fileName: fileRecord.fileName,
     originalName: fileRecord.originalName,
     fileType: fileRecord.fileType,
@@ -103,7 +148,7 @@ export const uploadFile = async (
     downloadCount: fileRecord.downloadCount,
     createdAt: fileRecord.createdAt,
     updatedAt: fileRecord.updatedAt,
-  };
+  } as any;
 };
 
 /**
@@ -111,7 +156,7 @@ export const uploadFile = async (
  */
 export const getGroupFiles = async (
   groupId: string,
-  query: FileListQuery
+  query: FileListQuery,
 ): Promise<{
   files: FileResponse[];
   total: number;
@@ -123,8 +168,8 @@ export const getGroupFiles = async (
     limit = 10,
     fileType,
     search,
-    sortBy = 'createdAt',
-    sortOrder = 'desc',
+    sortBy = "createdAt",
+    sortOrder = "desc",
     pinnedOnly = false,
   } = query;
 
@@ -159,13 +204,14 @@ export const getGroupFiles = async (
 
   const repoFilter: any = {};
   if (fileType) repoFilter.fileType = fileType;
-  if (search) repoFilter.$or = [
-    { fileName: { $regex: search, $options: 'i' } },
-    { originalName: { $regex: search, $options: 'i' } },
-  ];
+  if (search)
+    repoFilter.$or = [
+      { fileName: { $regex: search, $options: "i" } },
+      { originalName: { $regex: search, $options: "i" } },
+    ];
   if (pinnedOnly) repoFilter.isPinned = true;
 
-  const sort: any = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+  const sort: any = { [sortBy]: sortOrder === "asc" ? 1 : -1 };
 
   const [files, total] = await Promise.all([
     fileRepository.findByGroup(groupId, repoFilter, sort, skip, limit),
@@ -204,8 +250,8 @@ export const getGroupFiles = async (
  * Get file by ID
  */
 export const getFileById = async (fileId: string): Promise<FileResponse> => {
-  const file = await fileRepository.findByFileId(fileId);  // already filters isDeleted: false
-  if (!file) throw new NotFoundError('File not found');
+  const file = await fileRepository.findByFileId(fileId); // already filters isDeleted: false
+  if (!file) throw new NotFoundError("File not found");
 
   return {
     _id: file._id.toString(),
@@ -233,29 +279,33 @@ export const getFileById = async (fileId: string): Promise<FileResponse> => {
  */
 export const deleteFile = async (
   fileId: string,
-  userId: string
+  userId: string,
 ): Promise<void> => {
   const file = await fileRepository.findByFileId(fileId);
 
   if (!file || file.isDeleted) {
-    throw new NotFoundError('File not found');
+    throw new NotFoundError("File not found");
   }
 
   // Check if user is uploader or group leader
   const isUploader = file.uploadedBy === userId;
   const membership = await groupMemberRepository.findOne(file.groupId, userId);
-  const isLeader = membership?.role === 'leader';
+  const isLeader = membership?.role === "leader";
 
   if (!isUploader && !isLeader) {
-    throw new ForbiddenError('You can only delete your own files or you must be group leader');
+    throw new ForbiddenError(
+      "You can only delete your own files or you must be group leader",
+    );
   }
 
   // Delete from Cloudinary
   try {
     await cloudinary.uploader.destroy(file.cloudinaryPublicId);
-    LoggerUtil.info(`✅ File deleted from Cloudinary: ${file.cloudinaryPublicId}`);
+    LoggerUtil.info(
+      `✅ File deleted from Cloudinary: ${file.cloudinaryPublicId}`,
+    );
   } catch (error: any) {
-    LoggerUtil.error('❌ Error deleting from Cloudinary:', error);
+    LoggerUtil.error("❌ Error deleting from Cloudinary:", error);
   }
 
   // Soft delete
@@ -269,26 +319,27 @@ export const deleteFile = async (
  */
 export const togglePinFile = async (
   fileId: string,
-  userId: string
+  userId: string,
 ): Promise<{ isPinned: boolean }> => {
   const file = await fileRepository.findByFileId(fileId);
 
   if (!file || file.isDeleted) {
-    throw new NotFoundError('File not found');
+    throw new NotFoundError("File not found");
   }
 
   // Check if user is group leader or moderator
   const membership = await groupMemberRepository.findOne(file.groupId, userId);
-  if (!membership || !['leader', 'admin'].includes(membership.role)) {
-    throw new ForbiddenError('Only leaders and admins can pin files');
+  if (!membership || !["leader", "admin"].includes(membership.role)) {
+    throw new ForbiddenError("Only leaders and admins can pin files");
   }
-
 
   // Check pinned files limit
   if (!file.isPinned) {
     const pinnedCount = await fileRepository.countPinnedFiles(file.groupId);
     if (pinnedCount >= GROUP_CONSTANTS.MAX_PINNED_FILES) {
-      throw new BadRequestError(`Maximum ${GROUP_CONSTANTS.MAX_PINNED_FILES} files can be pinned`);
+      throw new BadRequestError(
+        `Maximum ${GROUP_CONSTANTS.MAX_PINNED_FILES} files can be pinned`,
+      );
     }
   }
 

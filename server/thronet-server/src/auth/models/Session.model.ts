@@ -5,6 +5,12 @@ import UserEmitter from '@/shared/events/emitters/user.emitter';
 
 const logger = LoggerUtil;
 
+// Refresh JWT ki expiry (30d) se match hona chahiye
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+const hashToken = (token: string): string =>
+    crypto.createHash('sha256').update(token).digest('hex');
+
 export interface IDeviceInfo {
     userAgent?: string;
     platform?: string;
@@ -41,9 +47,17 @@ export interface ISession extends Document<string> {
     ipAddress: string;
     refreshToken: string;
     accessToken?: string;
+    refreshTokenHash?: string;
+    previousRefreshTokenHash?: string;
+    rotatedAt?: Date;
     isActive: boolean;
     lastActivity: Date;
     expiresAt: Date;
+    terminatedAt?: Date;
+    terminationReason?: string;
+    revokedAt?: Date;
+    revokedReason?: string;
+    status: 'active' | 'terminated';
     sessionType: 'web' | 'mobile' | 'api' | 'oauth';
     metadata: IMetadata;
     isUnusualActivity: boolean;
@@ -55,6 +69,20 @@ export interface ISession extends Document<string> {
     refreshTokens(): Promise<{ accessToken: string; refreshToken: string }>;
 }
 
+export type RotationFailureReason = 'not_found' | 'inactive' | 'reuse' | 'conflict';
+
+export type RotationResult =
+    | { ok: true; graceUsed: boolean }
+    | { ok: false; reason: RotationFailureReason };
+
+export interface RotateRefreshTokenParams {
+    sessionId: string;
+    userId: string;
+    presentedToken: string;
+    newToken: string;
+    graceMs?: number;
+}
+
 export interface ISessionModel extends Model<ISession> {
     createSession(data: Partial<ISession>): Promise<ISession>;
     findUserSessions(userId: string, options?: { active?: boolean; limit?: number; skip?: number }): Promise<ISession[]>;
@@ -64,6 +92,8 @@ export interface ISessionModel extends Model<ISession> {
     invalidateUserSessions(userId: string): Promise<{ invalidatedCount: number }>;
     detectAnomalies(userId: string): Promise<any[]>;
     revokeAllUserSessions(userId: string, reason: string): Promise<any>;
+    setRefreshToken(sessionId: string, refreshToken: string): Promise<void>;
+    rotateRefreshToken(params: RotateRefreshTokenParams): Promise<RotationResult>;
 }
 
 const sessionSchema = new Schema<ISession, ISessionModel>(
@@ -86,8 +116,12 @@ const sessionSchema = new Schema<ISession, ISessionModel>(
             },
         },
         ipAddress: { type: String, required: true },
+        // Creation par random value (unique index ke liye). Asli JWT ka hash refreshTokenHash mein hai.
         refreshToken: { type: String, required: true, unique: true },
         accessToken: { type: String, sparse: true },
+        refreshTokenHash: { type: String, select: false },
+        previousRefreshTokenHash: { type: String, select: false },
+        rotatedAt: { type: Date },
         isActive: { type: Boolean, default: true },
         lastActivity: { type: Date, default: Date.now },
         expiresAt: {
@@ -95,6 +129,10 @@ const sessionSchema = new Schema<ISession, ISessionModel>(
             required: true,
             index: { expireAfterSeconds: 0 },
         },
+        terminatedAt: { type: Date },
+        terminationReason: { type: String },
+        revokedAt: { type: Date },
+        revokedReason: { type: String },
         sessionType: {
             type: String,
             enum: ['web', 'mobile', 'api', 'oauth'],
@@ -133,12 +171,23 @@ const sessionSchema = new Schema<ISession, ISessionModel>(
     }
 );
 
+// ==================== VIRTUALS ====================
+// Purana code session.status = 'terminated' likhta hai. Ye virtual use isActive se map karta hai.
+sessionSchema.virtual('status')
+    .get(function (this: ISession) {
+        return this.isActive ? 'active' : 'terminated';
+    })
+    .set(function (this: ISession, value: string) {
+        this.isActive = value === 'active';
+    });
+
 // ==================== INDEXES ====================
-// ✅ Sirf compound indexes yahan - single field indexes upar defined hain
+// expiresAt ka TTL index field definition mein hai
 sessionSchema.index({ userId: 1, isActive: 1, lastActivity: -1 });
 sessionSchema.index({ deviceId: 1, userId: 1 });
-// ✅ FIX: sessionSchema.index({ expiresAt: 1 }) NAHI hai yahan
-// expiresAt ka TTL index field definition mein index:{ expireAfterSeconds: 0 } se handle ho raha hai
+sessionSchema.index({ userId: 1, deviceId: 1, isActive: 1 });
+
+// ==================== STATICS ====================
 
 sessionSchema.statics.createSession = async function (data: Partial<ISession>): Promise<ISession> {
     try {
@@ -169,10 +218,134 @@ sessionSchema.statics.createSession = async function (data: Partial<ISession>): 
     }
 };
 
+/**
+ * Login/register/OAuth ke baad JWT refresh token ka hash session mein save karta hai.
+ */
+sessionSchema.statics.setRefreshToken = async function (
+    sessionId: string,
+    refreshToken: string
+): Promise<void> {
+    await this.updateOne(
+        { _id: sessionId },
+        {
+            $set: { refreshTokenHash: hashToken(refreshToken) },
+            $unset: { previousRefreshTokenHash: 1, rotatedAt: 1 },
+        }
+    );
+};
+
+/**
+ * Refresh token rotation (DB-based, atomic).
+ * - Normal: presented token current hash se match karta hai -> rotate.
+ * - Bootstrap: session mein hash nahi hai (purani session) -> pehli baar accept karke set.
+ * - Grace: token abhi hi rotate hua tha (graceMs ke andar) -> naya pair issue.
+ * - Reuse: grace ke baad purana token -> sirf yahi session revoke.
+ */
+sessionSchema.statics.rotateRefreshToken = async function (
+    params: RotateRefreshTokenParams
+): Promise<RotationResult> {
+    const { sessionId, userId, presentedToken, newToken, graceMs = 60 * 1000 } = params;
+
+    const presentedHash = hashToken(presentedToken);
+    const newHash = hashToken(newToken);
+    const now = new Date();
+    const nextExpiry = new Date(now.getTime() + REFRESH_TTL_MS);
+
+    // 1. Normal rotation (ya bootstrap: refreshTokenHash null/missing)
+    const rotated = await this.findOneAndUpdate(
+        {
+            _id: sessionId,
+            userId,
+            isActive: true,
+            expiresAt: { $gt: now },
+            $or: [{ refreshTokenHash: presentedHash }, { refreshTokenHash: null }],
+        },
+        {
+            $set: {
+                previousRefreshTokenHash: presentedHash,
+                refreshTokenHash: newHash,
+                rotatedAt: now,
+                lastActivity: now,
+                expiresAt: nextExpiry,
+            },
+        },
+        { projection: { _id: 1 } }
+    );
+
+    if (rotated) return { ok: true, graceUsed: false };
+
+    // 2. Fail kyun hua?
+    const session: any = await this.findOne({ _id: sessionId, userId })
+        .select('+refreshTokenHash +previousRefreshTokenHash')
+        .lean();
+
+    if (!session) return { ok: false, reason: 'not_found' };
+
+    if (!session.isActive || new Date(session.expiresAt) <= now) {
+        return { ok: false, reason: 'inactive' };
+    }
+
+    // 3. Grace window (do tabs ek saath, ya response kho gaya aur client ne retry kiya)
+    const withinGrace =
+        session.previousRefreshTokenHash === presentedHash &&
+        session.rotatedAt &&
+        now.getTime() - new Date(session.rotatedAt).getTime() <= graceMs;
+
+    if (withinGrace) {
+        const graceRotated = await this.findOneAndUpdate(
+            {
+                _id: sessionId,
+                userId,
+                isActive: true,
+                previousRefreshTokenHash: presentedHash,
+                refreshTokenHash: session.refreshTokenHash,
+            },
+            {
+                $set: {
+                    previousRefreshTokenHash: session.refreshTokenHash,
+                    refreshTokenHash: newHash,
+                    rotatedAt: now,
+                    lastActivity: now,
+                    expiresAt: nextExpiry,
+                },
+            },
+            { projection: { _id: 1 } }
+        );
+
+        if (graceRotated) return { ok: true, graceUsed: true };
+        return { ok: false, reason: 'conflict' };
+    }
+
+    // 4. Reuse: sirf ye session revoke karo
+    await this.updateOne(
+        { _id: sessionId, userId },
+        {
+            $set: {
+                isActive: false,
+                terminatedAt: now,
+                terminationReason: 'refresh_token_reuse',
+                revokedAt: now,
+                revokedReason: 'refresh_token_reuse',
+            },
+        }
+    );
+
+    return { ok: false, reason: 'reuse' };
+};
+
 sessionSchema.statics.revokeAllUserSessions = async function (userId: string, reason: string): Promise<any> {
+    const now = new Date();
     return this.updateMany(
         { userId, isActive: true },
-        { $set: { isActive: false, revokedAt: new Date(), revokedReason: reason } }
+        {
+            $set: {
+                isActive: false,
+                terminatedAt: now,
+                terminationReason: reason,
+                revokedAt: now,
+                revokedReason: reason,
+            },
+        }
     );
 };
 
@@ -220,6 +393,7 @@ sessionSchema.statics.invalidateSession = async function (sessionId: string): Pr
         const session = await this.findById(sessionId);
         if (!session) return;
         session.isActive = false;
+        session.terminatedAt = new Date();
         await session.save();
         UserEmitter.emit('session:invalidated', { sessionId, userId: session.userId, timestamp: new Date() });
     } catch (error: any) {
@@ -231,7 +405,10 @@ sessionSchema.statics.invalidateSession = async function (sessionId: string): Pr
 sessionSchema.statics.invalidateUserSessions = async function (userId: string): Promise<{ invalidatedCount: number }> {
     try {
         const sessions = await this.find({ userId, isActive: true });
-        await this.updateMany({ userId, isActive: true }, { $set: { isActive: false } });
+        await this.updateMany(
+            { userId, isActive: true },
+            { $set: { isActive: false, terminatedAt: new Date() } }
+        );
         UserEmitter.emit('user:all_sessions_invalidated', {
             userId,
             sessionCount: sessions.length,
@@ -252,7 +429,7 @@ sessionSchema.statics.detectAnomalies = async function (userId: string): Promise
         }).lean();
 
         const anomalies: any[] = [];
-        const ipAddresses = [...new Set(recentSessions.map((s) => s.ipAddress))];
+        const ipAddresses = [...new Set(recentSessions.map((s: any) => s.ipAddress))];
         if (ipAddresses.length > 3) {
             anomalies.push({
                 type: 'multiple_locations',
@@ -271,6 +448,8 @@ sessionSchema.statics.detectAnomalies = async function (userId: string): Promise
         throw error;
     }
 };
+
+// ==================== METHODS ====================
 
 sessionSchema.methods.extend = async function (this: ISession, additionalTime: number = 3600): Promise<ISession> {
     this.expiresAt = new Date(this.expiresAt.getTime() + additionalTime * 1000);

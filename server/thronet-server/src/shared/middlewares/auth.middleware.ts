@@ -1,22 +1,25 @@
 // src/shared/middlewares/auth.middleware.ts
 /**
- * JWT Auth Middleware - Production-Ready for 1M+ Users
- * Verifies access token, checks blacklist, attaches user to req.user
- * Integrates device/session limits (2 active devices max)
- * 
+ * JWT Auth Middleware
+ * Access token verify karta hai, blacklist check karta hai, session ka active hona
+ * check karta hai (ek hi updateOne mein activity bhi update), aur req.user attach karta hai.
+ * Device limit login ke time enforce hoti hai (DeviceRepository.enforceLimit).
+ *
  * @module middleware/auth.middleware
- * @version 2.0.0
+ * @version 4.0.0
  */
 
 import { Request, Response, NextFunction } from 'express';
 import CacheUtil from '@/shared/cache.util';
-import { User, Device, Session } from '@/shared/models/index.models';
+import { User, Session } from '@/shared/models/index.models';
 import logger from '@/shared/logger.util';
 import ResponseUtil from '@/shared/response.util';
 
-console.log('🔍 LOADING: shared/middlewares/auth.middleware.ts');
-
 const BLACKLIST_PREFIX = 'blacklist:access:';
+
+// Ye lock reasons existing sessions ko bhi block karte hain.
+// "too_many_attempts" sirf naye login rokta hai (attacker ke lock se legit user logout na ho).
+const HARD_LOCK_REASONS = ['admin_action', 'security_breach', 'suspicious_activity'];
 
 interface DecodedToken {
     userId: string;
@@ -25,9 +28,6 @@ interface DecodedToken {
     deviceId?: string;
 }
 
-// ✅ ReqUser rakha hai kyunki kuch jagah reference ho sakta hai,
-// lekin ab AuthRequest ismein use nahi karta — global Express.User
-// (shared/types/express/index.d.ts) hi source of truth hai.
 export interface ReqUser {
     id: string;
     userId: string;
@@ -40,344 +40,209 @@ export interface ReqUser {
     sessionId: string | null;
 }
 
-// ✅ SINGLE declaration — duplicate wali dusri jagah hata di gayi hai.
-// user field yahan NAHI hai — global Express.Request.user
-// (shared/types/express/index.d.ts se) automatically milta hai.
+// user field global Express.Request.user (shared/types/express/index.d.ts) se aata hai.
 export interface AuthRequest extends Request {
     correlationId?: string;
 }
 
-/**
- * ✅ Enforce 2-device limit
- */
-const enforceDeviceLimit = async (userId: string, deviceId: string) => {
-    try {
-        const activeDevices = await Device.find({ userId, isActive: true })
-            .sort({ lastSeenAt: 1 })
-            .limit(3);
+interface AuthFailure {
+    ok: false;
+    status: 401 | 403 | 500;
+    message: string;
+}
 
-        if (activeDevices.length > 2) {
-            const oldest = activeDevices[0];
-            await oldest.revoke('device_limit_exceeded');
-            logger.info('Oldest device revoked', {
-                userId,
-                revokedDeviceId: oldest.deviceId,
-                currentDeviceId: deviceId
-            });
-        }
-    } catch (error: any) {
-        logger.error('Device limit check failed (non-critical)', {
-            error: error.message,
-            userId
-        });
-    }
+interface AuthSuccess {
+    ok: true;
+    user: ReqUser;
+}
+
+const fail = (status: 401 | 403 | 500, message: string): AuthFailure => ({
+    ok: false,
+    status,
+    message,
+});
+
+const sendFailure = (res: Response, failure: AuthFailure) => {
+    if (failure.status === 401) return ResponseUtil.unauthorized(res, failure.message);
+    if (failure.status === 403) return ResponseUtil.forbidden(res, failure.message);
+    return ResponseUtil.error(res, failure.message, 500);
 };
 
-/**
- * AuthMiddleware Class
- */
 class AuthMiddleware {
 
     /**
-     * Optional authentication — token hai to decode karo, nahi hai to skip karo
-     * Public leaderboards ke liye — logged in users ko currentUser entry milti hai
+     * Token verify karke user resolve karta hai. Response nahi bhejta;
+     * caller (strict ya optional) decide karta hai.
      */
-    static async authenticateOptional(req: Request, res: Response, next: NextFunction) {
-        try {
-            const authHeader = req.headers.authorization;
-            if (!authHeader || !authHeader.startsWith('Bearer ')) {
-                return next(); // no token — continue without user
-            }
-            // reuse your existing authenticate logic
-            await AuthMiddleware.authenticate(req as any, res, next);
-        } catch {
-            next(); // token invalid — continue without user
+    private static async resolveUser(
+        req: AuthRequest
+    ): Promise<AuthSuccess | AuthFailure> {
+        // Step 1: Authorization header
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader) {
+            return fail(401, 'Authorization header required');
         }
-    };
 
-    /**
-     * ✅ FIXED: JWT Authentication with complete error handling
-     */
-    static async authenticate(req: AuthRequest, res: Response, next: NextFunction) {
-        const correlationId = req.correlationId || 'unknown';
+        if (!authHeader.startsWith('Bearer ')) {
+            return fail(401, 'Invalid Authorization format. Use: Bearer <token>');
+        }
 
+        const token = authHeader.split(' ')[1];
+
+        if (!token || token === 'null' || token === 'undefined') {
+            return fail(401, 'Access token is required');
+        }
+
+        // Step 2: Blacklist (logout ke baad turant)
+        const isBlacklisted = await CacheUtil.exists(`${BLACKLIST_PREFIX}${token}`);
+        if (isBlacklisted) {
+            return fail(401, 'Token has been invalidated. Please login again.');
+        }
+
+        // Step 3: JWT verify
+        let decoded: DecodedToken;
         try {
-            // ========== STEP 1: Extract Authorization Header ==========
-            const authHeader = req.headers.authorization;
-
-            if (!authHeader) {
-                logger.warn('Missing Authorization header', {
-                    path: req.path,
-                    correlationId
-                });
-                return ResponseUtil.unauthorized(res, 'Authorization header required');
-            }
-
-            if (!authHeader.startsWith('Bearer ')) {
-                logger.warn('Invalid Authorization format', {
-                    path: req.path,
-                    authHeader: authHeader.substring(0, 20),
-                    correlationId
-                });
-                return ResponseUtil.unauthorized(res, 'Invalid Authorization format. Use: Bearer <token>');
-            }
-
-            // ========== STEP 2: Extract Token ==========
-            const token = authHeader.split(' ')[1];
-
-            if (!token || token === 'null' || token === 'undefined') {
-                logger.warn('Empty or invalid token', {
-                    path: req.path,
-                    correlationId
-                });
-                return ResponseUtil.unauthorized(res, 'Access token is required');
-            }
-
-            logger.debug('Token extracted', {
-                tokenPrefix: token.substring(0, 20),
+            decoded = User.verifyToken(token, 'access') as DecodedToken;
+        } catch (verifyError: any) {
+            logger.warn('Token verification failed', {
+                error: verifyError.message,
                 path: req.path,
-                correlationId
+                correlationId: req.correlationId,
             });
+            return fail(401, 'Invalid or expired access token');
+        }
 
-            // ========== STEP 3: Check Blacklist ==========
-            const blacklistKey = `${BLACKLIST_PREFIX}${token}`;
-            const isBlacklisted = await CacheUtil.exists(blacklistKey);
+        if (!decoded || !decoded.userId) {
+            return fail(401, 'Invalid token payload');
+        }
 
-            if (isBlacklisted) {
-                logger.warn('Token blacklisted', {
-                    tokenPrefix: token.substring(0, 20),
-                    path: req.path,
-                    correlationId
-                });
-                return ResponseUtil.unauthorized(res, 'Token has been invalidated. Please login again.');
-            }
+        const sessionId = decoded.sessionId || (req.headers['x-session-id'] as string | undefined);
+        const now = new Date();
 
-            logger.debug('Token not blacklisted', { correlationId });
-
-            // ========== STEP 4: Verify JWT Token ==========
-            let decoded: DecodedToken;
-            try {
-                decoded = User.verifyToken(token, 'access') as DecodedToken;
-
-                if (!decoded) {
-                    logger.warn('Token verification returned null', {
-                        tokenPrefix: token.substring(0, 20),
-                        correlationId
-                    });
-                    return ResponseUtil.unauthorized(res, 'Invalid access token');
-                }
-
-                logger.debug('Token verified successfully', {
-                    userId: decoded.userId,
-                    role: decoded.role,
-                    correlationId
-                });
-
-            } catch (verifyError: any) {
-                logger.warn('Token verification failed', {
-                    error: verifyError.message,
-                    name: verifyError.name,
-                    tokenPrefix: token.substring(0, 20),
-                    correlationId
-                });
-
-                // Specific JWT error messages
-                if (verifyError.name === 'TokenExpiredError') {
-                    return ResponseUtil.unauthorized(res, 'Access token has expired. Please refresh your token.');
-                }
-
-                if (verifyError.name === 'JsonWebTokenError') {
-                    return ResponseUtil.unauthorized(res, 'Invalid access token format');
-                }
-
-                if (verifyError.name === 'NotBeforeError') {
-                    return ResponseUtil.unauthorized(res, 'Token not yet valid');
-                }
-
-                return ResponseUtil.unauthorized(res, 'Token verification failed');
-            }
-
-            // ========== STEP 5: Validate Token Payload ==========
-            if (!decoded.userId) {
-                logger.error('Token missing userId', {
-                    decoded: JSON.stringify(decoded),
-                    correlationId
-                });
-                return ResponseUtil.unauthorized(res, 'Invalid token payload');
-            }
-
-            // ========== STEP 6: Fetch User from Database ==========
-            let user: any;
-            try {
-                logger.debug('Fetching user from database', {
-                    userId: decoded.userId,
-                    correlationId
-                });
-
-                user = await User.findOne({ userId: decoded.userId })
-                    .select('userId email role status accountStatus')
-                    .lean()
-                    .exec();
-
-                if (!user) {
-                    logger.warn('User not found in database', {
+        // Step 4: User fetch + session check (parallel)
+        const [user, sessionResult]: [any, any] = await Promise.all([
+            User.findOne({ userId: decoded.userId })
+                .select('userId email role status accountStatus lockUntil accountLockedReason flags region')
+                .lean()
+                .exec(),
+            sessionId
+                ? Session.updateOne(
+                    {
+                        _id: sessionId,
                         userId: decoded.userId,
-                        correlationId
-                    });
-                    return ResponseUtil.unauthorized(res, 'User not found. Please login again.');
-                }
+                        isActive: true,
+                        expiresAt: { $gt: now },
+                    },
+                    { $set: { lastActivity: now } }
+                )
+                : Promise.resolve(null),
+        ]);
 
-                logger.debug('User fetched from database', {
-                    userId: user.userId,
-                    email: user.email,
-                    status: user.status,
-                    correlationId
-                });
+        if (!user) {
+            return fail(401, 'User not found. Please login again.');
+        }
 
-            } catch (dbError: any) {
-                logger.error('Database query failed in auth middleware', {
-                    error: dbError.message,
-                    stack: dbError.stack,
-                    userId: decoded.userId,
-                    correlationId
-                });
-                return ResponseUtil.error(res, 'Authentication failed. Please try again.', 500);
-            }
+        // Session ya to revoke ho chuki hai (logout, logout-all, device limit) ya expire
+        if (sessionId && sessionResult && sessionResult.matchedCount === 0) {
+            return fail(401, 'Session has ended. Please login again.');
+        }
 
-            // ========== STEP 7: Validate User Status ==========
-            if (user.status !== 'active') {
-                logger.warn('User status not active', {
-                    userId: user.userId,
-                    status: user.status,
-                    correlationId
-                });
-                return ResponseUtil.forbidden(res, 'Account is not active. Please contact support.');
-            }
+        // Step 5: Account state
+        if (user.flags?.isDeleted || user.status !== 'active') {
+            return fail(403, 'Account is not active. Please contact support.');
+        }
 
-            if (user.accountStatus === 'locked') {
-                logger.warn('User account locked', {
-                    userId: user.userId,
-                    correlationId
-                });
-                return ResponseUtil.forbidden(res, 'Account is locked. Please contact support.');
-            }
+        if (user.accountStatus && user.accountStatus !== 'active') {
+            return fail(403, 'Account is not active. Please contact support.');
+        }
 
-            if (user.accountStatus === 'suspended') {
-                logger.warn('User account suspended', {
-                    userId: user.userId,
-                    correlationId
-                });
-                return ResponseUtil.forbidden(res, 'Account is suspended. Please contact support.');
-            }
+        if (
+            user.lockUntil &&
+            new Date(user.lockUntil) > now &&
+            HARD_LOCK_REASONS.includes(user.accountLockedReason)
+        ) {
+            return fail(403, 'Account is locked. Please contact support.');
+        }
 
-            // ========== STEP 8: Enforce Device Limit (Optional) ==========
-            const deviceId = req.headers['x-device-id'] as string || decoded.deviceId;
+        // Step 6: Result
+        const userRole = (user.role as 'user' | 'admin') || 'user';
 
-            if (deviceId) {
-                try {
-                    await enforceDeviceLimit(decoded.userId, deviceId);
-
-                    const device = await Device.validateDevice(deviceId);
-                    if (!device) {
-                        logger.warn('Device not found', {
-                            deviceId,
-                            userId: decoded.userId,
-                            correlationId
-                        });
-                        return ResponseUtil.unauthorized(res, 'Device not recognized. Please login again.');
-                    }
-
-                    if (device.userId !== decoded.userId) {
-                        logger.warn('Device userId mismatch', {
-                            deviceId,
-                            deviceUserId: device.userId,
-                            tokenUserId: decoded.userId,
-                            correlationId
-                        });
-                        return ResponseUtil.unauthorized(res, 'Device verification failed');
-                    }
-
-                    logger.debug('Device validated', {
-                        deviceId,
-                        userId: decoded.userId,
-                        correlationId
-                    });
-
-                } catch (deviceError: any) {
-                    logger.warn('Device validation failed (non-critical)', {
-                        error: deviceError.message,
-                        deviceId,
-                        correlationId
-                    });
-                    // Don't block - continue without device check
-                }
-            }
-
-            // ========== STEP 9: Update Session Activity (Optional) ==========
-            const sessionId = req.headers['x-session-id'] as string || decoded.sessionId;
-
-            if (sessionId) {
-                try {
-                    await Session.updateActivity(sessionId);
-                    logger.debug('Session activity updated', {
-                        sessionId,
-                        correlationId
-                    });
-                } catch (sessionError: any) {
-                    logger.error('Session update failed (non-critical)', {
-                        error: sessionError.message,
-                        sessionId,
-                        correlationId
-                    });
-                    // Don't block - continue
-                }
-            }
-
-            // ========== STEP 10: Attach User to Request ==========
-            const userRole = (user.role as 'user' | 'admin') || 'user';
-
-            req.user = {
-                id: decoded.userId,          // ✅ Matches global type
+        return {
+            ok: true,
+            user: {
+                id: decoded.userId,
                 _id: user._id.toString(),
-                userId: decoded.userId,      // ✅ Backward compatibility
-                region: user.region || 'global', // ✅ Default region
-                isAdmin: userRole === 'admin', // ✅ Boolean flag
-                role: userRole,              // ✅ Typed role
-                email: user.email,
-                deviceId: deviceId || null,
-                sessionId: sessionId || null,
-            };
-
-            logger.debug('Auth middleware passed', {
                 userId: decoded.userId,
-                id: req.user.userId || decoded.userId,
-                email: req.user.email,
-                role: req.user.role,
-                path: req.path,
-                correlationId
-            });
+                region: user.region || 'global',
+                isAdmin: userRole === 'admin',
+                role: userRole,
+                email: user.email,
+                deviceId: decoded.deviceId || (req.headers['x-device-id'] as string | undefined) || null,
+                sessionId: sessionId || null,
+            },
+        };
+    }
 
-            // Continue to next middleware
-            next();
-
+    private static async safeResolve(
+        req: AuthRequest
+    ): Promise<AuthSuccess | AuthFailure> {
+        try {
+            return await AuthMiddleware.resolveUser(req);
         } catch (error: any) {
             logger.error('Auth middleware unexpected error', {
                 error: error.message,
                 stack: error.stack,
                 path: req.path,
-                correlationId
+                correlationId: req.correlationId,
             });
-
-            return ResponseUtil.error(
-                res,
-                'Authentication error. Please try again.',
-                500
-            );
+            return fail(500, 'Authentication error. Please try again.');
         }
     }
 
     /**
-     * ✅ Optional: Role-based authorization
+     * Strict authentication: fail hone par 401/403/500 response.
+     */
+    static async authenticate(req: AuthRequest, res: Response, next: NextFunction) {
+        const result = await AuthMiddleware.safeResolve(req);
+
+        if (!result.ok) {
+            logger.warn('Authentication rejected', {
+                path: req.path,
+                status: result.status,
+                reason: result.message,
+                correlationId: req.correlationId,
+            });
+            return sendFailure(res, result);
+        }
+
+        req.user = result.user as Express.User;
+        return next();
+    }
+
+    /**
+     * Optional authentication: token valid ho to req.user set hota hai,
+     * warna (missing, expired, invalid) bina user ke aage badhta hai.
+     */
+    static async authenticateOptional(
+        req: Request,
+        _res: Response,
+        next: NextFunction
+    ) {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return next();
+        }
+
+        const result = await AuthMiddleware.safeResolve(req as AuthRequest);
+        if (result.ok) {
+            (req as AuthRequest).user = result.user as Express.User;
+        }
+        return next();
+    }
+
+    /**
+     * Role-based authorization
      */
     static authorize(...allowedRoles: string[]) {
         return (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -389,7 +254,7 @@ class AuthMiddleware {
                 logger.warn('Authorization failed - insufficient permissions', {
                     userId: req.user.userId,
                     userRole: req.user.role,
-                    requiredRoles: allowedRoles
+                    requiredRoles: allowedRoles,
                 });
 
                 return ResponseUtil.forbidden(
@@ -404,7 +269,7 @@ class AuthMiddleware {
 }
 
 /**
- * Check if user is authenticated
+ * Check if user is authenticated (passport session based)
  */
 export const isAuthenticated = (req: Request, res: Response, next: NextFunction) => {
     if ((req as any).isAuthenticated()) {
@@ -413,7 +278,7 @@ export const isAuthenticated = (req: Request, res: Response, next: NextFunction)
 
     res.status(401).json({
         success: false,
-        message: 'Please login to access this resource'
+        message: 'Please login to access this resource',
     });
 };
 
@@ -427,13 +292,12 @@ export const isNotAuthenticated = (req: Request, res: Response, next: NextFuncti
 
     res.status(400).json({
         success: false,
-        message: 'You are already logged in'
+        message: 'You are already logged in',
     });
 };
 
 /**
- * ✅ Extract auth token from request headers
- * Used by controllers that need the raw token (e.g., for external API calls)
+ * Raw auth token header se nikalta hai
  */
 export const getAuthToken = (req: Request): string | null => {
     const authHeader = req.headers.authorization;
@@ -451,7 +315,6 @@ export const getAuthToken = (req: Request): string | null => {
     return token;
 };
 
-// ✅ Named alias so routes can do: import { authenticateJWT } from '@/shared/middlewares/auth.middleware'
 export const authenticateJWT = AuthMiddleware.authenticate;
 
 export default AuthMiddleware;

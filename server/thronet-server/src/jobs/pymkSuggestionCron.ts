@@ -1,28 +1,27 @@
 import cron from 'node-cron';
 import { LoggerUtil as logger } from '@/shared/logger.util';
 import PymkNotificationState from '@/notifications/models/PymkNotificationState.model';
-// NOTE: getSuggestionCards is intentionally NOT imported statically here.
-// network.service.ts imports connection.service.ts which is also imported by
-// connections/routes/index.ts (our caller), creating a circular dependency that
-// causes this module to resolve as `undefined` at startup. The dynamic import
-// below breaks the cycle by deferring resolution until runBatch() is called,
-// by which point all modules are fully initialized.
+// NOTE: getSuggestionCards is imported dynamically inside runBatch() to break the
+// circular dependency (network.service -> connection.service -> connections/routes/index).
 import NotificationService from '@/notifications/services/notification.service';
 import { FilterQuery, Types } from 'mongoose';
-import User, { IUser } from '@/auth/models/User.model'; // check IUser is actually exported here
+import User, { IUser } from '@/auth/models/User.model';
 
 const PER_CALL_TIMEOUT_MS = 15000;
 const BATCH_MAX_RUNTIME_MS = 5 * 60 * 1000;
+const BATCH_SIZE = 100;
+const MAX_CONSECUTIVE_FAILURES = 5;
+const MIN_NEW_SUGGESTIONS = 3;
+const NOTIFY_COOLDOWN_DAYS = 7;
+
+// Weekly, Monday 10:00. Override with PYMK_CRON_SCHEDULE / PYMK_CRON_TZ if needed.
+const SCHEDULE = process.env.PYMK_CRON_SCHEDULE || '0 10 * * 1';
+const TIMEZONE = process.env.PYMK_CRON_TZ || 'Asia/Kolkata';
 
 interface StopSignal {
   stopped: boolean;
 }
 
-/**
- * Races a promise against a timeout WITHOUT leaving the loser running silently.
- * The underlying promise still resolves/rejects eventually, but callers only need
- * to handle the timeout branch as a normal error, and it's clearly labeled per call.
- */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} exceeded ${ms}ms`)), ms);
@@ -43,101 +42,117 @@ class PymkSuggestionCron {
   private static initialized = false;
 
   static init(): void {
-    // Guard against duplicate registration if init() is ever called more than
-    // once (e.g. loadRoutes() re-invoked by a module reload / restart).
     if (this.initialized) {
-      logger.warn('PymkSuggestionCron.init() called more than once — ignoring duplicate registration');
+      logger.warn('PymkSuggestionCron.init() called more than once, ignoring duplicate registration');
       return;
     }
     this.initialized = true;
-    // Run weekly on Monday at 10:00 AM IST
-    cron.schedule('0 10 * * 1', async () => {
-      if (this.isRunning) {
-        logger.warn('PYMK cron skipped — previous run still in progress');
-        return;
-      }
-      this.isRunning = true;
 
-      // Cooperative cancellation: instead of racing runBatch() against a timeout
-      // (which leaves the loser running unobserved in the background), we hand
-      // runBatch() a stop signal it checks at each safe checkpoint. This means
-      // the 5-minute ceiling actually stops real work instead of just declaring
-      // the tick "over" while the batch keeps running detached underneath it.
-      const stopSignal: StopSignal = { stopped: false };
-      const watchdog = setTimeout(() => {
+    if (!cron.validate(SCHEDULE)) {
+      logger.error('PYMK cron not registered: invalid schedule', { schedule: SCHEDULE });
+      return;
+    }
+
+    cron.schedule(SCHEDULE, () => {
+      void this.execute();
+    }, { timezone: TIMEZONE });
+
+    logger.warn('PYMK cron registered', { schedule: SCHEDULE, timezone: TIMEZONE });
+  }
+
+  /** Guarded entry point. Also usable for a manual trigger (e.g. triggerCron.ts). */
+  static async execute(): Promise<void> {
+    if (this.isRunning) {
+      logger.warn('PYMK cron skipped, previous run still in progress');
+      return;
+    }
+    this.isRunning = true;
+
+    const stopSignal: StopSignal = { stopped: false };
+    let deadlineTimer: NodeJS.Timeout | undefined;
+
+    // Hard deadline: execute() ALWAYS returns (and releases the lock) after the max
+    // runtime, even if some awaited call inside the batch never settles.
+    const deadline = new Promise<never>((_, reject) => {
+      deadlineTimer = setTimeout(() => {
         stopSignal.stopped = true;
-        logger.error('PYMK batch exceeded max runtime (5m) — signaling batch to stop at next checkpoint');
+        reject(new Error(`PYMK batch exceeded max runtime (${BATCH_MAX_RUNTIME_MS}ms)`));
       }, BATCH_MAX_RUNTIME_MS);
+    });
 
-      try {
-        logger.info('Running PYMK suggestion cron job');
-        await this.runBatch(stopSignal);
-        logger.info('PYMK suggestion cron job completed');
-      } catch (error) {
-        logger.error('Error in PYMK suggestion cron job', {
-          error: error instanceof Error ? error.message : 'unknown',
-        });
-      } finally {
-        clearTimeout(watchdog);
-        this.isRunning = false;
-      }
-    }, { timezone: 'Asia/Kolkata' });
+    try {
+      logger.warn('PYMK cron run started');
+      const batch = this.runBatch(stopSignal);
+      batch.catch(() => undefined); // avoid unhandled rejection if the deadline wins the race
+      await Promise.race([batch, deadline]);
+    } catch (error) {
+      logger.error('Error in PYMK suggestion cron job', {
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      this.isRunning = false;
+    }
   }
 
   private static async runBatch(stopSignal: StopSignal): Promise<void> {
-    // Lazy import once (breaks circular dependency with connections/routes/index.ts)
-    const { getSuggestionCards } = await import('@/connections/services/network.service');
+    const { getSuggestionCards } = await withTimeout(
+      import('@/connections/services/network.service'),
+      PER_CALL_TIMEOUT_MS,
+      'import network.service'
+    );
 
     let lastId: Types.ObjectId | null = null;
-    const batchSize = 100;
     let processedCount = 0;
     let notifiedCount = 0;
+    let failedCount = 0;
+    let consecutiveFailures = 0;
 
-   while (!stopSignal.stopped) {
-  const query: FilterQuery<IUser> = lastId ? { _id: { $gt: lastId } } : {};
+    while (!stopSignal.stopped) {
+      const query: FilterQuery<IUser> = lastId ? { _id: { $gt: lastId } } : {};
 
-  const users: Array<Pick<IUser, '_id' | 'userId'>> = await User.find(query)
-    .sort({ _id: 1 })
-    .limit(batchSize)
-    .select('_id userId')
-    .maxTimeMS(PER_CALL_TIMEOUT_MS)
-    .lean();
+      const users: Array<Pick<IUser, '_id' | 'userId'>> = await User.find(query)
+        .sort({ _id: 1 })
+        .limit(BATCH_SIZE)
+        .select('_id userId')
+        .maxTimeMS(PER_CALL_TIMEOUT_MS)
+        .lean();
 
-  if (!users || users.length === 0) {
-    break;
-  }
-  // ...
+      if (!users || users.length === 0) break;
+
+      // One query per batch instead of one per user.
+      const states: any[] = await PymkNotificationState.find({
+        userId: { $in: users.map((u) => u.userId) },
+      })
+        .maxTimeMS(PER_CALL_TIMEOUT_MS)
+        .lean();
+      const stateMap = new Map<string, any>(states.map((s) => [String(s.userId), s]));
 
       for (const user of users) {
         if (stopSignal.stopped) break;
 
         try {
-          const state = await PymkNotificationState.findOne({ userId: user.userId })
-            .maxTimeMS(PER_CALL_TIMEOUT_MS)
-            .lean();
+          const state = stateMap.get(String(user.userId));
 
-          // If notified within the last 7 days, skip
           if (state?.lastNotifiedAt) {
-            const daysSinceLast = (Date.now() - state.lastNotifiedAt.getTime()) / (1000 * 60 * 60 * 24);
-            if (daysSinceLast < 7) {
-              continue;
-            }
+            const daysSinceLast = (Date.now() - new Date(state.lastNotifiedAt).getTime()) / (1000 * 60 * 60 * 24);
+            if (daysSinceLast < NOTIFY_COOLDOWN_DAYS) continue;
           }
 
-        
           // Fetch top 10 suggestions
           const suggestions = await withTimeout(
             getSuggestionCards(user.userId, 10),
             PER_CALL_TIMEOUT_MS,
             'getSuggestionCards'
           );
+          consecutiveFailures = 0;
+
           if (!suggestions || suggestions.length === 0) continue;
 
           const notifiedSet = new Set(state?.notifiedSuggestionIds || []);
           const newSuggestions = suggestions.filter((s: any) => !notifiedSet.has(s.id));
 
-          // Minimum threshold: 3 new suggestions (intentional — prevents weekly spam)
-          if (newSuggestions.length >= 3) {
+          if (newSuggestions.length >= MIN_NEW_SUGGESTIONS) {
             await withTimeout(
               NotificationService.notifyPymk(user.userId, newSuggestions),
               PER_CALL_TIMEOUT_MS,
@@ -146,18 +161,12 @@ class PymkSuggestionCron {
 
             const newIds = newSuggestions.map((s: any) => s.id);
 
-            // Update state with cap/trim strategy ($slice: -100)
             await withTimeout(
               PymkNotificationState.findOneAndUpdate(
                 { userId: user.userId },
                 {
                   $set: { lastNotifiedAt: new Date() },
-                  $push: {
-                    notifiedSuggestionIds: {
-                      $each: newIds,
-                      $slice: -100
-                    }
-                  }
+                  $push: { notifiedSuggestionIds: { $each: newIds, $slice: -100 } },
                 },
                 { upsert: true }
               ),
@@ -168,26 +177,37 @@ class PymkSuggestionCron {
             notifiedCount++;
           }
         } catch (err) {
+          failedCount++;
+          consecutiveFailures++;
           logger.error('PYMK cron failed for user', {
             userId: user.userId,
             error: err instanceof Error ? err.message : 'unknown',
           });
-          // Continue to next user
+
+          // Dependency is probably down (Neo4j / Redis / Mongo). Stop instead of
+          // burning PER_CALL_TIMEOUT_MS on every remaining user.
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            stopSignal.stopped = true;
+            logger.error('PYMK cron aborting: too many consecutive failures, check Neo4j/Redis/Mongo config', {
+              consecutiveFailures,
+            });
+            break;
+          }
         }
       }
 
       processedCount += users.length;
-      lastId = users[users.length - 1]._id;
+      lastId = users[users.length - 1]._id as Types.ObjectId;
 
-      // Small delay between batches to avoid spikes
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
     }
 
-    if (stopSignal.stopped) {
-      logger.warn('PYMK cron batch stopped early — exceeded max runtime', { processedCount, notifiedCount });
-    } else {
-      logger.info('PYMK cron batch completed', { processedCount, notifiedCount });
-    }
+    // warn level on purpose: prod logs currently show only warn/error
+    logger.warn(stopSignal.stopped ? 'PYMK cron batch stopped early' : 'PYMK cron batch completed', {
+      processedCount,
+      notifiedCount,
+      failedCount,
+    });
   }
 }
 

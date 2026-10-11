@@ -3,6 +3,7 @@ import { getAuthToken } from '@/shared/middlewares/auth.middleware';
 import { groupService } from '../services';
 import { logger } from '@/shared/logger.util';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
+import { User } from '@/shared/models/index.models';
 
 class GroupController {
   /**
@@ -40,9 +41,20 @@ class GroupController {
     try {
       const { id } = req.params;
       const authToken = getAuthToken(req) || undefined;
-      const session = await groupService.getGroupSessionById(id, authToken);
+      let userId = req.user?.id ?? req.user?.userId;
+      if (!userId && authToken) {
+        try {
+          const decoded: any = User.verifyToken(authToken, 'access');
+          userId = decoded?.userId;
+        } catch {
+          // ignore
+        }
+      }
 
-      ResponseHandler.success(res, 'Group session retrieved successfully', session);
+      const session = await groupService.getGroupSessionById(id, authToken);
+      const sanitized = await groupService.sanitizeGroupSession(session, userId);
+
+      ResponseHandler.success(res, 'Group session retrieved successfully', sanitized);
     } catch (error: any) {
       logger.error('Failed to fetch group session:', error);
       next(error);
@@ -69,10 +81,14 @@ class GroupController {
         authToken
       );
 
+      const sanitizedSessions = await Promise.all(
+        result.sessions.map((s: any) => groupService.sanitizeGroupSession(s, req.user?.id))
+      );
+
       ResponseHandler.paginated(
         res,
         'Group sessions retrieved successfully',
-        result.sessions,
+        sanitizedSessions,
         result.page,
         result.limit,
         result.total
@@ -98,7 +114,11 @@ class GroupController {
         authToken
       );
 
-      ResponseHandler.success(res, 'Upcoming group sessions retrieved successfully', sessions);
+      const sanitizedSessions = await Promise.all(
+        sessions.map((s: any) => groupService.sanitizeGroupSession(s, req.user?.id))
+      );
+
+      ResponseHandler.success(res, 'Upcoming group sessions retrieved successfully', sanitizedSessions);
     } catch (error: any) {
       logger.error('Failed to fetch upcoming group sessions:', error);
       next(error);
@@ -274,7 +294,8 @@ class GroupController {
 
       const authToken = getAuthToken(req) || undefined;
       const session = await groupService.startGroupSession(id, userId, authToken);
-      ResponseHandler.success(res, 'Group session started successfully', session);
+      const sanitized = await groupService.sanitizeGroupSession(session, userId);
+      ResponseHandler.success(res, 'Group session started successfully', sanitized);
     } catch (error: any) {
       logger.error('Failed to start group session:', error);
       next(error);
@@ -527,6 +548,29 @@ class GroupController {
       ResponseHandler.success(res, 'Join request sent successfully', session);
     } catch (error: any) {
       logger.error('Failed to join group session by slot:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   POST /api/v1/mentorship/group-sessions/:id/attend
+   * @desc    Mentee clicks Join Meet to mark attendance
+   * @access  Private (Mentee)
+   */
+  async markAttendance(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id ?? req.user?.userId;
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
+
+      const authToken = getAuthToken(req) || undefined;
+      const session = await groupService.markMenteeAttendance(id, userId, authToken);
+      ResponseHandler.success(res, 'Attendance marked successfully', session);
+    } catch (error: any) {
+      logger.error('Failed to mark attendance:', error);
       next(error);
     }
   }
