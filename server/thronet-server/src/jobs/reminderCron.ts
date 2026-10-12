@@ -1,7 +1,7 @@
 console.log('TRACE_START reminderCron.ts');
 // src/jobs/reminderCron.ts
 import cron from 'node-cron';
-import { SessionMentor, Mentor } from '@/Mentorship/models';
+import { SessionMentor, Mentor, SeniorSession } from '@/Mentorship/models';
 import { emitToUser } from '@/socket/emitter';
 import { User } from '@/auth/models';
 import { BookingStatus } from '../shared/constants/bookingStatus';
@@ -342,14 +342,102 @@ class ReminderCron {
           }
         }
       }
+
+      // Process Senior Mentor sessions starting soon
+      const seniorLiveStatuses = ['confirmed', 'upcoming'];
+      for (const w of windows) {
+        const from = new Date(now.getTime() + w.fromMin * 60 * 1000);
+        const to = new Date(now.getTime() + w.toMin * 60 * 1000);
+        const flagPath = `reminders.${w.key}`;
+
+        const seniorSessions = await SeniorSession.find({
+          bookings: {
+            $elemMatch: {
+              status: { $in: seniorLiveStatuses },
+              scheduledAt: { $gt: from, $lte: to },
+              [flagPath]: { $ne: true },
+            },
+          },
+        } as any);
+
+        for (const session of seniorSessions) {
+          const mentorUser: any = session.mentorId ? await User.findByUserId(session.mentorId) : null;
+          const mentorName = mentorUser?.fullName || mentorUser?.email || 'your mentor';
+
+          for (const booking of ((session.bookings ?? []) as any[])) {
+            if (!seniorLiveStatuses.includes(booking.status)) continue;
+            const startAt = booking.scheduledAt ? new Date(booking.scheduledAt) : null;
+            if (!startAt || startAt <= from || startAt > to) continue;
+            if (booking.reminders?.[w.key]) continue;
+
+            // Atomic claim
+            const claim = await SeniorSession.updateOne(
+              {
+                sessionId: session.sessionId,
+                bookings: { $elemMatch: { _id: booking._id, [flagPath]: { $ne: true } } },
+              } as any,
+              { $set: { [`bookings.$.${flagPath}`]: true } } as any
+            );
+            if (claim.modifiedCount === 0) continue;
+
+            const menteeId: string | undefined = booking.menteeId || booking.bookedBy;
+            const menteeUser: any = menteeId ? await User.findByUserId(menteeId) : null;
+            const menteeName = menteeUser?.fullName || menteeUser?.email || 'your mentee';
+
+            const bookingId = String(booking._id);
+            const minutesLeft = Math.max(1, Math.round((startAt.getTime() - now.getTime()) / 60000));
+            const base = {
+              sessionId: session.sessionId,
+              bookingId,
+              roomId: bookingId,
+              title: session.title,
+              scheduledAt: startAt.toISOString(),
+              minutesLeft,
+            };
+
+            const notify = (targetUserId: string, otherName: string, isMentee: boolean) => {
+              NotificationService.sendNotification({
+                userId: targetUserId,
+                type: NotificationType.SESSION_REMINDER,
+                channels: [NotificationChannel.IN_APP],
+                priority: 'high',
+                data: {
+                  ...base,
+                  ...(!isMentee && menteeId ? {
+                    menteeId,
+                    menteeName,
+                    menteePhoto: (menteeUser as any)?.profilePhotoUrl || (menteeUser as any)?.profilePhoto || (menteeUser as any)?.avatar || null
+                  } : {}),
+                  title: `Session starts in ${w.label}`,
+                  message: `Your Senior session "${session.title}" with ${otherName} starts in ${w.label}.${
+                    isMentee ? ' Be ready to join!' : ' Start it when you are ready.'
+                  }`,
+                },
+              }).catch((e) => logger.error(`In-app senior reminder failed (${w.key}):`, e));
+
+              try {
+                emitToUser(targetUserId, 'session:reminder', { ...base, mentorName, menteeName });
+              } catch (e: any) {
+                logger.warn(`session:reminder emit failed: ${e?.message}`);
+              }
+            };
+
+            if (menteeId) notify(menteeId, mentorName, true);
+            if (session.mentorId) notify(session.mentorId, menteeName, false);
+
+            logger.info(`⏰ ${w.key} senior reminder sent: session ${session.sessionId} / booking ${bookingId}`);
+          }
+        }
+      }
     }
   
     static async triggerManually(): Promise<void> {
-    logger.info('ðŸ”” Manually triggering reminder cron job');
+    logger.info('🔔 Manually triggering reminder cron job');
+    await this.sendStartingSoonReminders();
     await this.send24HourReminders();
     await this.send1HourReminders();
     await this.send15MinuteReminders();
-    logger.info('âœ… Manual trigger completed');
+    logger.info('✅ Manual trigger completed');
   }
 }
 

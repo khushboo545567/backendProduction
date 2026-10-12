@@ -63,6 +63,31 @@ export const getSlotsValidator = validate([
     .toInt(),
 ]);
 
+export const getMonthlySlotsValidator = validate([
+  query('startDate')
+    .notEmpty()
+    .withMessage('Start date is required')
+    .matches(/^\d{4}-\d{2}-\d{2}$/)
+    .withMessage('Start date must be in YYYY-MM-DD format'),
+    
+  query('endDate')
+    .notEmpty()
+    .withMessage('End date is required')
+    .matches(/^\d{4}-\d{2}-\d{2}$/)
+    .withMessage('End date must be in YYYY-MM-DD format'),
+
+  query('duration')
+    .optional()
+    .isInt({ min: 15, max: 240 })
+    .withMessage('Duration must be between 15 and 240 minutes')
+    .toInt(),
+
+  query('mentorId')
+    .optional()
+    .isUUID()
+    .withMessage('Mentor ID must be a valid UUID'),
+]);
+
 export const addBlockedTimeValidator = validate([
   body('date')
     .notEmpty()

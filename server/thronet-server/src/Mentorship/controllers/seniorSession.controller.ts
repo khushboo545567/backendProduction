@@ -51,6 +51,37 @@ class SeniorSessionController {
   }
 
   /**
+   * Get analytics dashboard metrics for the authenticated Senior Mentor
+   * GET /senior-sessions/analytics
+   */
+  async getAnalytics(req: AuthRequest, res: Response) {
+    try {
+      const authUserId = req.user!.id;
+      const userRole = req.user?.role;
+      const queryMentorId = req.query.mentorId as string | undefined;
+
+      // Only administrators can query analytics for another mentor
+      let targetUserId = authUserId;
+      if (queryMentorId && queryMentorId !== authUserId) {
+        if (userRole === 'admin') {
+          targetUserId = queryMentorId;
+        }
+      }
+
+      const analytics = await SeniorSessionService.getAnalytics(targetUserId);
+
+      return ResponseHandler.success(
+        res,
+        'Senior mentor analytics retrieved successfully',
+        analytics
+      );
+    } catch (error: any) {
+      console.error('SENIOR MENTOR ANALYTICS ERROR:', error);
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
    * Get all active one-to-one sessions for the discovery page
    * GET /senior-sessions/discovery
    */
@@ -173,6 +204,136 @@ class SeniorSessionController {
       );
     } catch (error: any) {
       console.error('CANCEL SESSION ERROR:', error);
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Confirm/Accept a Senior Booking
+   * POST /senior-sessions/:sessionId/bookings/:bookingId/confirm
+   */
+  async confirmBooking(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { sessionId, bookingId } = req.params;
+
+      const session = await SeniorSessionService.confirmBooking(
+        userId,
+        sessionId,
+        bookingId
+      );
+
+      return ResponseHandler.success(
+        res,
+        'Booking confirmed successfully',
+        session
+      );
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Cancel/Reject a Senior Booking
+   * POST /senior-sessions/:sessionId/bookings/:bookingId/cancel
+   */
+  async cancelBooking(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { sessionId, bookingId } = req.params;
+      const { reason } = req.body;
+
+      const session = await SeniorSessionService.cancelBooking(
+        userId,
+        sessionId,
+        bookingId,
+        reason
+      );
+
+      return ResponseHandler.success(
+        res,
+        'Booking cancelled successfully',
+        session
+      );
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Reschedule a Senior Booking
+   * POST /senior-sessions/:sessionId/bookings/:bookingId/reschedule
+   */
+  async rescheduleBooking(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { sessionId, bookingId } = req.params;
+      const { newScheduledAt, scheduledAt, reason } = req.body;
+
+      const session = await SeniorSessionService.rescheduleBooking(
+        userId,
+        sessionId,
+        bookingId,
+        newScheduledAt || scheduledAt,
+        reason
+      );
+
+      return ResponseHandler.success(
+        res,
+        'Booking rescheduled successfully',
+        session
+      );
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Start an Upcoming Senior Booking
+   * POST /senior-sessions/:sessionId/bookings/:bookingId/start
+   */
+  async startBooking(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { sessionId, bookingId } = req.params;
+
+      const session = await SeniorSessionService.startBooking(
+        userId,
+        sessionId,
+        bookingId
+      );
+
+      return ResponseHandler.success(
+        res,
+        'Booking started successfully',
+        session
+      );
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  /**
+   * Complete an In-Progress Senior Booking
+   * POST /senior-sessions/:sessionId/bookings/:bookingId/complete
+   */
+  async completeBooking(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user!.id;
+      const { sessionId, bookingId } = req.params;
+
+      const session = await SeniorSessionService.completeBooking(
+        userId,
+        sessionId,
+        bookingId
+      );
+
+      return ResponseHandler.success(
+        res,
+        'Booking completed successfully',
+        session
+      );
+    } catch (error: any) {
       return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
     }
   }

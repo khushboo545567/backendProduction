@@ -9,6 +9,7 @@ import {
 } from '../interface/seniorMentorApplication.types';
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ConflictError, NotFoundError, ForbiddenError } from '@/shared/errors/app.error';
+import seniorNotificationService from './seniorNotification.service';
 
 /**
  * NOTE: NotFoundError appends " not found" to the message itself, so pass only
@@ -212,6 +213,12 @@ class SeniorMentorApplicationService {
     });
 
     logger.info(`✅ Senior Mentor application approved: ${seniorMentorId} by ${adminUserId}`);
+
+    seniorNotificationService.notifyApplicationStatus(
+      updated || application,
+      ApplicationStatus.VERIFIED
+    ).catch((err) => console.error('Error notifying application verified:', err));
+
     return updated;
   }
 
@@ -233,6 +240,13 @@ class SeniorMentorApplicationService {
     });
 
     logger.info(`❌ Senior Mentor application rejected: ${seniorMentorId} by ${adminUserId}`);
+
+    seniorNotificationService.notifyApplicationStatus(
+      updated || application,
+      ApplicationStatus.REJECTED,
+      reason
+    ).catch((err) => console.error('Error notifying application rejected:', err));
+
     return updated;
   }
 

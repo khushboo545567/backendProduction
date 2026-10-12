@@ -7,6 +7,7 @@ import {
   createSeniorSessionValidator,
   updateSeniorSessionValidator,
   seniorSessionIdValidator,
+  seniorBookingIdValidator,
 } from '../validations/seniorSession.validator';
 import { uploadSingle } from '@/shared/upload/upload';
 
@@ -50,6 +51,15 @@ router.get(
 );
 
 /**
+ * Get analytics dashboard metrics for the authenticated Senior Mentor
+ * GET /senior-sessions/analytics
+ */
+router.get(
+  '/analytics',
+  SeniorSessionController.getAnalytics
+);
+
+/**
  * Get a single Senior Session
  * GET /senior-sessions/:sessionId
  */
@@ -88,6 +98,56 @@ router.delete(
   '/:sessionId',
   seniorSessionIdValidator,
   SeniorSessionController.cancelSession
+);
+
+/**
+ * Confirm/Accept a Senior Booking
+ * POST /senior-sessions/:sessionId/bookings/:bookingId/confirm
+ */
+router.post(
+  '/:sessionId/bookings/:bookingId/confirm',
+  seniorBookingIdValidator,
+  SeniorSessionController.confirmBooking
+);
+
+/**
+ * Cancel/Reject a Senior Booking
+ * POST /senior-sessions/:sessionId/bookings/:bookingId/cancel
+ */
+router.post(
+  '/:sessionId/bookings/:bookingId/cancel',
+  seniorBookingIdValidator,
+  SeniorSessionController.cancelBooking
+);
+
+/**
+ * Reschedule a Senior Booking
+ * POST /senior-sessions/:sessionId/bookings/:bookingId/reschedule
+ */
+router.post(
+  '/:sessionId/bookings/:bookingId/reschedule',
+  seniorBookingIdValidator,
+  SeniorSessionController.rescheduleBooking
+);
+
+/**
+ * Start an Upcoming Senior Booking
+ * POST /senior-sessions/:sessionId/bookings/:bookingId/start
+ */
+router.post(
+  '/:sessionId/bookings/:bookingId/start',
+  seniorBookingIdValidator,
+  SeniorSessionController.startBooking
+);
+
+/**
+ * Complete an In-Progress Senior Booking
+ * POST /senior-sessions/:sessionId/bookings/:bookingId/complete
+ */
+router.post(
+  '/:sessionId/bookings/:bookingId/complete',
+  seniorBookingIdValidator,
+  SeniorSessionController.completeBooking
 );
 
 export default router;

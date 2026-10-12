@@ -1,12 +1,45 @@
 import SeniorAvailability, { SeniorAvailabilityDocument } from '../models/SeniorAvailability';
+import Mentor from '../models/Mentor';
 import { CreateSeniorAvailabilityInput, UpdateSeniorAvailabilityInput } from '../interface/seniorAvailability.types';
 
 export class SeniorAvailabilityRepository {
   /**
    * Get availability configuration for a specific mentor.
+   * Checks canonical stored mentorId first. If not found, explicitly resolves
+   * through verified Standard Mentor profile linkage (mentorId <-> userId)
+   * to maintain compatibility with callers passing either identifier.
    */
   async getByMentorId(mentorId: string): Promise<SeniorAvailabilityDocument | null> {
-    return await SeniorAvailability.findOne({ mentorId });
+    // 1. Direct canonical lookup
+    const directConfig = await SeniorAvailability.findOne({ mentorId });
+    if (directConfig) {
+      return directConfig;
+    }
+
+    // 2. Resolve via verified Standard Mentor relationship if available
+    try {
+      const standardMentor = await Mentor.findOne({
+        $or: [{ mentorId }, { userId: mentorId }],
+        isDeleted: false
+      }).lean();
+
+      if (standardMentor) {
+        const alternateId = standardMentor.mentorId === mentorId
+          ? standardMentor.userId
+          : standardMentor.mentorId;
+
+        if (alternateId) {
+          const alternateConfig = await SeniorAvailability.findOne({ mentorId: alternateId });
+          if (alternateConfig) {
+            return alternateConfig;
+          }
+        }
+      }
+    } catch {
+      // If Mentor model lookup fails or is unavailable, fall back cleanly
+    }
+
+    return null;
   }
 
   /**

@@ -3,12 +3,53 @@
 import { Server } from 'socket.io';
 import type { AuthenticatedSocket } from '../types';
 import { emitToUser } from '../emitter';
-import { SessionMentor, Mentor } from '@/Mentorship/models';
+import { SessionMentor, Mentor, SeniorSession } from '@/Mentorship/models';
 import notificationService, {
   NotificationType,
   NotificationChannel,
 } from '@/Mentorship/services/notification.service';
 import { LoggerUtil } from '@/shared/logger.util';
+
+interface ResolvedSession {
+  title?: string;
+  mentorUserId?: string;
+  menteeUserId?: string;
+  bookingIdStr?: string;
+  isSenior: boolean;
+}
+
+async function resolveMentorshipSession(sessionId: string): Promise<ResolvedSession | null> {
+  const session = await SessionMentor.findOne({ sessionId });
+  if (session) {
+    const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+    const confirmedBooking = session.bookings?.find((b: any) =>
+      ['confirmed', 'in_progress', 'rescheduled'].includes(b.status)
+    );
+    return {
+      title: session.title,
+      mentorUserId: mentor?.userId,
+      menteeUserId: session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy,
+      bookingIdStr: (confirmedBooking as any)?._id?.toString() || '',
+      isSenior: false,
+    };
+  }
+
+  const seniorSession = await SeniorSession.findOne({ sessionId });
+  if (seniorSession) {
+    const activeBooking = seniorSession.bookings?.find((b: any) =>
+      ['confirmed', 'upcoming', 'in_progress'].includes(b.status)
+    );
+    return {
+      title: seniorSession.title,
+      mentorUserId: seniorSession.mentorId,
+      menteeUserId: activeBooking?.menteeId || activeBooking?.bookedBy,
+      bookingIdStr: (activeBooking as any)?._id?.toString() || '',
+      isSenior: true,
+    };
+  }
+
+  return null;
+}
 
 export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket) => {
   const userId = socket.data.userId;
@@ -19,20 +60,13 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
       const { sessionId } = data;
       if (!sessionId) return;
 
-      const session = await SessionMentor.findOne({ sessionId });
-      if (!session) {
+      const sessionInfo = await resolveMentorshipSession(sessionId);
+      if (!sessionInfo) {
         LoggerUtil.warn('mentorship:notify-join — session not found', { sessionId });
         return;
       }
 
-      const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
-      const mentorUserId = mentor?.userId;
-
-      // menteeId ya toh top-level field pe hai, ya bookings[] array me
-      const confirmedBooking = session.bookings?.find((b: any) =>
-        ['confirmed', 'in_progress', 'rescheduled'].includes(b.status)
-      );
-      const menteeUserId = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy;
+      const { mentorUserId, menteeUserId, title, bookingIdStr } = sessionInfo;
 
       let targetUserId: string | undefined;
       let joinerRole: 'mentor' | 'mentee' = 'mentee';
@@ -54,7 +88,7 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
       emitToUser(targetUserId, 'mentorship:peer-joined', {
         sessionId,
         joinerRole,
-        title: session.title,
+        title: title || 'Mentorship Session',
       });
 
       // 2) Persistent bell notification — offline hone par bhi save rahega
@@ -66,9 +100,9 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
         data: {
           ...(joinerRole === 'mentee' && menteeUserId ? { menteeId: menteeUserId } : {}),
           title: `${joinerRole === 'mentor' ? 'Mentor' : 'Mentee'} joined the session`,
-          message: `${joinerRole === 'mentor' ? 'Your mentor' : 'Your mentee'} has joined "${session.title || 'the session'}". Join now to start the call.`,
+          message: `${joinerRole === 'mentor' ? 'Your mentor' : 'Your mentee'} has joined "${title || 'the session'}". Join now to start the call.`,
           sessionId,
-          actionUrl: `/mentorship/session-room/${sessionId}?bookingId=${(confirmedBooking as any)?._id?.toString() || ''}`,
+          actionUrl: `/mentorship/session-room/${sessionId}?bookingId=${bookingIdStr}`,
         },
       });
 
@@ -78,30 +112,19 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
     }
   });
 
-  // ✅ NEW: live-call emoji reactions (👍 ❤️ 😂 👏 🎉) — relayed 1:1 via
-  // emitToUser, same mentor/mentee resolution as notify-join above. No new
-  // socket room needed — reuses the existing user:{userId} room convention,
-  // so it works even without touching liveRoomHandler.ts.
+  // ✅ live-call emoji reactions (👍 ❤️ 😂 👏 🎉)
   socket.on('mentorship:send-reaction', async (data: { sessionId: string; emoji: string }) => {
     try {
       const { sessionId, emoji } = data;
       if (!sessionId || !emoji) return;
 
-      // Fixed allow-list — don't let the client send arbitrary strings.
       const ALLOWED_REACTIONS = ['👍', '❤️', '😂', '👏', '🎉'];
       if (!ALLOWED_REACTIONS.includes(emoji)) return;
 
-      const session = await SessionMentor.findOne({ sessionId });
-      if (!session) return;
+      const sessionInfo = await resolveMentorshipSession(sessionId);
+      if (!sessionInfo) return;
 
-      const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
-      const mentorUserId = mentor?.userId;
-
-      const confirmedBooking = session.bookings?.find((b: any) =>
-        ['confirmed', 'in_progress', 'rescheduled'].includes(b.status)
-      );
-      const menteeUserId = session.menteeId || confirmedBooking?.menteeId || confirmedBooking?.bookedBy;
-
+      const { mentorUserId, menteeUserId } = sessionInfo;
       const targetUserId = userId === mentorUserId ? menteeUserId : mentorUserId;
       if (!targetUserId) return;
 

@@ -21,8 +21,9 @@ export const createSeniorSessionValidator = [
     .withMessage('Invalid session type'),
 
   body('scheduledAt')
+    .if((value, { req }) => req.body.sessionType === 'group' || (value !== undefined && value !== null && value !== ''))
     .notEmpty()
-    .withMessage('Scheduled time is required')
+    .withMessage('Scheduled time is required for group sessions')
     .isISO8601()
     .withMessage('Scheduled time must be a valid date'),
 
@@ -140,4 +141,15 @@ export const seniorSessionIdValidator = [
     .withMessage('Session ID is required')
     .isUUID()
     .withMessage('Invalid session ID'),
+];
+
+export const seniorBookingIdValidator = [
+  param('sessionId')
+    .notEmpty()
+    .withMessage('Session ID is required')
+    .isUUID()
+    .withMessage('Invalid session ID'),
+  param('bookingId')
+    .notEmpty()
+    .withMessage('Booking ID is required'),
 ];

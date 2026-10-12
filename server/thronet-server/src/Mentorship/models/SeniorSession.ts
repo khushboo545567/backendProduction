@@ -54,6 +54,13 @@ const SeniorSessionBookingSchema = new Schema<ISeniorSessionBooking>(
       type: Date,
     },
 
+    reminders: {
+      h24: { type: Boolean, default: false },
+      h1: { type: Boolean, default: false },
+      m15: { type: Boolean, default: false },
+      m5: { type: Boolean, default: false },
+    },
+
     payment: {
       status: {
         type: String,
@@ -143,7 +150,9 @@ const SeniorSessionSchema = new Schema<SeniorSessionDocument>(
 
     scheduledAt: {
       type: Date,
-      required: [true, 'Scheduled time is required'],
+      required: function (this: any) {
+        return this.sessionType === SeniorSessionType.GROUP;
+      },
       index: true,
     },
 

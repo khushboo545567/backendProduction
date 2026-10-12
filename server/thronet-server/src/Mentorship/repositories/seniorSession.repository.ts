@@ -53,6 +53,19 @@ class SeniorSessionRepository {
   }
 
   /**
+   * Find all sessions belonging to a senior mentor across multiple IDs / aliases
+   */
+  async findByMentorIds(
+    mentorIds: string[]
+  ): Promise<SeniorSessionDocument[]> {
+    return await SeniorSession.find({
+      mentorId: { $in: mentorIds },
+    })
+      .sort({ createdAt: -1 })
+      .lean<SeniorSessionDocument[]>();
+  }
+
+  /**
    * Find a session owned by a specific mentor.
    *
    * This is useful for ownership checks in the service layer.
@@ -215,6 +228,35 @@ class SeniorSessionRepository {
       {
         sessionId,
         'bookings.menteeId': menteeId,
+      },
+      {
+        $set: updateFields,
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).lean<SeniorSessionDocument>();
+  }
+
+  /**
+   * Update a nested booking by its bookingId within a session
+   */
+  async updateBookingById(
+    sessionId: string,
+    bookingId: string,
+    data: Partial<ISeniorSessionBooking> | Record<string, unknown>
+  ): Promise<SeniorSessionDocument | null> {
+    const updateFields: Record<string, unknown> = {};
+
+    Object.entries(data).forEach(([key, value]) => {
+      updateFields[`bookings.$.${key}`] = value;
+    });
+
+    return await SeniorSession.findOneAndUpdate(
+      {
+        sessionId,
+        'bookings._id': bookingId,
       },
       {
         $set: updateFields,

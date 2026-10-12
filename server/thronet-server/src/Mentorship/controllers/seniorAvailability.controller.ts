@@ -7,7 +7,10 @@ class SeniorAvailabilityController {
   
   async getAvailabilityConfig(req: AuthRequest, res: Response) {
     try {
-      const mentorId = req.user!.id; 
+      const mentorId = req.query.mentorId ? req.query.mentorId.toString() : req.user?.id;
+      if (!mentorId) {
+        return ResponseHandler.error(res, 'Mentor ID is required or user must be authenticated', 400);
+      }
       const config = await seniorAvailabilityService.getConfig(mentorId);
       
       if (!config) {
@@ -33,13 +36,34 @@ class SeniorAvailabilityController {
 
   async getAvailableSlots(req: AuthRequest, res: Response) {
     try {
-      const mentorId = req.query.mentorId ? req.query.mentorId.toString() : req.user!.id;
+      const mentorId = req.query.mentorId ? req.query.mentorId.toString() : req.user?.id;
+      if (!mentorId) {
+        return ResponseHandler.error(res, 'Mentor ID is required', 400);
+      }
       const date = req.query.date as string;
       const duration = parseInt(req.query.duration as string, 10);
 
       const slots = await seniorAvailabilityService.getAvailableSlots(mentorId, date, duration);
 
       return ResponseHandler.success(res, 'Available slots retrieved successfully', slots);
+    } catch (error: any) {
+      return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
+    }
+  }
+
+  async getMonthlySlots(req: AuthRequest, res: Response) {
+    try {
+      const mentorId = req.query.mentorId ? req.query.mentorId.toString() : req.user?.id;
+      if (!mentorId) {
+        return ResponseHandler.error(res, 'Mentor ID is required', 400);
+      }
+      const startDate = req.query.startDate as string;
+      const endDate = req.query.endDate as string;
+      const duration = req.query.duration ? parseInt(req.query.duration as string, 10) : 60;
+
+      const monthlySlots = await seniorAvailabilityService.getMonthlyAvailability(mentorId, startDate, endDate, duration);
+
+      return ResponseHandler.success(res, 'Monthly available slots retrieved successfully', monthlySlots);
     } catch (error: any) {
       return ResponseHandler.error(res, error.message || 'Internal Server Error', error.statusCode || 500, error.stack);
     }

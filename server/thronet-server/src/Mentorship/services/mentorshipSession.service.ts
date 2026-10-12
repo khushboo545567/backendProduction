@@ -2,7 +2,7 @@ import mentorService from './mentor.service';
 import { SESSION_DURATIONS, SessionType } from '@/shared/constants/sessionTypes';
 import { PaymentMethod, PaymentStatus, ISessionMentor } from '@/Mentorship/interface/session.types';
 import { Types } from 'mongoose';
-import { Mentor, SessionMentor } from '../models';
+import { Mentor, SessionMentor, SeniorSession } from '../models';
 import availabilityService from './availability.service';
 import { computeEndTime, toMinutes, toTimeString } from '@/Mentorship/utils/slotSplitter';
 import { logger } from '@/shared/logger.util';
@@ -559,7 +559,28 @@ class MentorshipSessionService {
 
       const { data: sessions, total } = await sessionRepository.findAll(query, skip, limit);
 
-      return { sessions, total, page, limit };
+      let mergedSessions = sessions;
+      let mergedTotal = total;
+
+      if (role === 'mentee') {
+        try {
+          const seniorSessions = await SeniorSession.find({
+            $or: [
+              { 'bookings.menteeId': userId },
+              { 'bookings.bookedBy': userId },
+            ],
+          }).lean();
+
+          if (seniorSessions && seniorSessions.length > 0) {
+            mergedSessions = [...sessions, ...seniorSessions];
+            mergedTotal = total + seniorSessions.length;
+          }
+        } catch (seniorErr: any) {
+          logger.warn(`Failed to include senior sessions for mentee: ${seniorErr.message}`);
+        }
+      }
+
+      return { sessions: mergedSessions, total: mergedTotal, page, limit };
     } catch (error: any) {
       logger.error(`Failed to fetch sessions: ${error.message}`);
       throw error;
@@ -600,6 +621,22 @@ class MentorshipSessionService {
       }
 
       const { data } = await sessionRepository.findAll(query, 0, limit, 1);
+      if (role === 'mentee') {
+        try {
+          const seniorSessions = await SeniorSession.find({
+            $or: [
+              { 'bookings.menteeId': userId },
+              { 'bookings.bookedBy': userId },
+            ],
+            'bookings.status': { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED, 'upcoming'] },
+          }).lean();
+          if (seniorSessions && seniorSessions.length > 0) {
+            return [...data, ...seniorSessions];
+          }
+        } catch (seniorErr: any) {
+          logger.warn(`Failed to include senior sessions in getUpcomingSessions: ${seniorErr.message}`);
+        }
+      }
       return data;
     } catch (error: any) {
       logger.error(`Failed to fetch upcoming sessions: ${error.message}`);

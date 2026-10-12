@@ -36,7 +36,7 @@ import {
 import GroupMember from '../models/GroupMember.model';
 import LiveRoom from '../models/LiveRoom.model';
 import { LoggerUtil } from '@/shared/logger.util';
-import { SessionMentor, Mentor, GroupSession } from '@/Mentorship/models';
+import { SessionMentor, Mentor, GroupSession, SeniorSession } from '@/Mentorship/models';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MAX_ROOM_SIZE = 16; // WebRTC mesh: 16 peers = 120 connections — hard limit
@@ -69,6 +69,43 @@ async function isMentorshipSessionMember(userId: string, roomId: string): Promis
     return !!mentor && mentor.userId.toString() === userId;
   } catch (error: any) {
     LoggerUtil.warn(`isMentorshipSessionMember check failed: ${error.message}`);
+    return false;
+  }
+}
+
+// ─── Helper: verify mentor/mentee membership on a Senior Mentor 1:1 session room ─────
+async function isSeniorOneToOneSessionMember(userId: string, roomId: string): Promise<boolean> {
+  try {
+    // For a Senior Mentor booking, roomId is the nested booking's _id
+    const session = await SeniorSession.findOne({ 'bookings._id': roomId }).lean() as any;
+    if (!session) return false;
+
+    // Strictly one-to-one sessions only
+    const sessionTypeStr = session.sessionType as string | undefined;
+    if (sessionTypeStr && sessionTypeStr !== 'one_to_one' && sessionTypeStr !== '1_on_1') {
+      return false;
+    }
+
+    const booking = (session.bookings || []).find((b: any) => b._id.toString() === roomId);
+    if (!booking) return false;
+
+    // Verify booking is eligible for live call according to existing lifecycle
+    if ((booking.status as string) !== 'in_progress') return false;
+
+    // Authorize associated Mentee/Junior
+    const menteeId = (booking.menteeId || booking.bookedBy)?.toString();
+    if (menteeId && userId === menteeId) return true;
+
+    // Authorize Senior Mentor who owns the session
+    if (session.mentorId && session.mentorId.toString() === userId) return true;
+
+    // Authorize via linked standard mentor profile alias if applicable
+    const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
+    if (mentor && mentor.userId?.toString() === userId) return true;
+
+    return false;
+  } catch (error: any) {
+    LoggerUtil.warn(`isSeniorOneToOneSessionMember check failed: ${error.message}`);
     return false;
   }
 }
@@ -141,6 +178,14 @@ async function getRoomAccess(userId: string, roomId: string): Promise<{ allowed:
     }
   } catch (error: any) {
     LoggerUtil.warn(`Group Session check failed: ${error.message}`);
+  }
+
+  // 4. Senior Mentor 1:1 room (bookingId is used as roomId; strictly 1:1 max capacity 2)
+  try {
+    const senior1on1Allowed = await isSeniorOneToOneSessionMember(userId, roomId);
+    if (senior1on1Allowed) return { allowed: true, maxCapacity: 2 };
+  } catch (error: any) {
+    LoggerUtil.warn(`Senior Mentor 1:1 check failed: ${error.message}`);
   }
 
   return { allowed: false, maxCapacity: 0 };
