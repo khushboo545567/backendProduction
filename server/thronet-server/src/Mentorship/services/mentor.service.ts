@@ -765,33 +765,34 @@ class MentorService {
       const name = `${firstName} ${lastName}`.trim();
       const profilePic = mentor.profilePic || user?.profilePic || null;
 
+      const mentorIds = [mentor.mentorId, mentor.userId].filter(Boolean);
+
       // Stats calculations
       const completedSessionsCount = await SessionMentor.countDocuments({
-        mentorId: mentor.mentorId,
+        mentorId: { $in: mentorIds },
         status: 'completed',
       });
 
       const now = new Date();
-      const upcomingCount = await SessionMentor.countDocuments({
-        mentorId: mentor.mentorId,
-        scheduledAt: { $gte: now },
-        status: { $nin: ['cancelled', 'completed', 'no_show', 'refunded'] },
-      });
 
-      const averageRating = mentor.stats?.averageRating ?? 0;
-      const totalReviews = mentor.stats?.totalReviews ?? 0;
-      const trustScore = mentor.trustScore?.score ?? mentor.stats?.trustScore ?? null;
-      const isVerified = Boolean(mentor.verification?.isVerified || mentor.isVerified);
-      const category = (Array.isArray(mentor.domains) && mentor.domains[0]) || mentor.title || 'Web Development';
-
-      // Upcoming 4 sessions list
-      const upcomingDocs = await SessionMentor.find({
-        mentorId: mentor.mentorId,
+      // Upcoming 1-on-1 sessions list
+      const upcoming1on1Docs = await SessionMentor.find({
+        mentorId: { $in: mentorIds },
         scheduledAt: { $gte: now },
         status: { $nin: ['cancelled', 'completed', 'no_show', 'refunded'] },
       })
         .sort({ scheduledAt: 1 })
-        .limit(4)
+        .limit(20)
+        .lean();
+
+      // Also find upcoming GroupSessions
+      const upcomingGroupDocs = await GroupSession.find({
+        mentorId: { $in: mentorIds },
+        scheduledAt: { $gte: now },
+        status: { $in: ['open', 'full', 'in_progress', 'draft'] },
+      })
+        .sort({ scheduledAt: 1 })
+        .limit(10)
         .lean();
 
       // Bulk resolve mentee Users and ProfilePhotos (No N+1)
@@ -799,7 +800,7 @@ class MentorService {
       const photoMap = new Map<string, string>();
 
       try {
-        const rawMenteeIds = upcomingDocs
+        const rawMenteeIds = upcoming1on1Docs
           .map((s: any) =>
             (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
             (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
@@ -808,6 +809,17 @@ class MentorService {
             null
           )
           .filter((id): id is string => Boolean(id) && typeof id === 'string');
+
+        // Also add accepted participants from group sessions if any
+        upcomingGroupDocs.forEach((g: any) => {
+          if (Array.isArray(g.participants)) {
+            g.participants.forEach((p: any) => {
+              if (p?.menteeId && typeof p.menteeId === 'string') {
+                rawMenteeIds.push(p.menteeId);
+              }
+            });
+          }
+        });
 
         const uniqueMenteeIds = [...new Set(rawMenteeIds)];
 
@@ -853,7 +865,7 @@ class MentorService {
         logger.warn(`Failed to bulk resolve mentee profile photos for dashboard: ${err?.message || err}`);
       }
 
-      const upcomingSessions = upcomingDocs.map((s: any) => {
+      const formatted1on1 = upcoming1on1Docs.map((s: any) => {
         const rawId =
           (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
           (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
@@ -885,11 +897,50 @@ class MentorService {
           menteeName,
           menteeProfilePhoto,
           title: s.title || s.sessionType || '1-on-1 Session',
-          sessionType: s.sessionType || 'Session',
+          sessionType: s.sessionType || '1-on-1 Session',
           scheduledAt: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
+          startTime: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
           status: s.status || 'pending',
+          isGroupSession: false,
+          meetingUrl: s.meetingDetails?.meetingUrl || null,
         };
       });
+
+      const formattedGroup = upcomingGroupDocs.map((g: any) => {
+        const firstParticipant = Array.isArray(g.participants) && g.participants[0];
+        const participantUser = firstParticipant?.menteeId ? userMap.get(String(firstParticipant.menteeId)) : null;
+
+        return {
+          _id: g._id,
+          sessionId: g.sessionId || String(g._id),
+          menteeId: participantUser?.userId || firstParticipant?.menteeId || null,
+          menteeName: participantUser ? `${participantUser.firstName || ''} ${participantUser.lastName || ''}`.trim() : (g.participants?.length ? `${g.participants.length} Participant${g.participants.length > 1 ? 's' : ''}` : 'Group Session'),
+          menteeProfilePhoto: participantUser?.profilePic || null,
+          title: g.title || 'Group Session',
+          sessionType: 'Group Session',
+          scheduledAt: g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString(),
+          startTime: g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString(),
+          status: g.status || 'open',
+          isGroupSession: true,
+          enrolledCount: g.currentParticipants || g.participants?.length || 0,
+          maxParticipants: g.maxParticipants || 0,
+          meetingUrl: g.meetingUrl || null,
+        };
+      });
+
+      const allUpcoming = [...formatted1on1, ...formattedGroup].sort(
+        (a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+      );
+
+      const upcomingCount = allUpcoming.length;
+
+      const averageRating = mentor.stats?.averageRating ?? 0;
+      const totalReviews = mentor.stats?.totalReviews ?? 0;
+      const trustScore = mentor.trustScore?.score ?? mentor.stats?.trustScore ?? null;
+      const isVerified = Boolean(mentor.verification?.isVerified || mentor.isVerified);
+      const category = (Array.isArray(mentor.domains) && mentor.domains[0]) || mentor.title || 'Web Development';
+
+      const upcomingSessions = allUpcoming;
 
       return {
         mentorId: mentor.mentorId,
