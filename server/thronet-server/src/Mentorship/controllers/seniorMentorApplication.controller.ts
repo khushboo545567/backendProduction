@@ -13,6 +13,18 @@ import { AuthRequest } from '@/shared/middlewares/auth.middleware';
 import PaginationHelper from '@/Mentorship/utils/pagination';
 import { Domain } from '@/shared/constants/domains';
 
+/**
+ * True when the error is the service's "not found" error.
+ * Checks name and statusCode so it works regardless of how NotFoundError is defined.
+ */
+function isNotFoundError(error: any): boolean {
+  return (
+    error?.name === 'NotFoundError' ||
+    error?.statusCode === 404 ||
+    error?.status === 404
+  );
+}
+
 class SeniorMentorApplicationController {
   /**
    * @route   POST /api/v1/mentorship/senior-mentor-applications/apply
@@ -83,12 +95,21 @@ class SeniorMentorApplicationController {
   /**
    * @route   GET /api/v1/mentorship/senior-mentor-applications/me
    * @access  Private
+   *
+   * A user who has not applied yet is a normal state, not an error:
+   * respond 200 with `data: null` so the client can branch on it and the
+   * server does not log a stack trace for every first-time visitor.
    */
   async getMyApplication(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const application = await seniorMentorApplicationService.getByUserId(req.user!.id);
       ResponseHandler.success(res, 'Application fetched successfully', application);
     } catch (error: any) {
+      if (isNotFoundError(error)) {
+        logger.info(`No senior mentor application found for user ${req.user?.id}`);
+        ResponseHandler.success(res, 'No application found', null);
+        return;
+      }
       logger.error('Error fetching own senior mentor application:', error);
       next(error);
     }
@@ -144,15 +165,14 @@ class SeniorMentorApplicationController {
     try {
       const { userId } = req.params;
       logger.info(`Entering getProfile for User ID: ${userId}`);
-      
+
       const application = await seniorMentorApplicationService.getByUserId(userId);
-      
+
       if (!application) {
         res.status(404).json({ success: false, message: 'Application profile not found' });
         return;
       }
 
-      // Re-enable ownership check against req.user.id
       if (String(application.userId) !== String(req.user!.id)) {
         logger.warn(`403 Forbidden: DB userId (${application.userId}) !== req.user.id (${req.user?.id})`);
         res.status(403).json({
@@ -161,7 +181,6 @@ class SeniorMentorApplicationController {
         });
         return;
       }
-
 
       logger.info(`Proceeding to return app completely`);
       ResponseHandler.success(res, 'Application profile fetched successfully', application);
