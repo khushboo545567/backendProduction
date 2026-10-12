@@ -105,10 +105,15 @@ class SessionController {
       const userId = req.user?.id;
       const authToken = getAuthToken(req) || undefined;
 
-      const session = await mentorshipSessionService.getSessionById(id, userId, authToken);
+      const intent = (req.query?.intent as string) || undefined;
+      const session = await mentorshipSessionService.getSessionById(id, userId, authToken, { intent });
       ResponseHandler.success(res, 'Session retrieved successfully', session);
     } catch (error: any) {
       logger.error('Failed to fetch session:', error);
+      if (error.statusCode) {
+        res.status(error.statusCode).json({ success: false, message: error.message, code: error.code });
+        return;
+      }
       next(error);
     }
   }

@@ -890,6 +890,12 @@ class MentorService {
           }
         }
 
+        const durationMinutes = Number(s.duration || (Array.isArray(s.bookings) && s.bookings[0]?.slotDuration) || 60);
+        const startTimeIso = s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString();
+        const endTimeIso = s.endedAt
+          ? new Date(s.endedAt).toISOString()
+          : new Date(new Date(startTimeIso).getTime() + durationMinutes * 60000).toISOString();
+
         return {
           _id: s._id,
           sessionId: s.sessionId || String(s._id),
@@ -898,8 +904,10 @@ class MentorService {
           menteeProfilePhoto,
           title: s.title || s.sessionType || '1-on-1 Session',
           sessionType: s.sessionType || '1-on-1 Session',
-          scheduledAt: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
-          startTime: s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString(),
+          scheduledAt: startTimeIso,
+          startTime: startTimeIso,
+          endTime: endTimeIso,
+          durationMinutes,
           status: s.status || 'pending',
           isGroupSession: false,
           meetingUrl: s.meetingDetails?.meetingUrl || null,
@@ -910,6 +918,10 @@ class MentorService {
         const firstParticipant = Array.isArray(g.participants) && g.participants[0];
         const participantUser = firstParticipant?.menteeId ? userMap.get(String(firstParticipant.menteeId)) : null;
 
+        const durationMinutes = Number(g.duration || 60);
+        const startTimeIso = g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString();
+        const endTimeIso = new Date(new Date(startTimeIso).getTime() + durationMinutes * 60000).toISOString();
+
         return {
           _id: g._id,
           sessionId: g.sessionId || String(g._id),
@@ -918,8 +930,10 @@ class MentorService {
           menteeProfilePhoto: participantUser?.profilePic || null,
           title: g.title || 'Group Session',
           sessionType: 'Group Session',
-          scheduledAt: g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString(),
-          startTime: g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString(),
+          scheduledAt: startTimeIso,
+          startTime: startTimeIso,
+          endTime: endTimeIso,
+          durationMinutes,
           status: g.status || 'open',
           isGroupSession: true,
           enrolledCount: g.currentParticipants || g.participants?.length || 0,
@@ -961,6 +975,7 @@ class MentorService {
           trustScore,
         },
         isVerified,
+        serverNow: new Date().toISOString(),
         upcomingSessions,
       };
     } catch (error: any) {

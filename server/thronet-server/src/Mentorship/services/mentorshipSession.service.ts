@@ -464,7 +464,8 @@ class MentorshipSessionService {
   async getSessionById(
     sessionId: string,
     userId?: string,
-    _authToken?: string
+    _authToken?: string,
+    options?: { intent?: string }
   ): Promise<any> {
     try {
       logger.info(`Fetching session: ${sessionId}`);
@@ -479,6 +480,44 @@ class MentorshipSessionService {
 
         if (!isMentor && !isMentee) {
           throw new ForbiddenError('You are not authorized to view this session');
+        }
+
+        if (options?.intent === 'join') {
+          // If session is already in_progress, allow participants to join/reconnect
+          if (session.status !== 'in_progress') {
+            const bookingScheduledAt = (session.bookings && session.bookings[0]?.scheduledAt) || session.scheduledAt;
+            const startMs = new Date(bookingScheduledAt).getTime();
+            const earlyMinutes = isMentor ? 5 : 0;
+            const joinOpensAt = startMs - earlyMinutes * 60 * 1000;
+            const durationMinutes = Number(session.duration || (session.bookings as any)?.[0]?.slotDuration || 60);
+            const endMs = session.endedAt
+              ? new Date(session.endedAt).getTime()
+              : startMs + Math.max(durationMinutes, 15) * 60 * 1000;
+            const now = Date.now();
+
+            if (
+              session.status === 'cancelled' ||
+              session.status === 'completed' ||
+              session.status === 'no_show' ||
+              session.status === 'refunded'
+            ) {
+              const err: any = new BadRequestError('Session has ended or is no longer active');
+              err.code = 'SESSION_ENDED';
+              throw err;
+            }
+
+            if (now < joinOpensAt) {
+              const err: any = new BadRequestError('Session cannot be started yet — too early.');
+              err.code = 'TOO_EARLY';
+              throw err;
+            }
+
+            if (now > endMs) {
+              const err: any = new BadRequestError('Session start window has expired.');
+              err.code = 'WINDOW_EXPIRED';
+              throw err;
+            }
+          }
         }
       }
 
