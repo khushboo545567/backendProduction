@@ -51,7 +51,8 @@ const DEFAULT_ORIGINS = [
     'https://throne8-client-main.vercel.app',
 ];
 
-const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] || '';
+const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] ||   process.env['CORS_ALLOWED_ORIGINS'] ||
+'';
 const allowedOrigins: string[] = envOrigins
     ? envOrigins.split(',').map((o) => o.trim()).filter(Boolean)
     : DEFAULT_ORIGINS;
