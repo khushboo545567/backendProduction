@@ -1,4 +1,4 @@
-import { User, ProfilePhoto, Education } from '@/shared/models/index.models';
+import { User, ProfilePhoto, Education, Experience } from '@/shared/models/index.models';
 import mongoose from 'mongoose';
 import Company from '@/company/models/Company.model';
 import { Mentor, SessionMentor, GroupSession } from '../models';
@@ -442,6 +442,53 @@ class MentorService {
         logger.warn(`Failed to fetch education for mentors: ${eduErr.message}`);
       }
 
+      // Batch fetch work experience company for all returned mentors (1 query)
+      try {
+        const userIds = finalMentors.map((m: any) => m.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const expDocs = await Experience.find(
+            { userId: { $in: userIds }, isDeleted: false, isArchived: false },
+            { userId: 1, companyName: 1, startDate: 1, endDate: 1, currentlyWorking: 1 }
+          ).lean();
+          const expByUser: Record<string, any[]> = {};
+          for (const d of expDocs) {
+            (expByUser[d.userId] ||= []).push(d);
+          }
+          finalMentors = finalMentors.map((m: any) => {
+            const list = expByUser[m.userId] || [];
+            let resolvedCompany = '';
+            if (list.length > 0) {
+              const current = list.filter((e: any) => e.currentlyWorking || !e.endDate);
+              const chosen = current.length
+                ? current.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  )
+                : list.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  );
+              if (typeof chosen?.companyName === 'string' && /[a-zA-Z0-9]/.test(chosen.companyName)) {
+                resolvedCompany = chosen.companyName.trim();
+              }
+            }
+            if (!resolvedCompany && typeof m.user?.company === 'string' && /[a-zA-Z0-9]/.test(m.user.company)) {
+              resolvedCompany = m.user.company.trim();
+            }
+            return {
+              ...m,
+              ...(resolvedCompany ? { company: resolvedCompany } : {}),
+            };
+          });
+        }
+      } catch (expErr: any) {
+        logger.warn(`Failed to fetch experience for mentors: ${expErr.message}`);
+      }
+
       const meta = PaginationHelper.calculateMeta({
         page: validPage,
         limit: validLimit,
@@ -477,7 +524,7 @@ class MentorService {
           userId: mentorObj.userId,
           'flags.isDeleted': false,
         })
-          .select('userId email firstName lastName fullName profilePhotoId')
+          .select('userId email firstName lastName fullName profilePhotoId company')
           .lean();
       } catch (error: any) {
         logger.error(`Failed to fetch user for mentor enrichment: ${error.message}`, {
