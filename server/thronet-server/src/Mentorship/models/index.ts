@@ -1,4 +1,3 @@
-
 // all models of mentorship file
 import AdminAction from '@/Mentorship/models/AdminAction';
 import Availability from '@/Mentorship/models/Availability';
@@ -23,11 +22,26 @@ import Waitlist from '@/Mentorship/models/Waitlist';
 import ReviewReport from '@/Mentorship/models/ReviewReport';
 
 export {
-     // all models of mentorship file
-<<<<<<< Updated upstream
-        AdminAction, Availability, CancellationLog, Coupon, GroupSession, MatchScore, Mentor, MentorshipAnalytics, MentorshipReview, Notification, Package, PackageCredit, Portfolio, Query, RescheduleLog, Resume, SessionMentor, SeniorSession, TimeSlot, Waitlist,
-=======
-        AdminAction, Availability, CancellationLog, Coupon, GroupSession, MatchScore, Mentor, MentorshipAnalytics, MentorshipReview, Notification, Package, PackageCredit, Portfolio, Query, RescheduleLog, Resume, ReviewReport, SessionMentor, TimeSlot, Waitlist,
->>>>>>> Stashed changes
-    
-}
+  // all models of mentorship file
+  AdminAction,
+  Availability,
+  CancellationLog,
+  Coupon,
+  GroupSession,
+  MatchScore,
+  Mentor,
+  MentorshipAnalytics,
+  MentorshipReview,
+  Notification,
+  Package,
+  PackageCredit,
+  Portfolio,
+  Query,
+  RescheduleLog,
+  Resume,
+  ReviewReport,
+  SessionMentor,
+  SeniorSession,
+  TimeSlot,
+  Waitlist,
+};
