@@ -10,5 +10,6 @@ export * from './mentorshipCache';
 export * from './notificationCache';
 export * from './chatCache';
 export * from './profileCache';
+export * from './connectionCache';
 export { default as CacheHelper } from './cacheHelper';
 

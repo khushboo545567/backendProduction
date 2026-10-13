@@ -1,4 +1,4 @@
-﻿// thronet-server/src/connections/models/ConnectionBlock.ts
+// thronet-server/src/connections/models/ConnectionBlock.ts
 import mongoose, { Document, Schema, Model, Types } from 'mongoose';
 
 export enum BlockReason {
@@ -61,6 +61,18 @@ ConnectionBlockSchema.methods.unblock = function (this: IConnectionBlock) {
 ConnectionBlockSchema.statics.isBlocked = function (blockerId: string, blockedId: string) {
     return this.exists({ blockerId, blockedId, isActive: true }).then((r: any) => !!r);
 };
+
+// ── Cache Sync Hook on Block ──────────────────────────────────
+import { ConnectionCacheRepository } from '@/shared/cache/connectionCache';
+ConnectionBlockSchema.post('save', async function (doc: any) {
+    try {
+        if (doc?.blockerId && doc?.blockedId && doc.isActive) {
+            await ConnectionCacheRepository.handleUserBlock(String(doc.blockerId), String(doc.blockedId));
+        }
+    } catch {
+        // fail-safe
+    }
+});
 
 const ConnectionBlock = mongoose.model<IConnectionBlock, IConnectionBlockModel>(
     'ConnectionBlock',

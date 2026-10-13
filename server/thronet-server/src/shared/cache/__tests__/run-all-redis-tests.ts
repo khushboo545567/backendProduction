@@ -26,6 +26,7 @@ const testFiles = [
   'src/shared/cache/__tests__/notification-cache.test.ts',
   'src/shared/cache/__tests__/chat-cache.test.ts',
   'src/shared/cache/__tests__/profile-cache.test.ts',
+  'src/shared/cache/__tests__/connection-cache.test.ts',
 ];
 
 async function runTestFile(file: string): Promise<boolean> {
