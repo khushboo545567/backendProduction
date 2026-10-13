@@ -24,6 +24,7 @@ const testFiles = [
   'src/auth/__tests__/sessionless-auth.test.ts',
   'src/shared/queues/__tests__/queue.test.ts',
   'src/shared/cache/__tests__/notification-cache.test.ts',
+  'src/shared/cache/__tests__/chat-cache.test.ts',
 ];
 
 async function runTestFile(file: string): Promise<boolean> {

@@ -66,6 +66,15 @@ class MessageController {
         }
     }
 
+    async getUnreadCount(req: AuthRequest, res: Response) {
+        try {
+            const count = await messageService.getUnreadCount(userId(req));
+            return ResponseUtil.success(res, { unreadCount: count }, 'Unread message count fetched');
+        } catch (err: any) {
+            return ResponseUtil.error(res, err.message, err.status || 500);
+        }
+    }
+
     /**
      * POST /messages
      * Send a message
