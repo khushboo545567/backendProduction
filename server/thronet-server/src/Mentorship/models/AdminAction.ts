@@ -64,6 +64,7 @@ const AdminActionSchema = new Schema<IAdminAction>(
         // Review Management
         'review_approve',
         'review_reject',
+        'review_hide',
         'review_delete',
         'review_flag',
         
@@ -86,6 +87,8 @@ const AdminActionSchema = new Schema<IAdminAction>(
         // Report Actions
         'report_generate',
         'report_export',
+        'report_resolve',
+        'report_dismiss',
         
         // Other
         'other',

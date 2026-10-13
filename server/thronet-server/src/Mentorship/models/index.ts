@@ -20,9 +20,14 @@ import SessionMentor from '@/Mentorship/models/SessionMentor';
 import SeniorSession from '@/Mentorship/models/SeniorSession';
 import TimeSlot from '@/Mentorship/models/TimeSlot';
 import Waitlist from '@/Mentorship/models/Waitlist';
+import ReviewReport from '@/Mentorship/models/ReviewReport';
 
 export {
      // all models of mentorship file
+<<<<<<< Updated upstream
         AdminAction, Availability, CancellationLog, Coupon, GroupSession, MatchScore, Mentor, MentorshipAnalytics, MentorshipReview, Notification, Package, PackageCredit, Portfolio, Query, RescheduleLog, Resume, SessionMentor, SeniorSession, TimeSlot, Waitlist,
+=======
+        AdminAction, Availability, CancellationLog, Coupon, GroupSession, MatchScore, Mentor, MentorshipAnalytics, MentorshipReview, Notification, Package, PackageCredit, Portfolio, Query, RescheduleLog, Resume, ReviewReport, SessionMentor, TimeSlot, Waitlist,
+>>>>>>> Stashed changes
     
 }

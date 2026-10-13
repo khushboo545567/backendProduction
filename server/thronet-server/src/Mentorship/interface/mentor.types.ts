@@ -185,6 +185,8 @@ export interface MentorWithRelations extends IMentor {
   nextAvailableSlot?: Date;
   // ⭐ NEW: computed per-request for the currently authenticated viewer
   isSavedByCurrentUser?: boolean;
+  college?: string;
+  degree?: string;
 }
 
 export interface CreateMentorInput {

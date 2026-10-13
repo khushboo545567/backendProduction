@@ -1,4 +1,4 @@
-import { User, ProfilePhoto } from '@/shared/models/index.models';
+import { User, ProfilePhoto, Education } from '@/shared/models/index.models';
 import mongoose from 'mongoose';
 import Company from '@/company/models/Company.model';
 import { Mentor, SessionMentor, GroupSession } from '../models';
@@ -140,7 +140,11 @@ class MentorService {
   /**
    * Get mentor by mentorId (UUID) with relations
    */
-  async getMentorById(mentorId: string, authToken?: string): Promise<MentorWithRelations> {
+  async getMentorById(
+    mentorId: string,
+    authToken?: string,
+    currentUser?: any
+  ): Promise<MentorWithRelations> {
     try {
       logger.info(`Fetching mentor: ${mentorId}`);
 
@@ -149,8 +153,16 @@ class MentorService {
         throw new NotFoundError('MENTOR_NOT_FOUND');
       }
 
-      if (mentor.status !== MentorStatus.ACTIVE && !authToken) {
-        throw new ForbiddenError('Mentor profile is not available');
+      if (mentor.status !== MentorStatus.ACTIVE) {
+        const currentUserId = currentUser?.userId || currentUser?.id;
+        const isOwner =
+          Boolean(currentUserId) &&
+          String(currentUserId) === String(mentor.userId);
+        const isAdmin = currentUser?.role === 'admin';
+
+        if (!isOwner && !isAdmin) {
+          throw new ForbiddenError('Mentor profile is not available');
+        }
       }
 
       return await this.enrichMentorWithRelations(mentor, authToken);
@@ -387,6 +399,49 @@ class MentorService {
         mentors.map((mentor: any) => this.enrichMentorWithRelations(mentor, authToken))
       );
 
+      // Batch fetch education for all returned mentors (1 query)
+      let finalMentors: any[] = enrichedMentors;
+      try {
+        const userIds = enrichedMentors.map((m: any) => m.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const eduDocs = await Education.find(
+            { userId: { $in: userIds }, isDeleted: false, isArchived: false },
+            { userId: 1, schoolCollegeName: 1, degree: 1, startDate: 1, endDate: 1, isOngoing: 1 }
+          ).lean();
+          const eduByUser: Record<string, any[]> = {};
+          for (const d of eduDocs) {
+            (eduByUser[d.userId] ||= []).push(d);
+          }
+          finalMentors = enrichedMentors.map((m: any) => {
+            const list = eduByUser[m.userId] || [];
+            if (!list.length) return m;
+            const ongoing = list.filter((e: any) => e.isOngoing || !e.endDate);
+            const chosen = ongoing.length
+              ? ongoing.reduce((a: any, b: any) =>
+                  (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                  (a.startDate ? new Date(a.startDate).getTime() : 0)
+                    ? b
+                    : a
+                )
+              : list.reduce((a: any, b: any) =>
+                  (b.endDate ? new Date(b.endDate).getTime() : 0) >
+                  (a.endDate ? new Date(a.endDate).getTime() : 0)
+                    ? b
+                    : a
+                );
+            const college = typeof chosen?.schoolCollegeName === 'string' ? chosen.schoolCollegeName.trim() : '';
+            const degree = typeof chosen?.degree === 'string' ? chosen.degree.trim() : '';
+            return {
+              ...m,
+              ...(college ? { college } : {}),
+              ...(degree ? { degree } : {}),
+            };
+          });
+        }
+      } catch (eduErr: any) {
+        logger.warn(`Failed to fetch education for mentors: ${eduErr.message}`);
+      }
+
       const meta = PaginationHelper.calculateMeta({
         page: validPage,
         limit: validLimit,
@@ -394,7 +449,7 @@ class MentorService {
       });
 
       return {
-        mentors: enrichedMentors,
+        mentors: finalMentors,
         total: meta.total,
         page: meta.page,
         limit: meta.limit,
