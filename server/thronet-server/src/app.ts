@@ -48,6 +48,7 @@ app.disable('x-powered-by');
 const DEFAULT_ORIGINS = [
     'http://localhost:3000',
     'http://localhost:3001',
+    'http://localhost:5173',
     'https://throne8-client-main.vercel.app',
 ];
 
