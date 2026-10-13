@@ -24,6 +24,7 @@ import { ICompany } from '@/Mentorship/interface/company.types';
 import mentorRepository from '../repositories/mentor.repository';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 import { TrustScoreEvents } from '../events/trustScore.events';
+import { resolveUserDetails } from '@/Mentorship/utils/userPhotoHelper';
 
 class MentorService {
   /**
@@ -774,11 +775,17 @@ class MentorService {
       });
 
       const now = new Date();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
 
-      // Upcoming 1-on-1 sessions list
+      // Upcoming 1-on-1 sessions list (including active/today sessions that are not completed or cancelled)
       const upcoming1on1Docs = await SessionMentor.find({
         mentorId: { $in: mentorIds },
-        scheduledAt: { $gte: now },
+        $or: [
+          { scheduledAt: { $gte: now } },
+          { status: 'in_progress' },
+          { scheduledAt: { $gte: startOfToday }, status: { $in: ['confirmed', 'in_progress', 'pending'] } },
+        ],
         status: { $nin: ['cancelled', 'completed', 'no_show', 'refunded'] },
       })
         .sort({ scheduledAt: 1 })
@@ -788,107 +795,64 @@ class MentorService {
       // Also find upcoming GroupSessions
       const upcomingGroupDocs = await GroupSession.find({
         mentorId: { $in: mentorIds },
-        scheduledAt: { $gte: now },
+        $or: [
+          { scheduledAt: { $gte: now } },
+          { status: 'in_progress' },
+          { scheduledAt: { $gte: startOfToday }, status: { $in: ['open', 'full', 'in_progress', 'draft'] } },
+        ],
         status: { $in: ['open', 'full', 'in_progress', 'draft'] },
       })
         .sort({ scheduledAt: 1 })
         .limit(10)
         .lean();
 
-      // Bulk resolve mentee Users and ProfilePhotos (No N+1)
-      const userMap = new Map<string, any>();
-      const photoMap = new Map<string, string>();
+      // Collect all raw mentee IDs across 1-on-1 and group sessions for bulk resolution
+      const rawMenteeIds: string[] = [];
 
-      try {
-        const rawMenteeIds = upcoming1on1Docs
-          .map((s: any) =>
-            (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
-            (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
-            s.menteeId ||
-            s.bookedBy ||
-            null
-          )
-          .filter((id): id is string => Boolean(id) && typeof id === 'string');
-
-        // Also add accepted participants from group sessions if any
-        upcomingGroupDocs.forEach((g: any) => {
-          if (Array.isArray(g.participants)) {
-            g.participants.forEach((p: any) => {
-              if (p?.menteeId && typeof p.menteeId === 'string') {
-                rawMenteeIds.push(p.menteeId);
-              }
-            });
-          }
-        });
-
-        const uniqueMenteeIds = [...new Set(rawMenteeIds)];
-
-        if (uniqueMenteeIds.length > 0) {
-          const objectIds = uniqueMenteeIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
-          const uuids = uniqueMenteeIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
-
-          const orConditions: any[] = [];
-          if (objectIds.length > 0) orConditions.push({ _id: { $in: objectIds } });
-          if (uuids.length > 0) orConditions.push({ userId: { $in: uuids } });
-
-          if (orConditions.length > 0) {
-            const users = await User.find(
-              { $or: orConditions },
-              { _id: 1, userId: 1, firstName: 1, lastName: 1, fullName: 1, profilePhotoId: 1, profilePic: 1 }
-            ).lean();
-
-            users.forEach((u: any) => {
-              if (u.userId) userMap.set(String(u.userId), u);
-              if (u._id) userMap.set(String(u._id), u);
-            });
-
-            const photoIds = users
-              .map((u: any) => u.profilePhotoId)
-              .filter((id): id is string => Boolean(id));
-
-            if (photoIds.length > 0) {
-              const photos = await ProfilePhoto.find(
-                { photoId: { $in: photoIds }, isDeleted: false },
-                { photoId: 1, cloudinarySecureUrl: 1, cloudinaryUrl: 1 }
-              ).lean();
-
-              photos.forEach((p: any) => {
-                const url = p.cloudinarySecureUrl || p.cloudinaryUrl || null;
-                if (url && p.photoId) {
-                  photoMap.set(String(p.photoId), url);
-                }
-              });
-            }
-          }
+      upcoming1on1Docs.forEach((s: any) => {
+        if (Array.isArray(s.bookings)) {
+          s.bookings.forEach((b: any) => {
+            if (b?.menteeId) rawMenteeIds.push(String(b.menteeId));
+            if (b?.bookedBy) rawMenteeIds.push(String(b.bookedBy));
+          });
         }
-      } catch (err: any) {
-        logger.warn(`Failed to bulk resolve mentee profile photos for dashboard: ${err?.message || err}`);
-      }
+        if (Array.isArray(s.participants)) {
+          s.participants.forEach((p: any) => {
+            if (p?.menteeId) rawMenteeIds.push(String(p.menteeId));
+            if (p?.userId) rawMenteeIds.push(String(p.userId));
+          });
+        }
+        if (s.menteeId) rawMenteeIds.push(String(s.menteeId));
+        if (s.bookedBy) rawMenteeIds.push(String(s.bookedBy));
+      });
+
+      upcomingGroupDocs.forEach((g: any) => {
+        if (Array.isArray(g.participants)) {
+          g.participants.forEach((p: any) => {
+            if (p?.menteeId) rawMenteeIds.push(String(p.menteeId));
+            if (p?.userId) rawMenteeIds.push(String(p.userId));
+          });
+        }
+      });
+
+      // Bulk resolve all mentee details and photo URLs (Zero N+1)
+      const userDetailsMap = await resolveUserDetails(rawMenteeIds);
 
       const formatted1on1 = upcoming1on1Docs.map((s: any) => {
         const rawId =
-          (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
-          (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
+          (Array.isArray(s.bookings) && (s.bookings.find((b: any) => b?.menteeId || b?.bookedBy)?.menteeId || s.bookings[0]?.bookedBy)) ||
+          (Array.isArray(s.participants) && (s.participants.find((p: any) => p?.menteeId || p?.userId)?.menteeId || s.participants[0]?.userId)) ||
           s.menteeId ||
           s.bookedBy ||
           null;
 
-        const menteeUser = rawId ? userMap.get(String(rawId)) : null;
+        const resolved = rawId ? userDetailsMap.get(String(rawId)) : null;
 
-        let menteeId = menteeUser?.userId || rawId || null;
-        let menteeName = s.bookedMenteeName || 'Student';
-        let menteeProfilePhoto: string | null = null;
-
-        if (menteeUser) {
-          const directName = `${menteeUser.firstName || ''} ${menteeUser.lastName || ''}`.trim();
-          menteeName = directName || menteeUser.fullName || s.bookedMenteeName || 'Student';
-
-          if (menteeUser.profilePic) {
-            menteeProfilePhoto = menteeUser.profilePic;
-          } else if (menteeUser.profilePhotoId) {
-            menteeProfilePhoto = photoMap.get(String(menteeUser.profilePhotoId)) || null;
-          }
-        }
+        let menteeId = resolved?.userId || (rawId ? String(rawId) : null);
+        let menteeName = (resolved && resolved.name && resolved.name !== 'User')
+          ? resolved.name
+          : (s.bookedMenteeName || 'Student');
+        let menteeProfilePhoto = resolved?.photoUrl || null;
 
         const durationMinutes = Number(s.duration || (Array.isArray(s.bookings) && s.bookings[0]?.slotDuration) || 60);
         const startTimeIso = s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString();
@@ -916,18 +880,26 @@ class MentorService {
 
       const formattedGroup = upcomingGroupDocs.map((g: any) => {
         const firstParticipant = Array.isArray(g.participants) && g.participants[0];
-        const participantUser = firstParticipant?.menteeId ? userMap.get(String(firstParticipant.menteeId)) : null;
+        const participantId = firstParticipant?.menteeId || firstParticipant?.userId || null;
+        const resolved = participantId ? userDetailsMap.get(String(participantId)) : null;
 
         const durationMinutes = Number(g.duration || 60);
         const startTimeIso = g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString();
         const endTimeIso = new Date(new Date(startTimeIso).getTime() + durationMinutes * 60000).toISOString();
 
+        let menteeName = 'Group Session';
+        if (resolved && resolved.name && resolved.name !== 'User') {
+          menteeName = resolved.name;
+        } else if (g.participants?.length) {
+          menteeName = `${g.participants.length} Participant${g.participants.length > 1 ? 's' : ''}`;
+        }
+
         return {
           _id: g._id,
           sessionId: g.sessionId || String(g._id),
-          menteeId: participantUser?.userId || firstParticipant?.menteeId || null,
-          menteeName: participantUser ? `${participantUser.firstName || ''} ${participantUser.lastName || ''}`.trim() : (g.participants?.length ? `${g.participants.length} Participant${g.participants.length > 1 ? 's' : ''}` : 'Group Session'),
-          menteeProfilePhoto: participantUser?.profilePic || null,
+          menteeId: resolved?.userId || (participantId ? String(participantId) : null),
+          menteeName,
+          menteeProfilePhoto: resolved?.photoUrl || null,
           title: g.title || 'Group Session',
           sessionType: 'Group Session',
           scheduledAt: startTimeIso,
