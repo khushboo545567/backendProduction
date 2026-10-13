@@ -9,11 +9,8 @@ C:\Users\sharm\Desktop\throne8-servers-main\docker-compose.prod-minimal.yml
 C:\Users\sharm\Desktop\throne8-servers-main\docker-compose.prod.yml
 C:\Users\sharm\Desktop\throne8-servers-main\docker-compose.yml
 C:\Users\sharm\Desktop\throne8-servers-main\old_mentorshipAnalytics.service.ts
-C:\Users\sharm\Desktop\throne8-servers-main\package-lock.json
 C:\Users\sharm\Desktop\throne8-servers-main\package.json
-C:\Users\sharm\Desktop\throne8-servers-main\rcStudyGrouprouterssearch.routes.ts
 C:\Users\sharm\Desktop\throne8-servers-main\readme.md
-C:\Users\sharm\Desktop\throne8-servers-main\structure.txt
 C:\Users\sharm\Desktop\throne8-servers-main\.github\workflows\deploy.yml
 C:\Users\sharm\Desktop\throne8-servers-main\certs\live\yourdomain.com\fullchain.pem
 C:\Users\sharm\Desktop\throne8-servers-main\certs\live\yourdomain.com\privkey.pem
@@ -75,11 +72,9 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\Dockerfile
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\fix-comments-v2.ps1
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\fix-homepost-comments.ps1
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\generate-scores.ts
-C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\package-lock.json
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\package.json
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\railway_vars.json
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\server.ts
-C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src.zip
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\test-hang.js
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\triggerCron.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\tsconfig.check.json
@@ -249,6 +244,7 @@ C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\company\wo
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\company\workersCompany\media.worker.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\company\workersCompany\notification.worker.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\company\workersCompany\post.worker.ts
+C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\config\features.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\config\kafka.config.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\config\cache\aws.config.ts
 C:\Users\sharm\Desktop\throne8-servers-main\server\thronet-server\src\config\cache\circuitBreaker.ts
