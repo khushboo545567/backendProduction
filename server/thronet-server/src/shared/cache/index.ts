@@ -9,5 +9,6 @@ export * from './authCache';
 export * from './mentorshipCache';
 export * from './notificationCache';
 export * from './chatCache';
+export * from './profileCache';
 export { default as CacheHelper } from './cacheHelper';
 
