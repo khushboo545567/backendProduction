@@ -17,6 +17,10 @@ import MentorshipAnalytics from '@/Mentorship/models/mentorshipAnalytics';
 import { User } from '@/auth/models';
 import { Notification } from '@/Mentorship/models';
 import notificationService, { NotificationType, NotificationChannel } from '../services/notification.service';
+import SeniorMentorApplication from '@/Mentorship/models/SeniorMentorApplication';
+import Mentor from '@/Mentorship/models/Mentor';
+import { MentorStatus } from '@/Mentorship/interface/mentor.types';
+import { ApplicationStatus } from '@/Mentorship/interface/seniorMentorApplication.types';
 
 class MentorController {
   /**
@@ -518,6 +522,65 @@ try {
       next(error);
     }
   }
+  /**
+   * @route   GET /api/v1/mentorship/mentors/me/roles
+   * @desc    Returns the current user's approval status across all three workspace
+   *          roles (mentee, seniorMentor, industryMentor) in one call.
+   *          Both lookups run in parallel and are NEVER short-circuited.
+   * @access  Private
+   */
+  async getMyRoles(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.user!.id;
+
+      // Parallel — truly independent, never if/else chain
+      const [mentorDoc, seniorDoc] = await Promise.all([
+        Mentor.findOne({ userId }).select('mentorId status').lean(),
+        SeniorMentorApplication.findOne({ userId }).select('seniorMentorId verificationStatus').lean(),
+      ]);
+
+      // ── Shared normalizers: case-insensitive so DB variants never break ────────
+      type RoleStatus = 'approved' | 'pending' | 'rejected' | 'none';
+
+      const normalizeMentorStatus = (raw?: string | null): RoleStatus => {
+        const s = (raw ?? '').toLowerCase().trim();
+        if (s === 'active')                               return 'approved';
+        if (s === 'pending_approval' || s === 'pending')  return 'pending';
+        if (s === 'suspended' || s === 'rejected')        return 'rejected';
+        if (s === '')                                     return 'none';
+        return 'pending'; // on_break, inactive → provisionally pending
+      };
+
+      const normalizeAppStatus = (raw?: string | null): RoleStatus => {
+        const s = (raw ?? '').toLowerCase().trim();
+        if (s === 'verified')                            return 'approved';
+        if (s === 'pending' || s === 'under_review')     return 'pending';
+        if (s === 'rejected')                            return 'rejected';
+        if (s === '')                                    return 'none';
+        return 'pending';
+      };
+
+      // ── Senior Mentor (Become Mentor flow → Mentor collection) ───────────────
+      const seniorMentor: RoleStatus   = normalizeMentorStatus((mentorDoc as any)?.status);
+      const seniorMentorId: string | undefined = (mentorDoc as any)?.mentorId;
+
+      // ── Industry Mentor (Become Senior Mentor → SeniorMentorApplication) ─────
+      // NOTE: model field is "seniorMentorId", NOT "applicationId" (was the original bug)
+      const industryMentor: RoleStatus    = normalizeAppStatus((seniorDoc as any)?.verificationStatus);
+      const industryMentorId: string | undefined = (seniorDoc as any)?.seniorMentorId;
+
+      ResponseHandler.success(res, 'Role status fetched successfully', {
+        mentee:         'approved' as RoleStatus, // every authenticated user is always a mentee
+        seniorMentor,
+        industryMentor,
+        ...(seniorMentorId   ? { seniorMentorId }   : {}),
+        ...(industryMentorId ? { industryMentorId } : {}),
+      });
+    } catch (error: any) {
+      logger.error('Error fetching my roles:', error);
+      next(error);
+    }
+  }
 }
 
-export default new MentorController();
+export default new MentorController();
