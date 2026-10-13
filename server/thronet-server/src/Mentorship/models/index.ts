@@ -1,4 +1,3 @@
-
 // all models of mentorship file
 import AdminAction from '@/Mentorship/models/AdminAction';
 import Availability from '@/Mentorship/models/Availability';
@@ -20,9 +19,29 @@ import SessionMentor from '@/Mentorship/models/SessionMentor';
 import SeniorSession from '@/Mentorship/models/SeniorSession';
 import TimeSlot from '@/Mentorship/models/TimeSlot';
 import Waitlist from '@/Mentorship/models/Waitlist';
+import ReviewReport from '@/Mentorship/models/ReviewReport';
 
 export {
-     // all models of mentorship file
-        AdminAction, Availability, CancellationLog, Coupon, GroupSession, MatchScore, Mentor, MentorshipAnalytics, MentorshipReview, Notification, Package, PackageCredit, Portfolio, Query, RescheduleLog, Resume, SessionMentor, SeniorSession, TimeSlot, Waitlist,
-    
-}
+        // all models of mentorship file
+        AdminAction,
+        Availability,
+        CancellationLog,
+        Coupon,
+        GroupSession,
+        MatchScore,
+        Mentor,
+        MentorshipAnalytics,
+        MentorshipReview,
+        Notification,
+        Package,
+        PackageCredit,
+        Portfolio,
+        Query,
+        RescheduleLog,
+        Resume,
+        ReviewReport,
+        SessionMentor,
+        SeniorSession,
+        TimeSlot,
+        Waitlist,
+};

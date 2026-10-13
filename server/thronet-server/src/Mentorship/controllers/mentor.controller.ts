@@ -110,13 +110,13 @@ class MentorController {
 
   /**
    * @route   GET /api/v1/mentorship/mentors/:id
-   * @access  Public
+   * @access  Public (non-active mentors: admin or the mentor owner only)
    */
   async getProfile(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
       const authToken = req.headers.authorization?.split(' ')[1];
-      const mentor: any = await mentorService.getMentorById(id, authToken);
+      const mentor: any = await mentorService.getMentorById(id, authToken, req.user);
 
       MentorshipAnalytics.recordEvent('mentor_analytics', 'mentor', id, 'views').catch((err: any) =>
         logger.error('Failed to record mentor profile view:', err)
@@ -164,19 +164,19 @@ class MentorController {
           (async () => {
             let viewerName = 'Someone';
 
-try {
-  const viewer = await User.findByUserId(viewerId);
+            try {
+              const viewer = await User.findByUserId(viewerId);
 
-  if (viewer) {
-    viewerName =
-      viewer.fullName ||
-      viewer.email ||
-      viewer.firstName ||
-      'Someone';
-  }
-} catch (err: any) {
-  logger.error('Failed to resolve profile viewer:', err);
-}
+              if (viewer) {
+                viewerName =
+                  viewer.fullName ||
+                  viewer.email ||
+                  viewer.firstName ||
+                  'Someone';
+              }
+            } catch (err: any) {
+              logger.error('Failed to resolve profile viewer:', err);
+            }
             const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
             const alreadyNotified = await Notification.findOne({
               userId: mentorUserId,
@@ -198,7 +198,7 @@ try {
                 priority: 'low',
                 data: {
                   title: 'Profile Viewed',
-                message: `${viewerName} viewed your profile.`,
+                  message: `${viewerName} viewed your profile.`,
                   viewerId,
                 },
               });
@@ -392,9 +392,9 @@ try {
 
       const sort: MentorSortOptions | undefined = req.query.sortBy
         ? {
-            field: req.query.sortBy as any,
-            order: (req.query.sortOrder as 'asc' | 'desc') || 'desc',
-          }
+          field: req.query.sortBy as any,
+          order: (req.query.sortOrder as 'asc' | 'desc') || 'desc',
+        }
         : undefined;
 
       const authToken = req.headers.authorization?.split(' ')[1];
@@ -544,36 +544,36 @@ try {
 
       const normalizeMentorStatus = (raw?: string | null): RoleStatus => {
         const s = (raw ?? '').toLowerCase().trim();
-        if (s === 'active')                               return 'approved';
-        if (s === 'pending_approval' || s === 'pending')  return 'pending';
-        if (s === 'suspended' || s === 'rejected')        return 'rejected';
-        if (s === '')                                     return 'none';
+        if (s === 'active') return 'approved';
+        if (s === 'pending_approval' || s === 'pending') return 'pending';
+        if (s === 'suspended' || s === 'rejected') return 'rejected';
+        if (s === '') return 'none';
         return 'pending'; // on_break, inactive → provisionally pending
       };
 
       const normalizeAppStatus = (raw?: string | null): RoleStatus => {
         const s = (raw ?? '').toLowerCase().trim();
-        if (s === 'verified')                            return 'approved';
-        if (s === 'pending' || s === 'under_review')     return 'pending';
-        if (s === 'rejected')                            return 'rejected';
-        if (s === '')                                    return 'none';
+        if (s === 'verified') return 'approved';
+        if (s === 'pending' || s === 'under_review') return 'pending';
+        if (s === 'rejected') return 'rejected';
+        if (s === '') return 'none';
         return 'pending';
       };
 
       // ── Senior Mentor (Become Mentor flow → Mentor collection) ───────────────
-      const seniorMentor: RoleStatus   = normalizeMentorStatus((mentorDoc as any)?.status);
+      const seniorMentor: RoleStatus = normalizeMentorStatus((mentorDoc as any)?.status);
       const seniorMentorId: string | undefined = (mentorDoc as any)?.mentorId;
 
       // ── Industry Mentor (Become Senior Mentor → SeniorMentorApplication) ─────
       // NOTE: model field is "seniorMentorId", NOT "applicationId" (was the original bug)
-      const industryMentor: RoleStatus    = normalizeAppStatus((seniorDoc as any)?.verificationStatus);
+      const industryMentor: RoleStatus = normalizeAppStatus((seniorDoc as any)?.verificationStatus);
       const industryMentorId: string | undefined = (seniorDoc as any)?.seniorMentorId;
 
       ResponseHandler.success(res, 'Role status fetched successfully', {
-        mentee:         'approved' as RoleStatus, // every authenticated user is always a mentee
+        mentee: 'approved' as RoleStatus, // every authenticated user is always a mentee
         seniorMentor,
         industryMentor,
-        ...(seniorMentorId   ? { seniorMentorId }   : {}),
+        ...(seniorMentorId ? { seniorMentorId } : {}),
         ...(industryMentorId ? { industryMentorId } : {}),
       });
     } catch (error: any) {
@@ -583,4 +583,4 @@ try {
   }
 }
 
-export default new MentorController();
+export default new MentorController();

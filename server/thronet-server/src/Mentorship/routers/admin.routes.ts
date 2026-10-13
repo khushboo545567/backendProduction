@@ -102,6 +102,18 @@ router.get(
     ...paginationValidation,
     query('status').optional(),
     query('sessionType').optional(),
+    query('kind')
+      .optional()
+      .isIn(['booked', 'slots', 'all'])
+      .withMessage('kind must be one of: booked, slots, all'),
+    query('from')
+      .optional()
+      .isISO8601()
+      .withMessage('from must be a valid ISO 8601 date'),
+    query('to')
+      .optional()
+      .isISO8601()
+      .withMessage('to must be a valid ISO 8601 date'),
   ]),
   adminController.getAllSessions
 );
@@ -124,6 +136,10 @@ router.get(
       .optional()
       .isInt({ min: 1, max: 5 })
       .withMessage('Rating must be between 1 and 5'),
+    query('status')
+      .optional()
+      .isIn(['all', 'public', 'hidden', 'deleted'])
+      .withMessage('Status must be all, public, hidden, or deleted'),
   ]),
   adminController.getAllReviews
 );
@@ -151,9 +167,18 @@ router.post(
   validate([
     param('id').isUUID().withMessage('Invalid ID format'),
     body('action')
-      .isIn(['approve', 'hide', 'delete'])
-      .withMessage('Invalid moderation action'),
-    body('reason').optional(),
+      .isIn(['keep', 'delete'])
+      .withMessage("Invalid moderation action. Use 'keep' or 'delete'"),
+    body('reason').custom((value, { req }) => {
+      const action = req.body?.action;
+      if (action === 'delete') {
+        const trimmed = typeof value === 'string' ? value.trim() : '';
+        if (trimmed.length < 5 || trimmed.length > 500) {
+          throw new Error('Reason is required (5-500 characters) for delete action');
+        }
+      }
+      return true;
+    }),
   ]),
   adminController.moderateReview
 );

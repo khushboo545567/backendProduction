@@ -378,6 +378,39 @@ class MentorshipAnalyticsService {
   }
 
   /**
+   * Get revenue and platform fees from completed sessions
+   */
+  async getCompletedRevenue(startDate?: Date, endDate?: Date): Promise<{ totalRevenue: number; platformFees: number }> {
+    try {
+      const dateFilter: any = {};
+      if (startDate || endDate) {
+        dateFilter.createdAt = {};
+        if (startDate) dateFilter.createdAt.$gte = startDate;
+        if (endDate) dateFilter.createdAt.$lte = endDate;
+      }
+
+      const revenueStats = await SessionMentor.aggregate([
+        { $match: { status: BookingStatus.COMPLETED, ...dateFilter } },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: '$pricing.totalAmount' },
+            platformFees: { $sum: '$pricing.platformFee' },
+          },
+        },
+      ]);
+
+      return {
+        totalRevenue: revenueStats[0]?.totalRevenue ?? 0,
+        platformFees: revenueStats[0]?.platformFees ?? 0,
+      };
+    } catch (error: any) {
+      logger.error('❌ Failed to get completed revenue:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get revenue report
    */
   async getRevenueReport(

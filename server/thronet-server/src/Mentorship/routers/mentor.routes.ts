@@ -132,6 +132,7 @@ router.get(
  */
 router.get(
   '/:id',
+  AuthMiddleware.authenticateOptional as any,
   validate(MentorValidator.getMentorById()),
   mentorController.getProfile
 );
