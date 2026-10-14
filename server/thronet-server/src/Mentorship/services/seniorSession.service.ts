@@ -9,9 +9,9 @@ import {
   UpdateSeniorSessionInput,
   SeniorSessionStatus,
 } from '../interface/seniorSession.types';
-import { ApplicationStatus } from '../interface/seniorMentorApplication.types';
-
-import SeniorMentorApplicationService from './seniorMentorApplication.service';
+import SeniorMentorApplicationService, {
+  isApprovedActiveSeniorMentorApplication,
+} from './seniorMentorApplication.service';
 import seniorNotificationService from './seniorNotification.service';
 
 import { ForbiddenError, NotFoundError, BadRequestError } from '@/shared/errors/app.error';
@@ -66,26 +66,9 @@ class SeniorSessionService {
       );
     }
 
-    const isVerified =
-      application.verificationStatus === ApplicationStatus.VERIFIED ||
-      application.verificationStatus === 'verified' ||
-      application.verificationStatus === 'active';
-
-    if (!isVerified) {
+    if (!isApprovedActiveSeniorMentorApplication(application)) {
       throw new ForbiddenError(
         'Senior Mentor application is not active'
-      );
-    }
-
-    if (application.mentorRole !== 'senior_mentor') {
-      throw new ForbiddenError(
-        'Only Senior Mentors can create Senior Sessions'
-      );
-    }
-
-    if (application.isActive === false || application.isDeleted === true) {
-      throw new ForbiddenError(
-        'Senior Mentor account is not active'
       );
     }
   }
@@ -198,8 +181,8 @@ class SeniorSessionService {
   /**
    * Get all active one-to-one sessions for discovery.
    */
-  async getDiscoverySessions(): Promise<ISeniorSession[]> {
-    return this.repository.findAllActiveOneToOneSessions() as unknown as ISeniorSession[];
+  async getDiscoverySessions(mentorId?: string): Promise<ISeniorSession[]> {
+    return this.repository.findAllActiveOneToOneSessions(mentorId) as unknown as ISeniorSession[];
   }
 
   /**
@@ -208,7 +191,7 @@ class SeniorSessionService {
   async bookSession(
     menteeId: string,
     sessionId: string,
-    payload: any // Contains scheduled date/time, price
+    payload: { slotTime?: string; scheduledAt?: string | Date }
   ): Promise<ISeniorSession> {
     const session = await this.repository.findBySessionId(sessionId);
     if (!session) {
@@ -242,8 +225,6 @@ class SeniorSessionService {
       throw new BadRequestError('The selected time slot is not available or falls outside configured hours.');
     }
 
-    const bookingId = uuidv4();
-
     const booking = {
       menteeId,
       bookedBy: menteeId,
@@ -251,11 +232,6 @@ class SeniorSessionService {
       status: SeniorSessionStatus.PENDING,
       slotTime: payload.slotTime,
       scheduledAt: payload.scheduledAt ? new Date(payload.scheduledAt) : undefined,
-      payment: {
-        status: 'pending',
-        method: payload.paymentMethod || 'card'
-      },
-      pricing: payload.pricing
     };
 
     const updatedSession = await this.repository.addBooking(sessionId, booking as unknown as any);

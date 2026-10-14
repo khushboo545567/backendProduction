@@ -5,17 +5,207 @@ import {
   ApplicationFilters,
   ApplicationStatus,
   CreateSeniorMentorApplicationInput,
+  ISeniorMentorApplication,
   UpdateSeniorMentorApplicationInput,
 } from '../interface/seniorMentorApplication.types';
 import { logger } from '@/shared/logger.util';
 import { BadRequestError, ConflictError, NotFoundError, ForbiddenError } from '@/shared/errors/app.error';
 import seniorNotificationService from './seniorNotification.service';
+import SeniorMentorApplication from '../models/SeniorMentorApplication';
+import SeniorSession from '../models/SeniorSession';
+
+export interface PublicSeniorMentor {
+  id: string;
+  displayName: string;
+  profilePic?: string;
+  college: string;
+  degree: string;
+  fieldOfStudy: string;
+  skills: string[];
+  sessionsCount: number;
+  sessionId: string | null;
+}
+
+const APPROVED_ACTIVE_SENIOR_MENTOR_FILTER = {
+  verificationStatus: { $in: [ApplicationStatus.VERIFIED, 'active'] },
+  isActive: true,
+  isDeleted: false,
+  mentorRole: 'senior_mentor',
+};
+
+export function isApprovedActiveSeniorMentorApplication(application: {
+  verificationStatus: string;
+  isActive: boolean;
+  isDeleted: boolean;
+  mentorRole: string;
+}): boolean {
+  return (
+    APPROVED_ACTIVE_SENIOR_MENTOR_FILTER.verificationStatus.$in.includes(
+      application.verificationStatus
+    ) &&
+    application.isActive === APPROVED_ACTIVE_SENIOR_MENTOR_FILTER.isActive &&
+    application.isDeleted === APPROVED_ACTIVE_SENIOR_MENTOR_FILTER.isDeleted &&
+    application.mentorRole === APPROVED_ACTIVE_SENIOR_MENTOR_FILTER.mentorRole
+  );
+}
 
 /**
  * NOTE: NotFoundError appends " not found" to the message itself, so pass only
  * the resource name here (e.g. "Application" -> "Application not found").
  */
 class SeniorMentorApplicationService {
+  private async getPublicSessionMetadata(userIds: string[]): Promise<{
+    countsByUserId: Map<string, number>;
+    sessionIdByUserId: Map<string, string>;
+  }> {
+    if (userIds.length === 0) {
+      return {
+        countsByUserId: new Map(),
+        sessionIdByUserId: new Map(),
+      };
+    }
+
+    const sessionData = await SeniorSession.aggregate<{
+      sessionCounts: { _id: string; sessionsCount: number }[];
+      bookableSessions: { _id: string; sessionId: string }[];
+    }>([
+      { $match: { mentorId: { $in: userIds } } },
+      {
+        $facet: {
+          sessionCounts: [
+            {
+              $group: {
+                _id: '$mentorId',
+                sessionsCount: {
+                  $sum: {
+                    $size: {
+                      $filter: {
+                        input: { $ifNull: ['$bookings', []] },
+                        as: 'booking',
+                        cond: { $eq: ['$$booking.status', 'completed'] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+          bookableSessions: [
+            {
+              $match: {
+                sessionType: 'one_to_one',
+                status: { $ne: 'cancelled' },
+              },
+            },
+            { $sort: { createdAt: 1, sessionId: 1 } },
+            {
+              $group: {
+                _id: '$mentorId',
+                sessionId: { $first: '$sessionId' },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    return {
+      countsByUserId: new Map(
+        (sessionData[0]?.sessionCounts ?? []).map(({ _id, sessionsCount }) => [
+          _id,
+          sessionsCount,
+        ])
+      ),
+      sessionIdByUserId: new Map(
+        (sessionData[0]?.bookableSessions ?? []).map(({ _id, sessionId }) => [
+          _id,
+          sessionId,
+        ])
+      ),
+    };
+  }
+
+  private mapPublicSeniorMentor(
+    application: Pick<
+      ISeniorMentorApplication,
+      | 'userId'
+      | 'fullName'
+      | 'profilePhoto'
+      | 'college'
+      | 'degree'
+      | 'fieldOfStudy'
+      | 'primaryExpertise'
+      | 'otherSkills'
+      | 'technologies'
+    >,
+    countsByUserId: Map<string, number>,
+    sessionIdByUserId: Map<string, string>
+  ): PublicSeniorMentor {
+    const skills = [
+      application.primaryExpertise,
+      ...(application.otherSkills ?? []),
+      ...(application.technologies ?? []),
+    ]
+      .filter((skill): skill is string => typeof skill === 'string' && skill.length > 0)
+      .filter((skill, index, values) => values.indexOf(skill) === index)
+      .slice(0, 6);
+
+    return {
+      id: application.userId,
+      displayName: application.fullName,
+      ...(application.profilePhoto ? { profilePic: application.profilePhoto } : {}),
+      college: application.college,
+      degree: application.degree,
+      fieldOfStudy: application.fieldOfStudy,
+      skills,
+      sessionsCount: countsByUserId.get(application.userId) ?? 0,
+      sessionId: sessionIdByUserId.get(application.userId) ?? null,
+    };
+  }
+
+  async listPublicSeniorMentors(
+    page: number,
+    limit: number
+  ): Promise<{ mentors: PublicSeniorMentor[]; total: number }> {
+    const query = APPROVED_ACTIVE_SENIOR_MENTOR_FILTER;
+    const skip = (page - 1) * limit;
+    const [applications, total] = await Promise.all([
+      SeniorMentorApplication.find(query)
+        .select('userId fullName profilePhoto college degree fieldOfStudy primaryExpertise otherSkills technologies -_id')
+        .sort({ createdAt: 1, userId: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      SeniorMentorApplication.countDocuments(query),
+    ]);
+
+    const userIds = applications.map((application) => application.userId);
+    const { countsByUserId, sessionIdByUserId } = await this.getPublicSessionMetadata(userIds);
+    const mentors = applications.map((application) =>
+      this.mapPublicSeniorMentor(application, countsByUserId, sessionIdByUserId)
+    );
+
+    return { mentors, total };
+  }
+
+  async getPublicSeniorMentorByUserId(userId: string): Promise<PublicSeniorMentor> {
+    const application = await SeniorMentorApplication.findOne({
+      ...APPROVED_ACTIVE_SENIOR_MENTOR_FILTER,
+      userId,
+    })
+      .select('userId fullName profilePhoto college degree fieldOfStudy primaryExpertise otherSkills technologies -_id')
+      .lean();
+
+    if (!application) {
+      throw new NotFoundError('Senior mentor');
+    }
+
+    const { countsByUserId, sessionIdByUserId } = await this.getPublicSessionMetadata([
+      application.userId,
+    ]);
+    return this.mapPublicSeniorMentor(application, countsByUserId, sessionIdByUserId);
+  }
+
   /**
    * Submit a new "Become Senior Mentor" application.
    * One active (non-deleted) application per user — enforced both here

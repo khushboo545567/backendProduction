@@ -406,7 +406,7 @@ class MentorService {
         if (userIds.length > 0) {
           const eduDocs = await Education.find(
             { userId: { $in: userIds }, isDeleted: false, isArchived: false },
-            { userId: 1, schoolCollegeName: 1, degree: 1, startDate: 1, endDate: 1, isOngoing: 1 }
+            { userId: 1, schoolCollegeName: 1, degree: 1, specialization: 1, startDate: 1, endDate: 1, isOngoing: 1 }
           ).lean();
           const eduByUser: Record<string, any[]> = {};
           for (const d of eduDocs) {
@@ -414,27 +414,42 @@ class MentorService {
           }
           finalMentors = enrichedMentors.map((m: any) => {
             const list = eduByUser[m.userId] || [];
-            if (!list.length) return m;
-            const ongoing = list.filter((e: any) => e.isOngoing || !e.endDate);
-            const chosen = ongoing.length
-              ? ongoing.reduce((a: any, b: any) =>
-                  (b.startDate ? new Date(b.startDate).getTime() : 0) >
-                  (a.startDate ? new Date(a.startDate).getTime() : 0)
-                    ? b
-                    : a
-                )
-              : list.reduce((a: any, b: any) =>
-                  (b.endDate ? new Date(b.endDate).getTime() : 0) >
-                  (a.endDate ? new Date(a.endDate).getTime() : 0)
-                    ? b
-                    : a
-                );
-            const college = typeof chosen?.schoolCollegeName === 'string' ? chosen.schoolCollegeName.trim() : '';
-            const degree = typeof chosen?.degree === 'string' ? chosen.degree.trim() : '';
+            let chosenCollege = '';
+            let chosenDegree = '';
+            let chosenBranch = '';
+            if (list.length > 0) {
+              const ongoing = list.filter((e: any) => e.isOngoing || !e.endDate);
+              const chosen = ongoing.length
+                ? ongoing.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  )
+                : list.reduce((a: any, b: any) =>
+                    (b.endDate ? new Date(b.endDate).getTime() : 0) >
+                    (a.endDate ? new Date(a.endDate).getTime() : 0)
+                      ? b
+                      : a
+                  );
+              if (typeof chosen?.schoolCollegeName === 'string' && /[a-zA-Z0-9]/.test(chosen.schoolCollegeName)) {
+                chosenCollege = chosen.schoolCollegeName.trim();
+              }
+              if (typeof chosen?.degree === 'string' && /[a-zA-Z0-9]/.test(chosen.degree)) {
+                chosenDegree = chosen.degree.trim();
+              }
+              if (typeof chosen?.specialization === 'string' && /[a-zA-Z0-9]/.test(chosen.specialization)) {
+                chosenBranch = chosen.specialization.trim();
+              }
+            }
+            const college = (typeof m.college === 'string' && /[a-zA-Z0-9]/.test(m.college) ? m.college.trim() : '') || chosenCollege;
+            const degree = (typeof m.degree === 'string' && /[a-zA-Z0-9]/.test(m.degree) ? m.degree.trim() : '') || chosenDegree;
+            const branch = (typeof m.branch === 'string' && /[a-zA-Z0-9]/.test(m.branch) ? m.branch.trim() : '') || chosenBranch;
             return {
               ...m,
               ...(college ? { college } : {}),
               ...(degree ? { degree } : {}),
+              ...(branch ? { branch } : {}),
             };
           });
         }
@@ -456,8 +471,8 @@ class MentorService {
           }
           finalMentors = finalMentors.map((m: any) => {
             const list = expByUser[m.userId] || [];
-            let resolvedCompany = '';
-            if (list.length > 0) {
+            let resolvedCompany = typeof m.company === 'string' && /[a-zA-Z0-9]/.test(m.company) ? m.company.trim() : '';
+            if (!resolvedCompany && list.length > 0) {
               const current = list.filter((e: any) => e.currentlyWorking || !e.endDate);
               const chosen = current.length
                 ? current.reduce((a: any, b: any) =>
@@ -487,6 +502,55 @@ class MentorService {
         }
       } catch (expErr: any) {
         logger.warn(`Failed to fetch experience for mentors: ${expErr.message}`);
+      }
+
+      // Batch fetch company logos for all returned mentors (1 query)
+      try {
+        const companyIds = finalMentors.map((m: any) => m.companyId).filter(Boolean);
+        const companyNames = finalMentors.map((m: any) => m.company).filter((c: any) => typeof c === 'string' && c.trim());
+
+        if (companyIds.length > 0 || companyNames.length > 0) {
+          const escapedNames = Array.from(new Set(companyNames)).map((n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+          const companyDocs = await Company.find(
+            {
+              $or: [
+                ...(companyIds.length ? [{ companyId: { $in: companyIds } }] : []),
+                ...(escapedNames.length ? [{ companyName: { $in: escapedNames.map(en => new RegExp(`^${en}$`, 'i')) } }] : []),
+              ],
+              'audit.isDeleted': false,
+            },
+            { companyId: 1, companyName: 1, 'media.logo': 1 }
+          ).lean();
+
+          const compById: Record<string, any> = {};
+          const compByName: Record<string, any> = {};
+          for (const c of companyDocs) {
+            if (c.companyId) compById[c.companyId] = c;
+            if (c.companyName) compByName[c.companyName.toLowerCase().trim()] = c;
+          }
+
+          finalMentors = finalMentors.map((m: any) => {
+            const matchedComp = (m.companyId && compById[m.companyId]) ||
+              (typeof m.company === 'string' && compByName[m.company.toLowerCase().trim()]);
+
+            let companyLogo: string | undefined = undefined;
+            if (matchedComp?.media?.logo) {
+              const { url, publicId } = matchedComp.media.logo;
+              if (url && typeof url === 'string' && url.startsWith('http')) {
+                companyLogo = url;
+              } else if (publicId && typeof publicId === 'string') {
+                companyLogo = cloudinary.url(publicId, { secure: true });
+              }
+            }
+
+            return {
+              ...m,
+              ...(companyLogo ? { companyLogo } : {}),
+            };
+          });
+        }
+      } catch (compErr: any) {
+        logger.warn(`Failed to fetch company logos for mentors: ${compErr.message}`);
       }
 
       const meta = PaginationHelper.calculateMeta({
@@ -588,7 +652,11 @@ class MentorService {
         logger.warn(`Failed to dynamically compute mentor stats: ${statsErr.message}`);
       }
 
-      return { ...mentorObj, user, company };
+      return {
+        ...mentorObj,
+        user,
+        ...(company ? { company } : {}),
+      };
     } catch (error: any) {
       logger.error(`Failed to enrich mentor: ${error.message}`);
       return mentor.toObject ? mentor.toObject() : mentor;

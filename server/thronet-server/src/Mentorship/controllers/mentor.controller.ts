@@ -37,6 +37,10 @@ class MentorController {
       const input: CreateMentorInput = {
         userId: req.user!.id,
         companyId: req.body.companyId,
+        company: req.body.company,
+        college: req.body.college,
+        degree: req.body.degree,
+        branch: req.body.branch,
         title: req.body.title,
         bio: req.body.bio,
         tagline: req.body.tagline,
@@ -75,6 +79,10 @@ class MentorController {
       const { id } = req.params;
 
       const updates: UpdateMentorInput = {
+        company: req.body.company,
+        college: req.body.college,
+        degree: req.body.degree,
+        branch: req.body.branch,
         title: req.body.title,
         bio: req.body.bio,
         tagline: req.body.tagline,
