@@ -215,6 +215,27 @@ const SeniorSessionSchema = new Schema<SeniorSessionDocument>(
       trim: true,
     },
 
+    shortDescription: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Short description cannot exceed 200 characters'],
+    },
+
+    tags: {
+      type: [String],
+      default: [],
+    },
+
+    learningOutcomes: {
+      type: [String],
+      default: [],
+    },
+
+    prerequisites: {
+      type: [String],
+      default: [],
+    },
+
     /**
      * All juniors registered for this session.
      *

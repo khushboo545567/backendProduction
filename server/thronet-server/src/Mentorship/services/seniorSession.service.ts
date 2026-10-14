@@ -29,6 +29,27 @@ class SeniorSessionService {
 
   constructor() {}
 
+  /**
+   * FormData sends arrays as a JSON string. Normalise to string[].
+   * Returns undefined when the field was not sent at all.
+   */
+  private toStringArray(value: unknown, max = 20): string[] | undefined {
+    if (value === undefined || value === null) return undefined;
+    let arr: unknown = value;
+    if (typeof value === 'string') {
+      try {
+        arr = JSON.parse(value);
+      } catch {
+        arr = value.split('\n');
+      }
+    }
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map((x) => String(x).trim())
+      .filter(Boolean)
+      .slice(0, max);
+  }
+
   private async uploadImageToCloudinary(buffer: Buffer, sessionId: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
@@ -99,14 +120,14 @@ class SeniorSessionService {
       const dt = DateTime.fromISO(payload.scheduledAt.toString()).setZone(tz);
       const dateStr = dt.toFormat('yyyy-MM-dd');
       const timeStr = dt.toFormat('HH:mm');
-      
+
       const isValid = await seniorAvailabilityService.validateSlot(
         userId,
         dateStr,
         timeStr,
         payload.duration
       );
-      
+
       if (!isValid) {
         throw new BadRequestError('The selected time slot is not available or falls outside configured hours.');
       }
@@ -117,6 +138,9 @@ class SeniorSessionService {
       sessionId,
       mentorId: userId,
       thumbnailImage,
+      tags: this.toStringArray((payload as any).tags) ?? [],
+      learningOutcomes: this.toStringArray((payload as any).learningOutcomes) ?? [],
+      prerequisites: this.toStringArray((payload as any).prerequisites) ?? [],
       bookings: [],
       status: payload.status ?? 'pending',
     } as unknown as ISeniorSession;
@@ -133,7 +157,7 @@ class SeniorSessionService {
     await this.ensureSeniorMentor(userId);
 
     const sessions = await this.repository.findByMentorId(userId) as unknown as ISeniorSession[];
-    
+
     // Aggregation Logic for Mentees
     const menteeIds = new Set<string>();
     for (const session of sessions) {
@@ -150,7 +174,7 @@ class SeniorSessionService {
       const users = await User.find({ userId: { $in: Array.from(menteeIds) } })
         .select('userId firstName lastName email profilePhotoId')
         .lean();
-      
+
       const userMap = new Map<string, any>();
       users.forEach((u: any) => {
         userMap.set(u.userId, {
@@ -162,16 +186,16 @@ class SeniorSessionService {
 
       // Inject mentee details implicitly inside response mappings without mutating Document structure
       return sessions.map((session: any) => {
-         const obj = typeof session.toObject === 'function' ? session.toObject() : { ...session };
-         if (obj.bookings && Array.isArray(obj.bookings)) {
-           obj.bookings = obj.bookings.map((booking: any) => {
-              if (booking.menteeId && userMap.has(booking.menteeId)) {
-                 return { ...booking, mentee: userMap.get(booking.menteeId) };
-              }
-              return booking;
-           });
-         }
-         return obj;
+        const obj = typeof session.toObject === 'function' ? session.toObject() : { ...session };
+        if (obj.bookings && Array.isArray(obj.bookings)) {
+          obj.bookings = obj.bookings.map((booking: any) => {
+            if (booking.menteeId && userMap.has(booking.menteeId)) {
+              return { ...booking, mentee: userMap.get(booking.menteeId) };
+            }
+            return booking;
+          });
+        }
+        return obj;
       });
     }
 
@@ -187,6 +211,7 @@ class SeniorSessionService {
 
   /**
    * Book a Senior Session.
+   * Senior sessions are free: no payment or pricing data is stored on the booking.
    */
   async bookSession(
     menteeId: string,
@@ -197,7 +222,7 @@ class SeniorSessionService {
     if (!session) {
       throw new NotFoundError('Senior Session not found');
     }
-    
+
     if (session.status === 'cancelled') {
       throw new BadRequestError('Cannot book a cancelled session');
     }
@@ -328,6 +353,11 @@ class SeniorSessionService {
       allowedUpdates.thumbnailImage = uploadedUrl;
     }
 
+    for (const key of ['tags', 'learningOutcomes', 'prerequisites'] as const) {
+      const parsed = this.toStringArray((payload as any)[key]);
+      if (parsed !== undefined) (allowedUpdates as any)[key] = parsed;
+    }
+
     // Availability validation check on update
     const finalScheduledAt = payload.scheduledAt || existingSession.scheduledAt;
     const finalDuration = payload.duration || existingSession.duration;
@@ -337,7 +367,7 @@ class SeniorSessionService {
       const dt = DateTime.fromJSDate(new Date(finalScheduledAt.toString())).setZone(finalTimezone);
       const dateStr = dt.toFormat('yyyy-MM-dd');
       const timeStr = dt.toFormat('HH:mm');
-      
+
       const isValid = await seniorAvailabilityService.validateSlot(
         userId,
         dateStr,
@@ -345,7 +375,7 @@ class SeniorSessionService {
         finalDuration,
         sessionId
       );
-      
+
       if (!isValid) {
         throw new BadRequestError('The updated time slot is not available or falls outside configured hours.');
       }
@@ -407,7 +437,7 @@ class SeniorSessionService {
   ): Promise<ISeniorSession> {
     await this.ensureSeniorMentor(userId);
     const session = await this.repository.findBySessionId(sessionId);
-    
+
     if (!session) {
       throw new NotFoundError('Senior Session not found');
     }
@@ -421,7 +451,7 @@ class SeniorSessionService {
     if (bookingIndex === -1) {
       throw new NotFoundError('Booking not found');
     }
-    
+
     const currentStatus = session.bookings[bookingIndex].status;
     if (
       currentStatus !== SeniorSessionStatus.PENDING &&
@@ -486,7 +516,7 @@ class SeniorSessionService {
     reason?: string
   ): Promise<ISeniorSession> {
     const session = await this.repository.findBySessionId(sessionId);
-    
+
     if (!session) {
       throw new NotFoundError('Senior Session not found');
     }
@@ -640,7 +670,7 @@ class SeniorSessionService {
   ): Promise<ISeniorSession> {
     await this.ensureSeniorMentor(userId);
     const session = await this.repository.findBySessionId(sessionId);
-    
+
     if (!session) {
       throw new NotFoundError('Senior Session not found');
     }
@@ -701,7 +731,7 @@ class SeniorSessionService {
   ): Promise<ISeniorSession> {
     await this.ensureSeniorMentor(userId);
     const session = await this.repository.findBySessionId(sessionId);
-    
+
     if (!session) {
       throw new NotFoundError('Senior Session not found');
     }
