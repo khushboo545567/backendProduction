@@ -127,6 +127,22 @@ studySessionSchema.pre('save', function (this: any, next) {
   next();
 });
 
+// ── Cache Invalidation Hook ──────────────────────────────────
+import { StudyAnalyticsCacheRepository } from '@/shared/cache/studyCache';
+studySessionSchema.post('save', async function (doc: any) {
+  if (doc?.user) {
+    await StudyAnalyticsCacheRepository.invalidateUserAnalytics(String(doc.user));
+  }
+});
+studySessionSchema.post(['updateOne', 'findOneAndUpdate', 'deleteOne', 'findOneAndDelete'] as any, async function (this: any) {
+  try {
+    const filter = this.getFilter() || {};
+    if (filter.user) {
+      await StudyAnalyticsCacheRepository.invalidateUserAnalytics(String(filter.user));
+    }
+  } catch {}
+});
+
 const StudySession = mongoose.model<IStudySession>('StudyGroup_StudySession', studySessionSchema);
 
 export default StudySession;

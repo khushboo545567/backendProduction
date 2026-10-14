@@ -99,6 +99,13 @@ async function initializeApp(): Promise<void> {
 
       if (cacheResult) {
         logger.info("Redis cache initialized successfully");
+
+        // Item I: Warm up / rebuild leaderboards on startup from MongoDB truth (non-blocking)
+        import("./src/shared/cache/studyCache").then(({ LeaderboardCacheRepository }) => {
+          LeaderboardCacheRepository.rebuildAllLeaderboards().catch((err: any) => {
+            logger.warn("Initial leaderboard cache rebuild failed (non-critical)", { error: err.message });
+          });
+        }).catch(() => {});
       } else {
         logger.warn(
           "Redis cache initialization returned false. Using in-memory fallback.",

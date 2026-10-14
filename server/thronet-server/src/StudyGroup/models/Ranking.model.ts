@@ -371,6 +371,38 @@ rankingSchema.methods.compareWith = async function (otherUserId: mongoose.Types.
   };
 };
 
+// ── Cache Sync & Invalidation Hooks ──────────────────────────
+import { LeaderboardCacheRepository, StudyAnalyticsCacheRepository } from '@/shared/cache/studyCache';
+
+rankingSchema.post('save', async function (doc: any) {
+  try {
+    if (doc?.userId) {
+      await Promise.all([
+        StudyAnalyticsCacheRepository.invalidateUserAnalytics(String(doc.userId)),
+        LeaderboardCacheRepository.updateUserScore(
+          String(doc.userId),
+          doc.rankScore || 0,
+          doc.category,
+          doc.weeklyHours,
+          doc.monthlyHours
+        ),
+      ]);
+    }
+  } catch {}
+});
+
+rankingSchema.post(['deleteOne', 'findOneAndDelete'] as any, async function (this: any) {
+  try {
+    const filter = this.getFilter() || {};
+    if (filter.userId) {
+      await Promise.all([
+        StudyAnalyticsCacheRepository.invalidateUserAnalytics(String(filter.userId)),
+        LeaderboardCacheRepository.removeUser(String(filter.userId)),
+      ]);
+    }
+  } catch {}
+});
+
 const Ranking = mongoose.model<IRanking>('StudyGroup_Ranking', rankingSchema);
 
 export default Ranking;

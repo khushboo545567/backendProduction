@@ -10,6 +10,7 @@ import Constants from "@/shared/constants.util";
 import CacheUtil from "@/shared/cache.util";
 import { invalidateUserAuthCache, invalidateAllAuthUserCacheByScan } from "@/shared/cache/authCache";
 import { ProfileCacheRepository } from "@/shared/cache/profileCache";
+import { StudyAnalyticsCacheRepository, LeaderboardCacheRepository } from "@/shared/cache/studyCache";
 import type { IUserBadge } from "@/StudyGroup/interfaces/IBadge";
 
 const logger = LoggerUtil;
@@ -928,12 +929,16 @@ UserSchema.pre("save", async function (next) {
   }
 });
 
-// Cache invalidation on direct document save (role, status, ban changes, profile info)
+// Cache invalidation on direct document save (role, status, ban changes, profile info, analytics)
 UserSchema.post("save", async function (doc: any) {
   try {
     if (doc?.userId) {
       await invalidateUserAuthCache(doc.userId);
       await ProfileCacheRepository.invalidateProfile(doc.userId);
+      await StudyAnalyticsCacheRepository.invalidateUserAnalytics(doc.userId);
+      if (doc.status !== 'active' || doc.flags?.isDeleted) {
+        await LeaderboardCacheRepository.removeUser(doc.userId);
+      }
     }
   } catch (error: any) {
     logger.warn(`[UserSchema] Post-save cache invalidation error: ${error.message}`);
@@ -1031,6 +1036,8 @@ UserSchema.post(USER_MUTATION_METHODS, async function (this: any) {
           Promise.all([
             invalidateUserAuthCache(uid),
             ProfileCacheRepository.invalidateProfile(uid),
+            StudyAnalyticsCacheRepository.invalidateUserAnalytics(uid),
+            LeaderboardCacheRepository.removeUser(uid),
           ])
         )
       );
