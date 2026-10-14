@@ -33,6 +33,12 @@ import CompanyReview from '@/company/models/CompanyReview.model';
 import Follower from '@/company/models/follower.model';
 import Job, { JobType, ExperienceLevel, JobStatus } from '@/Job-Service/models/Job.model';
 import Comment from '@/Profile/models/Comment.model';
+import Group from '@/StudyGroup/models/Group.model';
+import GroupMember from '@/StudyGroup/models/GroupMember.model';
+import ConnectionBlock, { BlockReason } from '@/connections/models/ConnectionBlock';
+import CommentService from '@/Profile/services/activity/comment.service';
+import doubtService from '@/StudyGroup/services/doubt.service';
+import GroupCategory from '@/StudyGroup/enums/GroupCategory.enum';
 
 function assert(condition: any, message: string) {
   if (!condition) {
@@ -316,13 +322,132 @@ async function runDoubtCompanyCommentCacheTests() {
   process.env.CACHE_COMMENT_ENABLED = 'true';
   process.env.CACHE_REACTION_ENABLED = 'true';
 
+  // --------------------------------------------------------------------------
+  // TEST 9: Blocked Author's Comment Is NOT Served to the Blocked Viewer
+  // --------------------------------------------------------------------------
+  console.log('\n--- TEST 9: Blocked Author Comment Not Served to Blocked Viewer ---');
+  const authorUserId = uuidv4();
+  const viewerUserId = uuidv4();
+  const unblockedViewerId = uuidv4();
+  const blockPostId = 'block_test_post_' + Date.now();
+
+  const blockedComment = new Comment({
+    commentId: uuidv4(),
+    postId: blockPostId,
+    userId: authorUserId,
+    content: 'Sensitive comment from author',
+  });
+  await blockedComment.save();
+
+  // Create an active block between viewer and author
+  const blockDoc = new ConnectionBlock({
+    blockerId: viewerUserId,
+    blockedId: authorUserId,
+    reason: BlockReason.OTHER,
+    isActive: true,
+    blockedAt: new Date(),
+  });
+  await blockDoc.save();
+
+  // 1. Unblocked viewer sees the comment
+  const commentsForUnblocked = await CommentService.getCommentsByPostId(blockPostId, unblockedViewerId);
+  assert(
+    commentsForUnblocked.comments.some((c: any) => c.content === 'Sensitive comment from author'),
+    'Unblocked viewer sees author comment'
+  );
+
+  // 2. Blocked viewer does NOT see author comment
+  const commentsForBlocked = await CommentService.getCommentsByPostId(blockPostId, viewerUserId);
+  assert(
+    !commentsForBlocked.comments.some((c: any) => c.userId === authorUserId),
+    'Blocked author comment is NOT served to the blocked viewer'
+  );
+
+  // --------------------------------------------------------------------------
+  // TEST 10: Private-Group Doubt is NEVER Served to a Non-Member
+  // --------------------------------------------------------------------------
+  console.log('\n--- TEST 10: Private-Group Doubt Never Served to Non-Member ---');
+  const privateGroupId = uuidv4();
+  const memberUserId = new mongoose.Types.ObjectId().toString();
+  const nonMemberUserId = uuidv4();
+
+  const User = (await import('@/auth/models/User.model')).default;
+  const memberUserDoc = await User.create({
+    _id: new mongoose.Types.ObjectId(memberUserId),
+    userId: memberUserId,
+    email: `member_${Date.now()}@test.com`,
+    passwordHash: 'dummy',
+    firstName: 'Group',
+    lastName: 'Member',
+    status: 'active',
+    accountStatus: 'active',
+  });
+
+  const privateGroupDoc = new Group({
+    groupId: privateGroupId,
+    title: 'Top Secret Research Group',
+    description: 'Confidential research discussion',
+    category: GroupCategory.OTHER,
+    visibility: 'private',
+    leaderId: memberUserId,
+  });
+  await privateGroupDoc.save();
+
+  // Seed active member in GroupMember
+  await GroupMember.create({
+    userId: memberUserId,
+    groupId: privateGroupId,
+    role: 'admin',
+    status: 'active',
+    joinedAt: new Date(),
+  });
+
+  // Create doubt in private group
+  const privateDoubt = await Doubt.create({
+    doubtId: uuidv4(),
+    title: 'Private Doubt Title',
+    description: 'Secret doubt description',
+    group: privateGroupId,
+    postedBy: memberUserId,
+    category: 'Programming',
+  });
+
+  // Non-member access MUST throw ForbiddenError
+  let nonMemberRejected = false;
+  try {
+    await doubtService.getGroupDoubts(privateGroupId, {}, nonMemberUserId);
+  } catch (err: any) {
+    nonMemberRejected = true;
+    console.log('  [DEBUG TEST 10 CATCH]', err.name, err.message, err.statusCode);
+    assert(
+      (err.message && (err.message.includes('not a member') || err.message.includes('membership'))) ||
+      err.statusCode === 403 ||
+      err.name === 'ForbiddenError',
+      'Non-member received ForbiddenError'
+    );
+  }
+  assert(nonMemberRejected === true, 'Private-group doubt is NEVER served to a non-member');
+
+  // Member access succeeds
+  const memberFeed = await doubtService.getGroupDoubts(privateGroupId, {}, memberUserId);
+  assert(
+    memberFeed.doubts.some((d: any) => d.doubtId === privateDoubt.doubtId),
+    'Active member can access private group doubts'
+  );
+
   // Cleanup test documents
   await Doubt.deleteOne({ _id: createdDoubt._id });
+  await Doubt.deleteOne({ _id: privateDoubt._id });
   await Company.deleteOne({ _id: companyDoc._id });
   await Job.deleteOne({ _id: jobDoc._id });
   await CompanyReview.deleteOne({ _id: reviewDoc._id });
   await Follower.deleteOne({ _id: followerDoc._id });
   await Comment.deleteOne({ _id: commentDoc._id });
+  await Comment.deleteOne({ _id: blockedComment._id });
+  await ConnectionBlock.deleteOne({ _id: blockDoc._id });
+  await Group.deleteOne({ _id: privateGroupDoc._id });
+  await GroupMember.deleteMany({ groupId: privateGroupId });
+  await User.deleteOne({ _id: memberUserDoc._id });
 
   console.log('\n========================================================================');
   console.log('✅ ALL DOUBTS, COMPANY, COMMENTS & REACTIONS TESTS PASSED (ITEM K)');

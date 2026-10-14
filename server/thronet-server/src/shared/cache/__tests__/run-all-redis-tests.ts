@@ -30,6 +30,7 @@ const testFiles = [
   'src/shared/cache/__tests__/study-cache.test.ts',
   'src/shared/cache/__tests__/doubt-company-comment-cache.test.ts',
   'src/shared/cache/__tests__/master-cache.test.ts',
+  'src/shared/cache/__tests__/socket-adapter-presence.test.ts',
 ];
 
 async function runTestFile(file: string): Promise<boolean> {

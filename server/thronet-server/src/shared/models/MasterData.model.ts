@@ -91,13 +91,41 @@ masterDataSchema.post('save', async function (doc) {
   }
 });
 
-masterDataSchema.post(['deleteOne', 'findOneAndDelete'], async function (doc: any) {
-  if (doc?.type) {
+masterDataSchema.post(
+  ['updateOne', 'updateMany', 'findOneAndUpdate', 'deleteOne', 'deleteMany', 'findOneAndDelete'] as any,
+  async function (this: any, res: any) {
     try {
+      const filter = this.getFilter ? this.getFilter() : {};
+      const type = filter.type || (res && res.type);
       const { MasterDataCacheRepository } = await import('@/shared/cache/masterCache');
-      await MasterDataCacheRepository.invalidateMasterData(doc.type);
+      if (type) {
+        await MasterDataCacheRepository.invalidateMasterData(type);
+      } else {
+        await MasterDataCacheRepository.invalidateAll();
+      }
     } catch {}
   }
+);
+
+masterDataSchema.post('insertMany', async function (docs: any) {
+  try {
+    const { MasterDataCacheRepository } = await import('@/shared/cache/masterCache');
+    if (Array.isArray(docs)) {
+      const types = new Set(docs.map((d: any) => d.type).filter(Boolean));
+      for (const t of types) {
+        await MasterDataCacheRepository.invalidateMasterData(t as any);
+      }
+    } else {
+      await MasterDataCacheRepository.invalidateAll();
+    }
+  } catch {}
+});
+
+masterDataSchema.post('bulkWrite' as any, async function () {
+  try {
+    const { MasterDataCacheRepository } = await import('@/shared/cache/masterCache');
+    await MasterDataCacheRepository.invalidateAll();
+  } catch {}
 });
 
 const MasterData = mongoose.model<IMasterDataDoc>('MasterData', masterDataSchema);

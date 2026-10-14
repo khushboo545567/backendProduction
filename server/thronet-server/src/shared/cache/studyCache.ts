@@ -148,8 +148,34 @@ export class LeaderboardCacheRepository {
     return buildKey(LEADERBOARD_DOMAIN, 'monthly');
   }
 
+  private static inFlightRebuilds = new Map<string, Promise<any>>();
+
+  /**
+   * Ensure global leaderboard key exists in Redis; if expired/missing, rebuild from MongoDB first (single-flight).
+   */
+  static async ensureGlobalLeaderboardExists(): Promise<void> {
+    if (!isCacheEnabled(LEADERBOARD_DOMAIN)) return;
+    try {
+      const redis = await getRedisClient();
+      const key = this.getGlobalSetKey();
+      const exists = await redis.exists(key);
+      if (exists === 1) return;
+
+      if (!this.inFlightRebuilds.has(key)) {
+        const p = this.rebuildGlobalLeaderboard().finally(() => {
+          this.inFlightRebuilds.delete(key);
+        });
+        this.inFlightRebuilds.set(key, p);
+      }
+      await this.inFlightRebuilds.get(key);
+    } catch (err: any) {
+      LoggerUtil.warn('LeaderboardCache: failed to ensure global leaderboard exists', { error: err.message });
+    }
+  }
+
   /**
    * Rebuild the global leaderboard sorted set directly from MongoDB authoritative rankings.
+   * Deterministic tie-breaking: score descending, then userId ascending (matching Redis lexicographical order).
    */
   static async rebuildGlobalLeaderboard(): Promise<number> {
     try {
@@ -353,9 +379,15 @@ export class LeaderboardCacheRepository {
       const redis = await getRedisClient();
       const globalKey = this.getGlobalSetKey();
 
+      if (rankScore > 0) {
+        // Must never run ZADD on a missing or expired key - rebuild from MongoDB first
+        await this.ensureGlobalLeaderboardExists();
+      }
+
       const pipeline = redis.pipeline();
       if (rankScore > 0) {
         pipeline.zadd(globalKey, rankScore, userId);
+        pipeline.expire(globalKey, LEADERBOARD_SET_TTL_SECONDS);
       } else {
         pipeline.zrem(globalKey, userId);
       }
@@ -364,6 +396,7 @@ export class LeaderboardCacheRepository {
         const catKey = this.getCategorySetKey(category);
         if (rankScore > 0) {
           pipeline.zadd(catKey, rankScore, userId);
+          pipeline.expire(catKey, LEADERBOARD_SET_TTL_SECONDS);
         } else {
           pipeline.zrem(catKey, userId);
         }
@@ -373,6 +406,7 @@ export class LeaderboardCacheRepository {
         const weeklyKey = this.getWeeklySetKey();
         if (weeklyHours > 0) {
           pipeline.zadd(weeklyKey, weeklyHours, userId);
+          pipeline.expire(weeklyKey, LEADERBOARD_SET_TTL_SECONDS);
         } else {
           pipeline.zrem(weeklyKey, userId);
         }
@@ -382,6 +416,7 @@ export class LeaderboardCacheRepository {
         const monthlyKey = this.getMonthlySetKey();
         if (monthlyHours > 0) {
           pipeline.zadd(monthlyKey, monthlyHours, userId);
+          pipeline.expire(monthlyKey, LEADERBOARD_SET_TTL_SECONDS);
         } else {
           pipeline.zrem(monthlyKey, userId);
         }

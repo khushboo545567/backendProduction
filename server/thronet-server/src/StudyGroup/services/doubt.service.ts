@@ -1,5 +1,6 @@
 // services/doubt.service.ts
 
+import mongoose from "mongoose";
 import doubtRepository from "../repositories/doubt.repository";
 import answerRepository from "../repositories/answer.repository";
 import groupMemberRepository from "../repositories/groupMember.repository";
@@ -62,7 +63,7 @@ class DoubtService {
     return doubt;
   }
 
-  async getGroupDoubts(groupId: string, params: DoubtQueryParams) {
+  async getGroupDoubts(groupId: string, params: DoubtQueryParams, userId?: string) {
     const {
       category,
       isSolved,
@@ -72,6 +73,28 @@ class DoubtService {
       sort = "recent",
       search,
     } = params;
+
+    // Verify group privacy: private groups require active membership before serving cached or uncached data
+    const Group = (await import('../models/Group.model')).default;
+    const GroupMember = (await import('../models/GroupMember.model')).default;
+    const groupQuery: any[] = [{ groupId }];
+    if (mongoose.Types.ObjectId.isValid(groupId)) {
+      groupQuery.push({ _id: groupId });
+    }
+    const groupDoc = await Group.findOne({ $or: groupQuery }).lean() as any;
+    if (groupDoc && (groupDoc.visibility === 'private' || groupDoc.visibility === 'PRIVATE')) {
+      if (!userId) {
+        throw new ForbiddenError('Private group doubts require active group membership');
+      }
+      const isMember = await GroupMember.findOne({
+        userId,
+        groupId: groupDoc.groupId || groupId,
+        status: 'active',
+      }).lean();
+      if (!isMember) {
+        throw new ForbiddenError('You are not a member of this private group');
+      }
+    }
 
     // Check cache for non-search feed queries
     const isSearchQuery = Boolean(search);

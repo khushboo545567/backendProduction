@@ -158,11 +158,55 @@ async function runMasterCacheTests() {
   assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null,
     'Direct Mongoose post-save hook successfully invalidated industries cache');
 
-  // Cleanup
-  await MasterData.deleteOne({ _id: directDoc._id });
+  // 5b: Direct updateOne test - assert master data edit is visible on the very next read
+  await MasterDataService.getMasterData('industries');
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') !== null, 'Industries cache warm before updateOne');
+
+  const testCode = 'space_edit_' + Date.now();
+  await MasterData.create({
+    type: 'industries',
+    code: testCode,
+    name: 'Old Aerospace Name',
+    isActive: true,
+  });
+  // Repopulate cache
+  await MasterDataService.getMasterData('industries');
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') !== null, 'Industries cache warm with test item');
+
+  // Perform updateOne
+  await MasterData.updateOne({ type: 'industries', code: testCode }, { $set: { name: 'Brand New Aerospace Name' } });
   await tick();
-  assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null,
-    'Direct Mongoose post-delete hook successfully invalidated industries cache');
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null, 'updateOne hook invalidated industries cache');
+
+  // Verify edit is visible on the VERY NEXT read
+  const nextRead = await MasterDataService.getMasterData('industries');
+  const editedItem = nextRead.find((i) => i.code === testCode);
+  assert(editedItem && editedItem.name === 'Brand New Aerospace Name', 'Master-data updateOne edit is visible on the very next read');
+
+  // 5c: findOneAndUpdate
+  await MasterData.findOneAndUpdate({ type: 'industries', code: testCode }, { $set: { name: 'Updated Via findOneAndUpdate' } });
+  await tick();
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null, 'findOneAndUpdate hook invalidated industries cache');
+
+  // 5d: insertMany
+  const insertManyCode = 'space_batch_' + Date.now();
+  await MasterData.insertMany([
+    { type: 'industries', code: insertManyCode, name: 'Batch Industry', isActive: true },
+  ]);
+  await tick();
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null, 'insertMany hook invalidated industries cache');
+
+  // 5e: updateMany
+  await MasterData.updateMany({ type: 'industries', code: { $in: [testCode, insertManyCode] } }, { $set: { isActive: false } });
+  await tick();
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null, 'updateMany hook invalidated industries cache');
+
+  // 5f: bulkWrite
+  await MasterData.bulkWrite([
+    { deleteOne: { filter: { type: 'industries', code: { $in: [testCode, insertManyCode] } } } },
+  ]);
+  await tick();
+  assert(await MasterDataCacheRepository.getCachedMasterData('industries') === null, 'bulkWrite hook invalidated industries cache');
 
   // --------------------------------------------------------------------------
   // TEST 6: Background Startup Warm-Up Routine

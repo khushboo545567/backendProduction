@@ -391,9 +391,28 @@ rankingSchema.post('save', async function (doc: any) {
   } catch {}
 });
 
-rankingSchema.post(['deleteOne', 'findOneAndDelete'] as any, async function (this: any) {
+rankingSchema.post(['updateOne', 'updateMany', 'findOneAndUpdate'] as any, async function (this: any) {
   try {
-    const filter = this.getFilter() || {};
+    const filter = this.getFilter ? this.getFilter() : {};
+    if (filter.userId) {
+      await StudyAnalyticsCacheRepository.invalidateUserAnalytics(String(filter.userId));
+      const updated = await Ranking.findOne({ userId: filter.userId }).lean();
+      if (updated) {
+        await LeaderboardCacheRepository.updateUserScore(
+          String(updated.userId),
+          updated.rankScore || 0,
+          updated.category,
+          updated.weeklyHours,
+          updated.monthlyHours
+        );
+      }
+    }
+  } catch {}
+});
+
+rankingSchema.post(['deleteOne', 'deleteMany', 'findOneAndDelete'] as any, async function (this: any) {
+  try {
+    const filter = this.getFilter ? this.getFilter() : {};
     if (filter.userId) {
       await Promise.all([
         StudyAnalyticsCacheRepository.invalidateUserAnalytics(String(filter.userId)),

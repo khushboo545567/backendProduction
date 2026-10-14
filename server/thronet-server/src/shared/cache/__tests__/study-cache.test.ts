@@ -248,6 +248,48 @@ async function runStudyCacheTests() {
       `Exact tie-break order matches! Mongo: [${mongoDocs.map((d) => d.userId).join(', ')}] vs Redis: [${redisFiltered.join(', ')}]`
     );
 
+    // ── Test 5b: Rebuild on Expired Key Before ZADD & Equal Mongo Ranking ──
+    console.log('\n--- 5b. Leaderboard Rebuild on Expired Key Before ZADD Update ---');
+    // 1. Forcefully expire/delete the global leaderboard key in Redis
+    await redis.del(globalKey);
+    const keyExistsBefore = await redis.exists(globalKey);
+    assert(keyExistsBefore === 0, 'Leaderboard key is completely missing/expired in Redis');
+
+    // 2. Update one user points in MongoDB and push to cache
+    await Ranking.updateOne({ userId: userA }, { $set: { rankScore: 9999, totalStudyHours: 3000 } });
+    await LeaderboardCacheRepository.updateUserScore(userA, 9999);
+
+    // 3. Read leaderboard from Redis
+    const leaderboardFromRedis = await LeaderboardCacheRepository.getGlobalLeaderboardPage(0, 10);
+    assert(leaderboardFromRedis !== null, 'Leaderboard page returned after single-flight rebuild + update');
+    if (!leaderboardFromRedis) throw new Error('leaderboardFromRedis is null');
+    assert(leaderboardFromRedis.total >= 3, 'Redis leaderboard contains all users (not only the updated user)');
+
+    // 4. Assert it equals MongoDB-computed ranking
+    const mongoComputedRanking = await Ranking.find({ rankScore: { $gt: 0 } })
+      .sort({ rankScore: -1, userId: -1 })
+      .select('userId rankScore')
+      .lean();
+
+    assert(
+      leaderboardFromRedis.userIds.length === mongoComputedRanking.length,
+      `Redis leaderboard count (${leaderboardFromRedis.userIds.length}) equals MongoDB count (${mongoComputedRanking.length})`
+    );
+    assert(
+      leaderboardFromRedis.userIds[0] === userA && leaderboardFromRedis.scores[0] === 9999,
+      'User A is rank #1 with 9999 points in Redis'
+    );
+    for (let i = 0; i < mongoComputedRanking.length; i++) {
+      assert(
+        leaderboardFromRedis.userIds[i] === mongoComputedRanking[i].userId,
+        `Rank #${i + 1} user ID matches MongoDB: ${leaderboardFromRedis.userIds[i]} === ${mongoComputedRanking[i].userId}`
+      );
+      assert(
+        leaderboardFromRedis.scores[i] === mongoComputedRanking[i].rankScore,
+        `Rank #${i + 1} score matches MongoDB: ${leaderboardFromRedis.scores[i]} === ${mongoComputedRanking[i].rankScore}`
+      );
+    }
+
     // ── Test 6: ZREM on User Deactivation / Deletion ──────────────────
     console.log('\n--- 6. ZREM on User Deletion / Deactivation ---');
     await LeaderboardCacheRepository.removeUser(userC);
@@ -279,6 +321,75 @@ async function runStudyCacheTests() {
       concurrentResults.every((r) => r.totalStudyTime === 5400),
       'All concurrent reads return consistent data'
     );
+
+    // ── Test 8: Study Analytics Invalidation across Write Paths ───────
+    console.log('\n--- 8. Study Analytics Invalidation on Task, Goal, Attendance, Streak ---');
+    const Task = (await import('@/StudyGroup/models/Task.model')).default;
+    const Goal = (await import('@/StudyGroup/models/Goal.model')).default;
+    const Attendance = (await import('@/StudyGroup/models/Attendance.model')).default;
+    const Streak = (await import('@/StudyGroup/models/Streak.model')).default;
+
+    // 8a: Task write path
+    await StudyAnalyticsCacheRepository.getUserStats(userA, async () => ({ totalStudyTime: 5000 }));
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) !== null, 'Stats cached before Task save');
+    const taskDoc = await Task.create({
+      taskId: uuidv4(),
+      userId: userA,
+      user: userA,
+      title: 'Analytics Task Invalidation',
+    });
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) === null, 'Task save invalidated user stats cache');
+
+    // Task updateOne
+    await StudyAnalyticsCacheRepository.getUserStats(userA, async () => ({ totalStudyTime: 5000 }));
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) !== null, 'Stats cached before Task updateOne');
+    await Task.updateOne({ _id: taskDoc._id }, { $set: { completed: true } });
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) === null, 'Task updateOne invalidated user stats cache');
+
+    // 8b: Goal write path
+    await StudyAnalyticsCacheRepository.getUserStats(userA, async () => ({ totalStudyTime: 5000 }));
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) !== null, 'Stats cached before Goal save');
+    const goalDoc = await Goal.create({
+      goalId: uuidv4(),
+      user: userA,
+      title: 'Analytics Goal Invalidation',
+      targetHours: 20,
+      startDate: new Date(),
+      endDate: new Date(Date.now() + 86400000 * 7),
+    });
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) === null, 'Goal save invalidated user stats cache');
+
+    // Goal updateOne
+    await StudyAnalyticsCacheRepository.getUserStats(userA, async () => ({ totalStudyTime: 5000 }));
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) !== null, 'Stats cached before Goal updateOne');
+    await Goal.updateOne({ _id: goalDoc._id }, { $set: { currentHours: 15 } });
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) === null, 'Goal updateOne invalidated user stats cache');
+
+    // 8c: Attendance write path
+    await StudyAnalyticsCacheRepository.getUserStats(userA, async () => ({ totalStudyTime: 5000 }));
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) !== null, 'Stats cached before Attendance save');
+    const attDoc = await Attendance.create({
+      attendanceId: uuidv4(),
+      user: userA,
+      date: new Date('2026-01-01'),
+    });
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) === null, 'Attendance save invalidated user stats cache');
+
+    // 8d: Streak write path
+    await StudyAnalyticsCacheRepository.getUserStats(userA, async () => ({ totalStudyTime: 5000 }));
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) !== null, 'Stats cached before Streak save');
+    const streakDoc = await Streak.create({
+      streakId: uuidv4(),
+      user: userA,
+      currentStreak: 12,
+    });
+    assert(await redis.get(StudyAnalyticsCacheRepository.getStatsKey(userA)) === null, 'Streak save invalidated user stats cache');
+
+    // Cleanup models
+    await Task.deleteOne({ _id: taskDoc._id });
+    await Goal.deleteOne({ _id: goalDoc._id });
+    await Attendance.deleteOne({ _id: attDoc._id });
+    await Streak.deleteOne({ _id: streakDoc._id });
 
     console.log('\n==========================================================');
     console.log('🎉 Item I Study Analytics & Leaderboard Tests Passed Successfully!');

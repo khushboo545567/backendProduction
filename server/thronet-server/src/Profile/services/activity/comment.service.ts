@@ -207,35 +207,80 @@ class CommentService {
     /**
      * ✅ Get all comments for a post
      */
-    static async getCommentsByPostId(postId: string): Promise<any> {
+    static async getCommentsByPostId(postId: string, viewerId?: string): Promise<any> {
         const correlationId = uuidv4();
 
         try {
             LoggerUtil.info('Fetching comments for post', {
                 postId,
+                viewerId,
                 correlationId,
             });
+
+            let result: any = null;
 
             // Check Item K comments read cache
             try {
                 const cached = await CommentCacheRepository.getCachedPostComments(postId);
-                if (cached) return cached;
+                if (cached) result = cached;
             } catch {
                 // Fallback to MongoDB
             }
 
-            const comments = await Comment.findByPostId(postId);
+            if (!result) {
+                const comments = await Comment.findByPostId(postId);
 
-            const result = {
-                comments,
-                total: comments.length,
-            };
+                result = {
+                    comments,
+                    total: comments.length,
+                };
 
-            CommentCacheRepository.setCachedPostComments(postId, result).catch(() => {});
+                CommentCacheRepository.setCachedPostComments(postId, result).catch(() => {});
+            }
+
+            // Per-request viewer block filtering & post visibility
+            if (viewerId) {
+                try {
+                    const Post = (await import('@/Profile/models/Post.model')).default;
+                    const post = await Post.findOne({ 'posts.entryId': postId }).lean();
+                    if (post) {
+                        const entry = (post as any).posts?.find((p: any) => p.entryId === postId && !p.isDeleted);
+                        if (!entry || (entry.isPublic === false && post.userId !== viewerId)) {
+                            return { comments: [], total: 0 };
+                        }
+                    }
+
+                    const ConnectionBlock = (await import('@/connections/models/ConnectionBlock')).default;
+                    const blocks = await ConnectionBlock.find({
+                        $or: [{ blockerId: viewerId }, { blockedId: viewerId }],
+                        isActive: true,
+                    }).select('blockerId blockedId').lean();
+
+                    if (blocks && blocks.length > 0) {
+                        const blockedIds = new Set(
+                            blocks.map((b: any) => (b.blockerId === viewerId ? b.blockedId : b.blockerId))
+                        );
+
+                        if (post && blockedIds.has(String(post.userId))) {
+                            return { comments: [], total: 0 };
+                        }
+
+                        if (result?.comments && result.comments.length > 0) {
+                            const filtered = result.comments.filter((c: any) => !blockedIds.has(String(c.userId)));
+                            return {
+                                comments: filtered,
+                                total: filtered.length,
+                            };
+                        }
+                    }
+                } catch (err: any) {
+                    LoggerUtil.warn('Failed to apply block filtering to comments', { error: err.message });
+                }
+            }
 
             LoggerUtil.info('Comments fetched successfully', {
                 postId,
-                count: comments.length,
+                count: result.comments?.length || 0,
                 correlationId,
             });
 
