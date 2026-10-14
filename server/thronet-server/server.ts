@@ -106,6 +106,13 @@ async function initializeApp(): Promise<void> {
             logger.warn("Initial leaderboard cache rebuild failed (non-critical)", { error: err.message });
           });
         }).catch(() => {});
+
+        // Item M: Warm up master/reference data cache without blocking startup (non-blocking)
+        import("./src/shared/cache/masterCache").then(({ MasterDataCacheRepository }) => {
+          MasterDataCacheRepository.warmUp().catch((err: any) => {
+            logger.warn("Initial master data cache warm-up failed (non-critical)", { error: err.message });
+          });
+        }).catch(() => {});
       } else {
         logger.warn(
           "Redis cache initialization returned false. Using in-memory fallback.",

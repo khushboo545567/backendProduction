@@ -163,7 +163,7 @@ async function runDoubtCompanyCommentCacheTests() {
     _id: companyId,
     name: companyDoc.companyName,
     industry: companyDoc.industry,
-    website: companyDoc.contact?.website,
+    website: (companyDoc as any).contact?.website,
     followersCount: 10,
     rating: 4.8,
   };

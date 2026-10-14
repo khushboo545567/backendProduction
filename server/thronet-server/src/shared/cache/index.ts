@@ -13,5 +13,6 @@ export * from './profileCache';
 export * from './connectionCache';
 export * from './studyCache';
 export * from './feedCompanyCommentCache';
+export * from './masterCache';
 export { default as CacheHelper } from './cacheHelper';
 

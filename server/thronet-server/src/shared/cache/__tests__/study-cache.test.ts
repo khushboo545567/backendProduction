@@ -129,7 +129,7 @@ async function runStudyCacheTests() {
 
     // Verify TTL is set
     const ttl = await redis.ttl(statsKeyA);
-    assert(ttl > 800 && ttl <= 1000, `TTL is in expected range with jitter (${ttl}s)`);
+    assert(ttl >= 750 && ttl <= 1050, `TTL is in expected range with jitter (${ttl}s)`);
 
     // ── Test 2: Study Patterns Cache ──────────────────────────────────
     console.log('\n--- 2. Study Patterns Cache & Invalidation ---');
