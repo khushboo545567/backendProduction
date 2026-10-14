@@ -16,6 +16,7 @@ import {
   DoubtQueryParams,
 } from "../types/doubt.types";
 import { MemberStatus } from "../interfaces/IGroupMember";
+import { DoubtCacheRepository } from "@/shared/cache/feedCompanyCommentCache";
 
 class DoubtService {
   async createDoubt(
@@ -39,6 +40,9 @@ class DoubtService {
       group: groupId,
       postedBy: userId,
     } as Partial<IDoubt>);
+
+    // Invalidate group doubt feed
+    DoubtCacheRepository.invalidateDoubt(doubt.doubtId, groupId).catch(() => {});
 
     // await doubt.populate('postedBy', 'name email avatar');
     return doubt;
@@ -68,6 +72,17 @@ class DoubtService {
       sort = "recent",
       search,
     } = params;
+
+    // Check cache for non-search feed queries
+    const isSearchQuery = Boolean(search);
+    if (!isSearchQuery) {
+      try {
+        const cached = await DoubtCacheRepository.getCachedFeed(groupId, params);
+        if (cached) return cached;
+      } catch {
+        // Fallback to MongoDB
+      }
+    }
 
     const filter: any = { group: groupId, isDeleted: false };
     if (category) filter.category = category;
@@ -100,7 +115,7 @@ class DoubtService {
       doubtRepository.count(filter),
     ]);
 
-    return {
+    const result = {
       doubts,
       pagination: {
         page,
@@ -111,6 +126,12 @@ class DoubtService {
         hasPrevPage: page > 1,
       },
     };
+
+    if (!isSearchQuery) {
+      DoubtCacheRepository.setCachedFeed(groupId, params, result).catch(() => {});
+    }
+
+    return result;
   }
 
   async getMyDoubts(userId: string, params: DoubtQueryParams) {
@@ -149,6 +170,7 @@ class DoubtService {
 
     Object.assign(doubt, data);
     await doubt.save();
+    DoubtCacheRepository.invalidateDoubt(doubtId, doubt.group).catch(() => {});
     await doubt.populate("postedBy", "name email avatar");
     return doubt;
   }
@@ -166,6 +188,7 @@ class DoubtService {
 
     await doubt.softDelete();
     await answerRepository.softDeleteByDoubt(doubtId);
+    DoubtCacheRepository.invalidateDoubt(doubtId, doubt.group).catch(() => {});
     return { message: "Doubt deleted successfully" };
   }
 
@@ -199,6 +222,7 @@ class DoubtService {
     doubt.solvedAt = new Date();
     doubt.bestAnswer = bestAnswerId;
     await doubt.save();
+    DoubtCacheRepository.invalidateDoubt(doubtId, doubt.group).catch(() => {});
 
     await doubt.populate("postedBy", "name email avatar");
     await doubt.populate("bestAnswer");
@@ -284,6 +308,8 @@ class DoubtService {
       content,
       links: links || [],
     } as Partial<IAnswer>);
+
+    DoubtCacheRepository.invalidateDoubt(doubtId, doubt.group).catch(() => {});
 
     // await answer.populate("answeredBy", "name email avatar");
     return answer;

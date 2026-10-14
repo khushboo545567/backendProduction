@@ -12,5 +12,6 @@ export * from './chatCache';
 export * from './profileCache';
 export * from './connectionCache';
 export * from './studyCache';
+export * from './feedCompanyCommentCache';
 export { default as CacheHelper } from './cacheHelper';
 

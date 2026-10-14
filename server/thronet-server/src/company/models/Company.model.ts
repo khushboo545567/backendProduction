@@ -734,6 +734,10 @@ companySchema.post('save', async function (doc) {
       CacheUtil.del(`company:${doc.companyId}`),
       CacheUtil.del(`company:slug:${doc.companySlug}`),
     ]);
+    // Invalidate Item K standard public profile cache
+    import('@/shared/cache/feedCompanyCommentCache')
+      .then(({ CompanyCacheRepository }) => CompanyCacheRepository.invalidateCompany(doc.companyId, doc._id ? String(doc._id) : undefined))
+      .catch(() => {});
     logger.info('Document saved', { companyId: doc.companyId });
   } catch (error: any) {
     logger.error('Post-save cache invalidation failed', { companyId: doc.companyId, error });

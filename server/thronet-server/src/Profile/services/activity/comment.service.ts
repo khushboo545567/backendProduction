@@ -13,6 +13,7 @@ import redisService from '@/services/redis.service';
 
 
 import NotificationService from '@/notifications/services/notification.service';
+import { CommentCacheRepository } from '@/shared/cache/feedCompanyCommentCache';
 // ==================== INTERFACES ====================
 
 interface CreateCommentResult {
@@ -117,6 +118,9 @@ class CommentService {
                 redisService.deleteByPattern(`feed:v1:${postOwnerId}:page:*`).catch(() => {});
             }
 
+            // Invalidate post comments cache
+            CommentCacheRepository.invalidatePostComments(postId).catch(() => {});
+
             // ✅ Notify post owner (non-blocking, skip if commenting on own post)
             if (postOwnerId && postOwnerId !== userId) {
                 setImmediate(async () => {
@@ -212,7 +216,22 @@ class CommentService {
                 correlationId,
             });
 
+            // Check Item K comments read cache
+            try {
+                const cached = await CommentCacheRepository.getCachedPostComments(postId);
+                if (cached) return cached;
+            } catch {
+                // Fallback to MongoDB
+            }
+
             const comments = await Comment.findByPostId(postId);
+
+            const result = {
+                comments,
+                total: comments.length,
+            };
+
+            CommentCacheRepository.setCachedPostComments(postId, result).catch(() => {});
 
             LoggerUtil.info('Comments fetched successfully', {
                 postId,
@@ -220,10 +239,7 @@ class CommentService {
                 correlationId,
             });
 
-            return {
-                comments,
-                total: comments.length,
-            };
+            return result;
 
         } catch (error: any) {
             LoggerUtil.error('Get comments by post failed', {
