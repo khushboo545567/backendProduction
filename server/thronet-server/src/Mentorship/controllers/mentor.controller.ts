@@ -543,8 +543,11 @@ class MentorController {
 
       // Parallel — truly independent, never if/else chain
       const [mentorDoc, seniorDoc] = await Promise.all([
-        Mentor.findOne({ userId }).select('mentorId status').lean(),
-        SeniorMentorApplication.findOne({ userId }).select('seniorMentorId verificationStatus').lean(),
+        Mentor.findOne({ userId, isDeleted: { $ne: true } }).select('mentorId status').lean(),
+        SeniorMentorApplication.findOne({ userId, isDeleted: { $ne: true } })
+          .select('seniorMentorId verificationStatus')
+          .sort({ createdAt: -1 })
+          .lean(),
       ]);
 
       // ── Shared normalizers: case-insensitive so DB variants never break ────────
@@ -561,7 +564,7 @@ class MentorController {
 
       const normalizeAppStatus = (raw?: string | null): RoleStatus => {
         const s = (raw ?? '').toLowerCase().trim();
-        if (s === 'verified') return 'approved';
+        if (s === 'verified' || s === 'approved' || s === 'active') return 'approved';
         if (s === 'pending' || s === 'under_review') return 'pending';
         if (s === 'rejected') return 'rejected';
         if (s === '') return 'none';
