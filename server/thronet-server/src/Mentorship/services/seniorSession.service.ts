@@ -29,7 +29,28 @@ class SeniorSessionService {
 
   constructor() {}
 
-  private async uploadImageToCloudinary(buffer: Buffer, sessionId: string): Promise<string> {
+    /**
+   * FormData sends arrays as a JSON string. Normalise to string[].
+   * Returns undefined when the field was not sent at all.
+   */
+    private toStringArray(value: unknown, max = 20): string[] | undefined {
+      if (value === undefined || value === null) return undefined;
+      let arr: unknown = value;
+      if (typeof value === 'string') {
+        try {
+          arr = JSON.parse(value);
+        } catch {
+          arr = value.split('\n');
+        }
+      }
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map((x) => String(x).trim())
+        .filter(Boolean)
+        .slice(0, max);
+    }
+  
+    private async uploadImageToCloudinary(buffer: Buffer, sessionId: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
@@ -134,6 +155,9 @@ class SeniorSessionService {
       sessionId,
       mentorId: userId,
       thumbnailImage,
+      tags: this.toStringArray((payload as any).tags) ?? [],
+      learningOutcomes: this.toStringArray((payload as any).learningOutcomes) ?? [],
+      prerequisites: this.toStringArray((payload as any).prerequisites) ?? [],
       bookings: [],
       status: payload.status ?? 'pending',
     } as unknown as ISeniorSession;
@@ -252,7 +276,7 @@ class SeniorSessionService {
       slotTime: payload.slotTime,
       scheduledAt: payload.scheduledAt ? new Date(payload.scheduledAt) : undefined,
       payment: {
-        status: 'pending',
+        status: payload.paymentMethod === 'free' ? 'free' : 'pending',
         method: payload.paymentMethod || 'card'
       },
       pricing: payload.pricing
@@ -350,6 +374,11 @@ class SeniorSessionService {
     if (file) {
       const uploadedUrl = await this.uploadImageToCloudinary(file.buffer, sessionId);
       allowedUpdates.thumbnailImage = uploadedUrl;
+    }
+
+    for (const key of ['tags', 'learningOutcomes', 'prerequisites'] as const) {
+      const parsed = this.toStringArray((payload as any)[key]);
+      if (parsed !== undefined) (allowedUpdates as any)[key] = parsed;
     }
 
     // Availability validation check on update

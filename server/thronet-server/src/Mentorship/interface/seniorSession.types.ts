@@ -86,6 +86,14 @@ export interface ISeniorSession {
 
   thumbnailImage?: string;
 
+  shortDescription?: string;
+
+  tags?: string[];
+
+  learningOutcomes?: string[];
+
+  prerequisites?: string[];
+
   /**
    * Multiple juniors can register
    * for the same senior session.
