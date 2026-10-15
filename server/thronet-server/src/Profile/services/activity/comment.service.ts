@@ -239,17 +239,24 @@ class CommentService {
             }
 
             // Per-request viewer block filtering & post visibility
-            if (viewerId) {
-                try {
-                    const Post = (await import('@/Profile/models/Post.model')).default;
-                    const post = await Post.findOne({ 'posts.entryId': postId }).lean();
-                    if (post) {
-                        const entry = (post as any).posts?.find((p: any) => p.entryId === postId && !p.isDeleted);
-                        if (!entry || (entry.isPublic === false && post.userId !== viewerId)) {
+            try {
+                const Post = (await import('@/Profile/models/Post.model')).default;
+                const post = await Post.findOne({ 'posts.entryId': postId }).lean();
+                if (post) {
+                    const entry = (post as any).posts?.find((p: any) => p.entryId === postId && !p.isDeleted);
+                    if (!entry) {
+                        return { comments: [], total: 0 };
+                    }
+                    // Private post: unauthenticated or non-author viewers cannot access comments
+                    if (entry.isPublic === false) {
+                        if (!viewerId || post.userId !== viewerId) {
                             return { comments: [], total: 0 };
                         }
                     }
+                }
 
+                // If viewerId is provided, apply dynamic block filtering
+                if (viewerId) {
                     const ConnectionBlock = (await import('@/connections/models/ConnectionBlock')).default;
                     const blocks = await ConnectionBlock.find({
                         $or: [{ blockerId: viewerId }, { blockedId: viewerId }],
@@ -269,13 +276,13 @@ class CommentService {
                             const filtered = result.comments.filter((c: any) => !blockedIds.has(String(c.userId)));
                             return {
                                 comments: filtered,
-                                total: filtered.length,
+                                total: result.total, // Keep total as the true total comments on the post
                             };
                         }
                     }
-                } catch (err: any) {
-                    LoggerUtil.warn('Failed to apply block filtering to comments', { error: err.message });
                 }
+            } catch (err: any) {
+                LoggerUtil.warn('Failed to apply post visibility or block filtering to comments', { error: err.message });
             }
 
             LoggerUtil.info('Comments fetched successfully', {

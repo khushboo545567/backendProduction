@@ -39,6 +39,7 @@ import ConnectionBlock, { BlockReason } from '@/connections/models/ConnectionBlo
 import CommentService from '@/Profile/services/activity/comment.service';
 import doubtService from '@/StudyGroup/services/doubt.service';
 import GroupCategory from '@/StudyGroup/enums/GroupCategory.enum';
+import Post from '@/Profile/models/Post.model';
 
 function assert(condition: any, message: string) {
   if (!condition) {
@@ -356,12 +357,76 @@ async function runDoubtCompanyCommentCacheTests() {
     'Unblocked viewer sees author comment'
   );
 
-  // 2. Blocked viewer does NOT see author comment
+  // 2. Blocked viewer does NOT see author comment, but total reflects true total comments count
   const commentsForBlocked = await CommentService.getCommentsByPostId(blockPostId, viewerUserId);
   assert(
     !commentsForBlocked.comments.some((c: any) => c.userId === authorUserId),
     'Blocked author comment is NOT served to the blocked viewer'
   );
+  assert(
+    commentsForBlocked.total === 1,
+    'Total comments field remains the true post total (1) even when comments are filtered by block list'
+  );
+
+  // 3. Private Post: NO viewerId (unauthenticated) or non-author MUST return empty array
+  console.log('\n--- TEST 9b: Private Post Comments with NO viewerId or Non-Author ---');
+  const privatePostEntryId = 'private_post_entry_' + Date.now();
+  const postAuthorUserId = uuidv4();
+  const nonAuthorUserId = uuidv4();
+
+  await Post.create({
+    userId: postAuthorUserId,
+    posts: [
+      {
+        entryId: privatePostEntryId,
+        title: 'Secret Confidential Post',
+        isPublic: false,
+        postUrl: `http://localhost/posts/${privatePostEntryId}`,
+        images: [],
+        videos: [],
+        documents: [],
+        likesCount: 0,
+        commentsCount: 1,
+        repostsCount: 0,
+        sendsCount: 0,
+        likedBy: [],
+        savedBy: [],
+        reactions: [],
+        reactionCounts: { like: 0, celebrate: 0, support: 0, love: 0, insightful: 0, funny: 0 },
+        isPinned: false,
+      },
+    ],
+  });
+
+  const privateComment = new Comment({
+    commentId: uuidv4(),
+    postId: privatePostEntryId,
+    userId: postAuthorUserId,
+    content: 'Classified discussion',
+  });
+  await privateComment.save();
+
+  // A: NO viewerId provided (unauthenticated request) -> MUST return empty comments and total 0
+  const commentsNoViewer = await CommentService.getCommentsByPostId(privatePostEntryId);
+  assert(
+    commentsNoViewer.comments.length === 0 && commentsNoViewer.total === 0,
+    'Private post with NO viewerId returns { comments: [], total: 0 }'
+  );
+
+  // B: Non-author viewerId provided -> MUST return empty comments and total 0
+  const commentsNonAuthor = await CommentService.getCommentsByPostId(privatePostEntryId, nonAuthorUserId);
+  assert(
+    commentsNonAuthor.comments.length === 0 && commentsNonAuthor.total === 0,
+    'Private post with non-author viewerId returns { comments: [], total: 0 }'
+  );
+
+  // C: Post author viewerId provided -> successfully returns comments and total
+  const commentsForAuthor = await CommentService.getCommentsByPostId(privatePostEntryId, postAuthorUserId);
+  assert(
+    commentsForAuthor.comments.length === 1 && commentsForAuthor.comments[0].content === 'Classified discussion',
+    'Private post author successfully views private comments'
+  );
+  assert(commentsForAuthor.total === 1, 'Private post author views true total (1)');
 
   // --------------------------------------------------------------------------
   // TEST 10: Private-Group Doubt is NEVER Served to a Non-Member

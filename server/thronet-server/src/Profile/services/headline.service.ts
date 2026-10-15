@@ -192,7 +192,7 @@ class HeadlineService {
  * Get headline by ID
  */
     static async getHeadlineById(headlineId: string): Promise<IHeadline> {
-        const headline = await Headline.findByHeadlineId(headlineId);
+        const headline = await Headline.findOne({ headlineId, 'flags.isDeleted': false }).lean<IHeadline>().exec();
 
         if (!headline) {
             throw new Error('Headline not found');
@@ -240,11 +240,11 @@ class HeadlineService {
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
-                .lean(),
+                .lean<IHeadline[]>(),
             Headline.countDocuments(query)
         ]);
 
-        return { headlines: headlines as unknown as IHeadline[], total };
+        return { headlines, total };
     }
 
     /**
@@ -256,29 +256,48 @@ class HeadlineService {
         updatedBy: string,
         updatedByName: string
     ): Promise<IHeadline> {
-        const headline = await Headline.findByHeadlineId(headlineId);
+        // Strip protected fields: type, headlineId, flags.*, and metadata.* cannot be modified by client
+        const {
+            type: _type,
+            headlineId: _id,
+            flags: _flags,
+            metadata: _meta,
+            _id: _mongoId,
+            createdAt: _created,
+            updatedAt: _updated,
+            ...safeUpdates
+        } = (updates || {}) as any;
+
+        // Also prevent dot-notation attacks on nested flags.* and metadata.*
+        for (const key of Object.keys(safeUpdates)) {
+            if (
+                key === 'type' ||
+                key === 'headlineId' ||
+                key.startsWith('flags.') ||
+                key.startsWith('metadata.')
+            ) {
+                delete safeUpdates[key];
+            }
+        }
+
+        const headline = await Headline.findOneAndUpdate(
+            { headlineId, 'flags.isDeleted': false },
+            {
+                $set: {
+                    ...safeUpdates,
+                    'metadata.lastModifiedBy': updatedBy,
+                    'metadata.lastModifiedByName': updatedByName,
+                    updatedAt: new Date(),
+                },
+            },
+            { new: true, runValidators: true }
+        ).lean<IHeadline>().exec();
 
         if (!headline) {
             throw new Error('Headline not found');
         }
 
-        // Update allowed fields
-        const allowedFields = [
-            'title', 'message', 'priority', 'status', 'audience',
-            'scheduling', 'styling', 'actions', 'flags'
-        ];
-
-        allowedFields.forEach(field => {
-            if (updates[field as keyof IHeadline] !== undefined) {
-                (headline as any)[field] = updates[field as keyof IHeadline];
-            }
-        });
-
-        // Update metadata
-        headline.metadata.lastModifiedBy = updatedBy;
-        headline.metadata.lastModifiedByName = updatedByName;
-
-        await headline.save();
+        await this.invalidateHeadlineCache(headline.type, headlineId);
 
         return headline;
     }
@@ -324,6 +343,9 @@ class HeadlineService {
             logger.info('Expiring old headlines', { correlationId });
 
             const count = await Headline.expireOldHeadlines();
+            if (count > 0) {
+                await this.invalidateHeadlineCache('*');
+            }
 
             logger.info('Old headlines expired', {
                 count,
