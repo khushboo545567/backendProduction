@@ -14,5 +14,6 @@ export * from './connectionCache';
 export * from './studyCache';
 export * from './feedCompanyCommentCache';
 export * from './masterCache';
+export * from './socketCache';
 export { default as CacheHelper } from './cacheHelper';
 
