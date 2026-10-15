@@ -53,9 +53,18 @@ const DEFAULT_ORIGINS = [
 
 const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] ||   process.env['CORS_ALLOWED_ORIGINS'] ||
 '';
-const allowedOrigins: string[] = envOrigins
-    ? envOrigins.split(',').map((o) => o.trim()).filter(Boolean)
+const PRODUCTION_ORIGINS = [
+    'https://throne8.com',
+    'https://www.throne8.com',
+];
+
+const configuredOrigins: string[] = envOrigins
+    ? envOrigins.split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean)
     : DEFAULT_ORIGINS;
+
+const allowedOrigins: string[] = Array.from(
+    new Set([...configuredOrigins, ...PRODUCTION_ORIGINS])
+);
 
 const allowVercelPreviews = process.env['ALLOW_VERCEL_PREVIEWS']
     ? process.env['ALLOW_VERCEL_PREVIEWS'] === 'true'
