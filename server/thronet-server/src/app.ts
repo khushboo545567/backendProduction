@@ -24,6 +24,7 @@ import { User } from './auth/models';
 
 // Config
 import { LoggerUtil, requestLogger } from './shared/logger.util';
+import { createCookieAuthBridge } from './shared/middlewares/cookieAuth.middleware';
 import NotificationService from './auth/services/notification.service';
 
 interface CustomError extends Error {
@@ -50,6 +51,9 @@ const DEFAULT_ORIGINS = [
     'http://localhost:3001',
     'http://localhost:5173',
     'https://throne8-client-main.vercel.app',
+    'https://throne8.com',
+    'https://www.throne8.com',
+    'https://resume.throne8.com',
 ];
 
 const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] ||   process.env['CORS_ALLOWED_ORIGINS'] ||
@@ -62,15 +66,20 @@ const allowVercelPreviews = process.env['ALLOW_VERCEL_PREVIEWS']
     ? process.env['ALLOW_VERCEL_PREVIEWS'] === 'true'
     : !isProduction;
 
+// Single source of truth for "is this browser origin allowed?"
+// (used by CORS below and by the cookie CSRF guard)
+const isOriginAllowed = (origin: string): boolean => {
+    const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(origin);
+    const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(origin);
+    return allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel || isLocalhost;
+};
+
 app.use(cors({
     origin: (origin, callback) => {
         // Server-to-server calls (no origin) allow karo
         if (!origin) return callback(null, true);
 
-        const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(origin);
-        const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(origin);
-
-        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel || isLocalhost) {
+        if (isOriginAllowed(origin)) {
             return callback(null, origin);
         }
 
@@ -94,6 +103,12 @@ app.use(cors({
 
 // 1. Cookie parser and request logger
 app.use(cookieParser());
+
+// Cookie session support: copy the access cookie into the Authorization header
+// (explicit header wins). On state-changing requests the cookies are only honoured
+// when X-Requested-With + an allowed Origin prove the call came from our frontend.
+app.use(createCookieAuthBridge(isOriginAllowed));
+
 app.use(requestLogger);
 
 // 2. Body parsers

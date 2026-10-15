@@ -1,6 +1,23 @@
 import { Request, Response } from 'express';
 import GoogleAuthService from '../services/googleAuth.service';
 import LoggerUtil from '@/shared/logger.util';
+import { setAuthCookies, tokensForResponse } from '@/shared/utils/authCookies.util';
+
+/**
+ * Web clients use these endpoints too (Google One Tap), so set the httpOnly session
+ * cookies here as well. Raw tokens stay in the JSON only as AUTH_TOKEN_BODY_MODE allows
+ * (the mobile app sends no Origin header, so `native-only` keeps it working).
+ */
+const withSessionCookies = (req: Request, res: Response, result: any): any => {
+    if (!result?.tokens?.accessToken || !result?.tokens?.refreshToken) return result;
+
+    setAuthCookies(res, {
+        accessToken: result.tokens.accessToken,
+        refreshToken: result.tokens.refreshToken,
+    });
+
+    return { ...result, tokens: tokensForResponse(req, result.tokens) };
+};
 
 /**
  * Controller for Google ID Token verification (Mobile App Native Auth Flow)
@@ -21,7 +38,7 @@ export async function googleVerifyController(req: Request, res: Response): Promi
 
         res.status(200).json({
             success: true,
-            data: result,
+            data: withSessionCookies(req, res, result),
         });
     } catch (error: any) {
         LoggerUtil.error('Google verify controller failed', { error: error.message });
@@ -51,7 +68,7 @@ export async function googleRegisterController(req: Request, res: Response): Pro
 
         res.status(200).json({
             success: true,
-            data: result,
+            data: withSessionCookies(req, res, result),
         });
     } catch (error: any) {
         LoggerUtil.error('Google register controller failed', { error: error.message });
