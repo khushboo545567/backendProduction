@@ -266,14 +266,23 @@ class MentorService {
 
       logger.info(`Mentor updated: ${mentorId}`);
 
-      TrustScoreEvents.emit('ProfileUpdated', {
-        mentorId,
-        timestamp: new Date()
-      });
+      try {
+        TrustScoreEvents.emit('ProfileUpdated', {
+          mentorId,
+          timestamp: new Date()
+        });
+      } catch (eventErr: any) {
+        // Trust score listener fail ho to bhi profile update fail nahi honi chahiye
+        logger.warn(`TrustScore event failed for ${mentorId}: ${eventErr?.message}`);
+      }
 
       return await this.enrichMentorWithRelations(updatedMentor, authToken);
     } catch (error: any) {
-      logger.error(`Failed to update mentor ${mentorId}: ${error.message}`);
+      logger.error(`Failed to update mentor ${mentorId}: ${error?.message}`, {
+        name: error?.name,
+        stack: error?.stack,
+        http_code: error?.http_code,
+      });
       throw error;
     }
   }
@@ -816,7 +825,18 @@ class MentorService {
           overwrite: true,
         },
         (error: any, result: any) => {
-          if (error) return reject(error);
+          if (error || !result) {
+            logger.error('Cloudinary upload failed', {
+              message: error?.message,
+              http_code: error?.http_code,
+              name: error?.name,
+            });
+            return reject(
+              new BadRequestError(
+                `Image upload failed: ${error?.message || 'Unknown Cloudinary error'}`
+              )
+            );
+          }
           resolve(result.secure_url);
         }
       );
