@@ -72,6 +72,50 @@ class MentorValidator {
           }
           return true;
         }),
+
+      body('company')
+        .trim()
+        .notEmpty()
+        .withMessage('Company is required')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('Company must contain letters or digits');
+          }
+          return true;
+        }),
+
+      body('college')
+        .trim()
+        .notEmpty()
+        .withMessage('College is required')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('College must contain letters or digits');
+          }
+          return true;
+        }),
+
+      body('degree')
+        .trim()
+        .notEmpty()
+        .withMessage('Degree is required')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('Degree must contain letters or digits');
+          }
+          return true;
+        }),
+
+      body('branch')
+        .trim()
+        .notEmpty()
+        .withMessage('Branch is required')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('Branch must contain letters or digits');
+          }
+          return true;
+        }),
       
       body('title')
         .trim()
@@ -238,6 +282,54 @@ body('experience.level')
         .optional()
         .isIn(Object.values(MentorStatus))
         .withMessage('Invalid status'),
+
+      body('company')
+        .optional()
+        .trim()
+        .notEmpty()
+        .withMessage('Company cannot be empty')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('Company must contain letters or digits');
+          }
+          return true;
+        }),
+
+      body('college')
+        .optional()
+        .trim()
+        .notEmpty()
+        .withMessage('College cannot be empty')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('College must contain letters or digits');
+          }
+          return true;
+        }),
+
+      body('degree')
+        .optional()
+        .trim()
+        .notEmpty()
+        .withMessage('Degree cannot be empty')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('Degree must contain letters or digits');
+          }
+          return true;
+        }),
+
+      body('branch')
+        .optional()
+        .trim()
+        .notEmpty()
+        .withMessage('Branch cannot be empty')
+        .custom((value) => {
+          if (!/[a-zA-Z0-9]/.test(value)) {
+            throw new Error('Branch must contain letters or digits');
+          }
+          return true;
+        }),
     ];
   }
 

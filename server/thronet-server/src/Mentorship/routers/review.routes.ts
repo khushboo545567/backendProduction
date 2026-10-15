@@ -3,6 +3,7 @@ import { mentorshipReviewController } from '../controllers';
 import { validate } from '@/shared/middlewares/validation.middleware';
 import { body, param, query } from 'express-validator';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
+import { reportReviewValidation } from '../validations/review.validator';
 
 const router = Router();
 
@@ -51,13 +52,6 @@ const addMentorResponseValidation = [
     .withMessage('Response cannot exceed 500 characters'),
 ];
 
-const reportReviewValidation = [
-  param('id').notEmpty().withMessage('Review ID is required'),
-  body('reason')
-    .notEmpty()
-    .withMessage('Report reason is required'),
-];
-
 const paginationValidation = [
   query('page')
     .optional()
@@ -92,6 +86,7 @@ router.post(
  */
 router.get(
   '/mentor/:mentorId',
+  AuthMiddleware.authenticateOptional as any,
   validate([
     param('mentorId').notEmpty().withMessage('Mentor ID is required'),
     ...paginationValidation,
@@ -271,8 +266,8 @@ router.post(
   validate([
     param('id').notEmpty().withMessage('Review ID is required'),
     body('action')
-      .isIn(['approve', 'hide', 'delete'])
-      .withMessage('Invalid moderation action'),
+      .isIn(['keep', 'delete'])
+      .withMessage("Invalid moderation action. Use 'keep' or 'delete'"),
     body('reason').optional(),
   ]),
   mentorshipReviewController.moderateReview

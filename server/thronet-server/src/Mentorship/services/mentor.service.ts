@@ -1,4 +1,4 @@
-import { User, ProfilePhoto } from '@/shared/models/index.models';
+import { User, ProfilePhoto, Education, Experience } from '@/shared/models/index.models';
 import mongoose from 'mongoose';
 import Company from '@/company/models/Company.model';
 import { Mentor, SessionMentor, GroupSession } from '../models';
@@ -24,6 +24,7 @@ import { ICompany } from '@/Mentorship/interface/company.types';
 import mentorRepository from '../repositories/mentor.repository';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 import { TrustScoreEvents } from '../events/trustScore.events';
+import { resolveUserDetails } from '@/Mentorship/utils/userPhotoHelper';
 
 class MentorService {
   /**
@@ -139,7 +140,11 @@ class MentorService {
   /**
    * Get mentor by mentorId (UUID) with relations
    */
-  async getMentorById(mentorId: string, authToken?: string): Promise<MentorWithRelations> {
+  async getMentorById(
+    mentorId: string,
+    authToken?: string,
+    currentUser?: any
+  ): Promise<MentorWithRelations> {
     try {
       logger.info(`Fetching mentor: ${mentorId}`);
 
@@ -148,8 +153,16 @@ class MentorService {
         throw new NotFoundError('MENTOR_NOT_FOUND');
       }
 
-      if (mentor.status !== MentorStatus.ACTIVE && !authToken) {
-        throw new ForbiddenError('Mentor profile is not available');
+      if (mentor.status !== MentorStatus.ACTIVE) {
+        const currentUserId = currentUser?.userId || currentUser?.id;
+        const isOwner =
+          Boolean(currentUserId) &&
+          String(currentUserId) === String(mentor.userId);
+        const isAdmin = currentUser?.role === 'admin';
+
+        if (!isOwner && !isAdmin) {
+          throw new ForbiddenError('Mentor profile is not available');
+        }
       }
 
       return await this.enrichMentorWithRelations(mentor, authToken);
@@ -253,14 +266,23 @@ class MentorService {
 
       logger.info(`Mentor updated: ${mentorId}`);
 
-      TrustScoreEvents.emit('ProfileUpdated', {
-        mentorId,
-        timestamp: new Date()
-      });
+      try {
+        TrustScoreEvents.emit('ProfileUpdated', {
+          mentorId,
+          timestamp: new Date()
+        });
+      } catch (eventErr: any) {
+        // Trust score listener fail ho to bhi profile update fail nahi honi chahiye
+        logger.warn(`TrustScore event failed for ${mentorId}: ${eventErr?.message}`);
+      }
 
       return await this.enrichMentorWithRelations(updatedMentor, authToken);
     } catch (error: any) {
-      logger.error(`Failed to update mentor ${mentorId}: ${error.message}`);
+      logger.error(`Failed to update mentor ${mentorId}: ${error?.message}`, {
+        name: error?.name,
+        stack: error?.stack,
+        http_code: error?.http_code,
+      });
       throw error;
     }
   }
@@ -386,6 +408,160 @@ class MentorService {
         mentors.map((mentor: any) => this.enrichMentorWithRelations(mentor, authToken))
       );
 
+      // Batch fetch education for all returned mentors (1 query)
+      let finalMentors: any[] = enrichedMentors;
+      try {
+        const userIds = enrichedMentors.map((m: any) => m.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const eduDocs = await Education.find(
+            { userId: { $in: userIds }, isDeleted: false, isArchived: false },
+            { userId: 1, schoolCollegeName: 1, degree: 1, specialization: 1, startDate: 1, endDate: 1, isOngoing: 1 }
+          ).lean();
+          const eduByUser: Record<string, any[]> = {};
+          for (const d of eduDocs) {
+            (eduByUser[d.userId] ||= []).push(d);
+          }
+          finalMentors = enrichedMentors.map((m: any) => {
+            const list = eduByUser[m.userId] || [];
+            let chosenCollege = '';
+            let chosenDegree = '';
+            let chosenBranch = '';
+            if (list.length > 0) {
+              const ongoing = list.filter((e: any) => e.isOngoing || !e.endDate);
+              const chosen = ongoing.length
+                ? ongoing.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  )
+                : list.reduce((a: any, b: any) =>
+                    (b.endDate ? new Date(b.endDate).getTime() : 0) >
+                    (a.endDate ? new Date(a.endDate).getTime() : 0)
+                      ? b
+                      : a
+                  );
+              if (typeof chosen?.schoolCollegeName === 'string' && /[a-zA-Z0-9]/.test(chosen.schoolCollegeName)) {
+                chosenCollege = chosen.schoolCollegeName.trim();
+              }
+              if (typeof chosen?.degree === 'string' && /[a-zA-Z0-9]/.test(chosen.degree)) {
+                chosenDegree = chosen.degree.trim();
+              }
+              if (typeof chosen?.specialization === 'string' && /[a-zA-Z0-9]/.test(chosen.specialization)) {
+                chosenBranch = chosen.specialization.trim();
+              }
+            }
+            const college = (typeof m.college === 'string' && /[a-zA-Z0-9]/.test(m.college) ? m.college.trim() : '') || chosenCollege;
+            const degree = (typeof m.degree === 'string' && /[a-zA-Z0-9]/.test(m.degree) ? m.degree.trim() : '') || chosenDegree;
+            const branch = (typeof m.branch === 'string' && /[a-zA-Z0-9]/.test(m.branch) ? m.branch.trim() : '') || chosenBranch;
+            return {
+              ...m,
+              ...(college ? { college } : {}),
+              ...(degree ? { degree } : {}),
+              ...(branch ? { branch } : {}),
+            };
+          });
+        }
+      } catch (eduErr: any) {
+        logger.warn(`Failed to fetch education for mentors: ${eduErr.message}`);
+      }
+
+      // Batch fetch work experience company for all returned mentors (1 query)
+      try {
+        const userIds = finalMentors.map((m: any) => m.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const expDocs = await Experience.find(
+            { userId: { $in: userIds }, isDeleted: false, isArchived: false },
+            { userId: 1, companyName: 1, startDate: 1, endDate: 1, currentlyWorking: 1 }
+          ).lean();
+          const expByUser: Record<string, any[]> = {};
+          for (const d of expDocs) {
+            (expByUser[d.userId] ||= []).push(d);
+          }
+          finalMentors = finalMentors.map((m: any) => {
+            const list = expByUser[m.userId] || [];
+            let resolvedCompany = typeof m.company === 'string' && /[a-zA-Z0-9]/.test(m.company) ? m.company.trim() : '';
+            if (!resolvedCompany && list.length > 0) {
+              const current = list.filter((e: any) => e.currentlyWorking || !e.endDate);
+              const chosen = current.length
+                ? current.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  )
+                : list.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  );
+              if (typeof chosen?.companyName === 'string' && /[a-zA-Z0-9]/.test(chosen.companyName)) {
+                resolvedCompany = chosen.companyName.trim();
+              }
+            }
+            if (!resolvedCompany && typeof m.user?.company === 'string' && /[a-zA-Z0-9]/.test(m.user.company)) {
+              resolvedCompany = m.user.company.trim();
+            }
+            return {
+              ...m,
+              ...(resolvedCompany ? { company: resolvedCompany } : {}),
+            };
+          });
+        }
+      } catch (expErr: any) {
+        logger.warn(`Failed to fetch experience for mentors: ${expErr.message}`);
+      }
+
+      // Batch fetch company logos for all returned mentors (1 query)
+      try {
+        const companyIds = finalMentors.map((m: any) => m.companyId).filter(Boolean);
+        const companyNames = finalMentors.map((m: any) => m.company).filter((c: any) => typeof c === 'string' && c.trim());
+
+        if (companyIds.length > 0 || companyNames.length > 0) {
+          const escapedNames = Array.from(new Set(companyNames)).map((n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+          const companyDocs = await Company.find(
+            {
+              $or: [
+                ...(companyIds.length ? [{ companyId: { $in: companyIds } }] : []),
+                ...(escapedNames.length ? [{ companyName: { $in: escapedNames.map(en => new RegExp(`^${en}$`, 'i')) } }] : []),
+              ],
+              'audit.isDeleted': false,
+            },
+            { companyId: 1, companyName: 1, 'media.logo': 1 }
+          ).lean();
+
+          const compById: Record<string, any> = {};
+          const compByName: Record<string, any> = {};
+          for (const c of companyDocs) {
+            if (c.companyId) compById[c.companyId] = c;
+            if (c.companyName) compByName[c.companyName.toLowerCase().trim()] = c;
+          }
+
+          finalMentors = finalMentors.map((m: any) => {
+            const matchedComp = (m.companyId && compById[m.companyId]) ||
+              (typeof m.company === 'string' && compByName[m.company.toLowerCase().trim()]);
+
+            let companyLogo: string | undefined = undefined;
+            if (matchedComp?.media?.logo) {
+              const { url, publicId } = matchedComp.media.logo;
+              if (url && typeof url === 'string' && url.startsWith('http')) {
+                companyLogo = url;
+              } else if (publicId && typeof publicId === 'string') {
+                companyLogo = cloudinary.url(publicId, { secure: true });
+              }
+            }
+
+            return {
+              ...m,
+              ...(companyLogo ? { companyLogo } : {}),
+            };
+          });
+        }
+      } catch (compErr: any) {
+        logger.warn(`Failed to fetch company logos for mentors: ${compErr.message}`);
+      }
+
       const meta = PaginationHelper.calculateMeta({
         page: validPage,
         limit: validLimit,
@@ -393,7 +569,7 @@ class MentorService {
       });
 
       return {
-        mentors: enrichedMentors,
+        mentors: finalMentors,
         total: meta.total,
         page: meta.page,
         limit: meta.limit,
@@ -421,7 +597,7 @@ class MentorService {
           userId: mentorObj.userId,
           'flags.isDeleted': false,
         })
-          .select('userId email firstName lastName fullName profilePhotoId')
+          .select('userId email firstName lastName fullName profilePhotoId company')
           .lean();
       } catch (error: any) {
         logger.error(`Failed to fetch user for mentor enrichment: ${error.message}`, {
@@ -485,7 +661,11 @@ class MentorService {
         logger.warn(`Failed to dynamically compute mentor stats: ${statsErr.message}`);
       }
 
-      return { ...mentorObj, user, company };
+      return {
+        ...mentorObj,
+        user,
+        ...(company ? { company } : {}),
+      };
     } catch (error: any) {
       logger.error(`Failed to enrich mentor: ${error.message}`);
       return mentor.toObject ? mentor.toObject() : mentor;
@@ -645,7 +825,18 @@ class MentorService {
           overwrite: true,
         },
         (error: any, result: any) => {
-          if (error) return reject(error);
+          if (error || !result) {
+            logger.error('Cloudinary upload failed', {
+              message: error?.message,
+              http_code: error?.http_code,
+              name: error?.name,
+            });
+            return reject(
+              new BadRequestError(
+                `Image upload failed: ${error?.message || 'Unknown Cloudinary error'}`
+              )
+            );
+          }
           resolve(result.secure_url);
         }
       );
@@ -774,11 +965,17 @@ class MentorService {
       });
 
       const now = new Date();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
 
-      // Upcoming 1-on-1 sessions list
+      // Upcoming 1-on-1 sessions list (including active/today sessions that are not completed or cancelled)
       const upcoming1on1Docs = await SessionMentor.find({
         mentorId: { $in: mentorIds },
-        scheduledAt: { $gte: now },
+        $or: [
+          { scheduledAt: { $gte: now } },
+          { status: 'in_progress' },
+          { scheduledAt: { $gte: startOfToday }, status: { $in: ['confirmed', 'in_progress', 'pending'] } },
+        ],
         status: { $nin: ['cancelled', 'completed', 'no_show', 'refunded'] },
       })
         .sort({ scheduledAt: 1 })
@@ -788,107 +985,64 @@ class MentorService {
       // Also find upcoming GroupSessions
       const upcomingGroupDocs = await GroupSession.find({
         mentorId: { $in: mentorIds },
-        scheduledAt: { $gte: now },
+        $or: [
+          { scheduledAt: { $gte: now } },
+          { status: 'in_progress' },
+          { scheduledAt: { $gte: startOfToday }, status: { $in: ['open', 'full', 'in_progress', 'draft'] } },
+        ],
         status: { $in: ['open', 'full', 'in_progress', 'draft'] },
       })
         .sort({ scheduledAt: 1 })
         .limit(10)
         .lean();
 
-      // Bulk resolve mentee Users and ProfilePhotos (No N+1)
-      const userMap = new Map<string, any>();
-      const photoMap = new Map<string, string>();
+      // Collect all raw mentee IDs across 1-on-1 and group sessions for bulk resolution
+      const rawMenteeIds: string[] = [];
 
-      try {
-        const rawMenteeIds = upcoming1on1Docs
-          .map((s: any) =>
-            (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
-            (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
-            s.menteeId ||
-            s.bookedBy ||
-            null
-          )
-          .filter((id): id is string => Boolean(id) && typeof id === 'string');
-
-        // Also add accepted participants from group sessions if any
-        upcomingGroupDocs.forEach((g: any) => {
-          if (Array.isArray(g.participants)) {
-            g.participants.forEach((p: any) => {
-              if (p?.menteeId && typeof p.menteeId === 'string') {
-                rawMenteeIds.push(p.menteeId);
-              }
-            });
-          }
-        });
-
-        const uniqueMenteeIds = [...new Set(rawMenteeIds)];
-
-        if (uniqueMenteeIds.length > 0) {
-          const objectIds = uniqueMenteeIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
-          const uuids = uniqueMenteeIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
-
-          const orConditions: any[] = [];
-          if (objectIds.length > 0) orConditions.push({ _id: { $in: objectIds } });
-          if (uuids.length > 0) orConditions.push({ userId: { $in: uuids } });
-
-          if (orConditions.length > 0) {
-            const users = await User.find(
-              { $or: orConditions },
-              { _id: 1, userId: 1, firstName: 1, lastName: 1, fullName: 1, profilePhotoId: 1, profilePic: 1 }
-            ).lean();
-
-            users.forEach((u: any) => {
-              if (u.userId) userMap.set(String(u.userId), u);
-              if (u._id) userMap.set(String(u._id), u);
-            });
-
-            const photoIds = users
-              .map((u: any) => u.profilePhotoId)
-              .filter((id): id is string => Boolean(id));
-
-            if (photoIds.length > 0) {
-              const photos = await ProfilePhoto.find(
-                { photoId: { $in: photoIds }, isDeleted: false },
-                { photoId: 1, cloudinarySecureUrl: 1, cloudinaryUrl: 1 }
-              ).lean();
-
-              photos.forEach((p: any) => {
-                const url = p.cloudinarySecureUrl || p.cloudinaryUrl || null;
-                if (url && p.photoId) {
-                  photoMap.set(String(p.photoId), url);
-                }
-              });
-            }
-          }
+      upcoming1on1Docs.forEach((s: any) => {
+        if (Array.isArray(s.bookings)) {
+          s.bookings.forEach((b: any) => {
+            if (b?.menteeId) rawMenteeIds.push(String(b.menteeId));
+            if (b?.bookedBy) rawMenteeIds.push(String(b.bookedBy));
+          });
         }
-      } catch (err: any) {
-        logger.warn(`Failed to bulk resolve mentee profile photos for dashboard: ${err?.message || err}`);
-      }
+        if (Array.isArray(s.participants)) {
+          s.participants.forEach((p: any) => {
+            if (p?.menteeId) rawMenteeIds.push(String(p.menteeId));
+            if (p?.userId) rawMenteeIds.push(String(p.userId));
+          });
+        }
+        if (s.menteeId) rawMenteeIds.push(String(s.menteeId));
+        if (s.bookedBy) rawMenteeIds.push(String(s.bookedBy));
+      });
+
+      upcomingGroupDocs.forEach((g: any) => {
+        if (Array.isArray(g.participants)) {
+          g.participants.forEach((p: any) => {
+            if (p?.menteeId) rawMenteeIds.push(String(p.menteeId));
+            if (p?.userId) rawMenteeIds.push(String(p.userId));
+          });
+        }
+      });
+
+      // Bulk resolve all mentee details and photo URLs (Zero N+1)
+      const userDetailsMap = await resolveUserDetails(rawMenteeIds);
 
       const formatted1on1 = upcoming1on1Docs.map((s: any) => {
         const rawId =
-          (Array.isArray(s.bookings) && (s.bookings[0]?.menteeId || s.bookings[0]?.bookedBy)) ||
-          (Array.isArray(s.participants) && (s.participants[0]?.menteeId || s.participants[0]?.userId)) ||
+          (Array.isArray(s.bookings) && (s.bookings.find((b: any) => b?.menteeId || b?.bookedBy)?.menteeId || s.bookings[0]?.bookedBy)) ||
+          (Array.isArray(s.participants) && (s.participants.find((p: any) => p?.menteeId || p?.userId)?.menteeId || s.participants[0]?.userId)) ||
           s.menteeId ||
           s.bookedBy ||
           null;
 
-        const menteeUser = rawId ? userMap.get(String(rawId)) : null;
+        const resolved = rawId ? userDetailsMap.get(String(rawId)) : null;
 
-        let menteeId = menteeUser?.userId || rawId || null;
-        let menteeName = s.bookedMenteeName || 'Student';
-        let menteeProfilePhoto: string | null = null;
-
-        if (menteeUser) {
-          const directName = `${menteeUser.firstName || ''} ${menteeUser.lastName || ''}`.trim();
-          menteeName = directName || menteeUser.fullName || s.bookedMenteeName || 'Student';
-
-          if (menteeUser.profilePic) {
-            menteeProfilePhoto = menteeUser.profilePic;
-          } else if (menteeUser.profilePhotoId) {
-            menteeProfilePhoto = photoMap.get(String(menteeUser.profilePhotoId)) || null;
-          }
-        }
+        let menteeId = resolved?.userId || (rawId ? String(rawId) : null);
+        let menteeName = (resolved && resolved.name && resolved.name !== 'User')
+          ? resolved.name
+          : (s.bookedMenteeName || 'Student');
+        let menteeProfilePhoto = resolved?.photoUrl || null;
 
         const durationMinutes = Number(s.duration || (Array.isArray(s.bookings) && s.bookings[0]?.slotDuration) || 60);
         const startTimeIso = s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString();
@@ -916,18 +1070,26 @@ class MentorService {
 
       const formattedGroup = upcomingGroupDocs.map((g: any) => {
         const firstParticipant = Array.isArray(g.participants) && g.participants[0];
-        const participantUser = firstParticipant?.menteeId ? userMap.get(String(firstParticipant.menteeId)) : null;
+        const participantId = firstParticipant?.menteeId || firstParticipant?.userId || null;
+        const resolved = participantId ? userDetailsMap.get(String(participantId)) : null;
 
         const durationMinutes = Number(g.duration || 60);
         const startTimeIso = g.scheduledAt ? new Date(g.scheduledAt).toISOString() : new Date().toISOString();
         const endTimeIso = new Date(new Date(startTimeIso).getTime() + durationMinutes * 60000).toISOString();
 
+        let menteeName = 'Group Session';
+        if (resolved && resolved.name && resolved.name !== 'User') {
+          menteeName = resolved.name;
+        } else if (g.participants?.length) {
+          menteeName = `${g.participants.length} Participant${g.participants.length > 1 ? 's' : ''}`;
+        }
+
         return {
           _id: g._id,
           sessionId: g.sessionId || String(g._id),
-          menteeId: participantUser?.userId || firstParticipant?.menteeId || null,
-          menteeName: participantUser ? `${participantUser.firstName || ''} ${participantUser.lastName || ''}`.trim() : (g.participants?.length ? `${g.participants.length} Participant${g.participants.length > 1 ? 's' : ''}` : 'Group Session'),
-          menteeProfilePhoto: participantUser?.profilePic || null,
+          menteeId: resolved?.userId || (participantId ? String(participantId) : null),
+          menteeName,
+          menteeProfilePhoto: resolved?.photoUrl || null,
           title: g.title || 'Group Session',
           sessionType: 'Group Session',
           scheduledAt: startTimeIso,

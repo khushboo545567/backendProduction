@@ -39,6 +39,11 @@ export interface IMentor extends TimeStamps, SoftDelete {
   mentorId: string;
   userId: string; // Reference to User Service
   companyId?: string; // Reference to Company Service
+  company?: string;
+  college?: string;
+  degree?: string;
+  branch?: string;
+  companyLogo?: string;
   status: MentorStatus;
   // ⭐ ADD THESE TWO LINES
   profilePic?: string; // Cloudinary URL
@@ -185,11 +190,19 @@ export interface MentorWithRelations extends IMentor {
   nextAvailableSlot?: Date;
   // ⭐ NEW: computed per-request for the currently authenticated viewer
   isSavedByCurrentUser?: boolean;
+  college?: string;
+  degree?: string;
+  branch?: string;
+  companyLogo?: string;
 }
 
 export interface CreateMentorInput {
   userId: string;
   companyId?: string;
+  company?: string;
+  college?: string;
+  degree?: string;
+  branch?: string;
   title: string;
   bio: string;
   tagline?: string;           // already optional ✅
@@ -214,6 +227,10 @@ export interface CreateMentorInput {
 }
 
 export interface UpdateMentorInput {
+  company?: string;
+  college?: string;
+  degree?: string;
+  branch?: string;
   title?: string;
   bio?: string;
   tagline?: string;

@@ -51,12 +51,15 @@ class MentorshipReviewController {
 
       logger.info(`📋 Fetching reviews for mentor: ${mentorId}`);
 
+      const callerUserId = req.user?.id || (req.user as any)?.userId;
+
       const result = await mentorshipReviewService.getMentorReviews(
         mentorId,
         Number(page),
         Number(limit),
         false,
-        safeSort
+        safeSort,
+        callerUserId
       );
 
       ResponseHandler.paginated(
@@ -292,27 +295,62 @@ class MentorshipReviewController {
   }
 
   /**
-   * Report a review
+   * Report a review (mentor-only — can only report reviews on their own profile)
    * POST /api/v1/reviews/:id/report
    */
   async reportReview(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { reason } = req.body;
+      const { reason, note } = req.body;
+      const userId = req.user?.id;
+
+      if (!userId) {
+        ResponseHandler.unauthorized(res);
+        return;
+      }
 
       if (!reason) {
         ResponseHandler.badRequest(res, 'Report reason is required');
         return;
       }
 
-      logger.info(`🚩 Reporting review: ${id}`);
+      // Verify that the caller is the mentor whose profile the review is on
+      const { Mentor } = await import('../models');
+      const mentorDoc = await Mentor.findOne({ userId, isDeleted: false });
+      if (!mentorDoc) {
+        ResponseHandler.forbidden(res, 'Only mentors can report reviews on their own profile');
+        return;
+      }
 
-      await mentorshipReviewService.reportReview(id, reason);
+      // Verify the review belongs to this mentor
+      const { default: reviewRepository } = await import('../repositories/review.repository');
+      const review = await reviewRepository.findByReviewId(id);
+      if (!review || review.isDeleted) {
+        ResponseHandler.notFound(res, 'Review not found');
+        return;
+      }
+      if (review.mentorId !== mentorDoc.mentorId) {
+        ResponseHandler.forbidden(res, 'You can only report reviews on your own profile');
+        return;
+      }
+
+      logger.info(`🚩 Mentor ${userId} (${mentorDoc.mentorId}) reporting review: ${id}`);
+
+      await mentorshipReviewService.reportReview(id, reason, userId, mentorDoc.mentorId, note);
 
       ResponseHandler.success(res, 'Review reported successfully');
     } catch (error: any) {
       logger.error('❌ Failed to report review:', error);
       if (!res.headersSent) {
+        // 409 for duplicate reports
+        if (error.statusCode === 409 || error.message === 'You already reported this review') {
+          ResponseHandler.conflict(res, error.message || 'You already reported this review');
+          return;
+        }
+        if (error.message === 'Review not found') {
+          ResponseHandler.notFound(res, 'Review not found');
+          return;
+        }
         ResponseHandler.error(res, error.message || 'Failed to report review', 400);
       }
     }
@@ -363,15 +401,15 @@ class MentorshipReviewController {
 
   /**
    * Moderate review (Admin only)
-   * POST /api/v1/reviews/:id/moderate
+   * POST /api/v1/reviews/:id/moderate  (kept for backward compatibility — prefer admin route)
    */
   async moderateReview(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
       const { action, reason } = req.body;
 
-      if (!['approve', 'hide', 'delete'].includes(action)) {
-        ResponseHandler.badRequest(res, 'Invalid moderation action');
+      if (!['keep', 'delete'].includes(action)) {
+        ResponseHandler.badRequest(res, "Invalid moderation action. Use 'keep' or 'delete'");
         return;
       }
 

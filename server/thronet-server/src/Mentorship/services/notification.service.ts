@@ -10,6 +10,7 @@ import { Notification } from '../models';
 import { generateSecureId } from '@/shared/security';
 // ✅ NEW — for realtime push after DB save
 import { emitToUser } from '@/socket/emitter';
+import { resolveUserDetails } from '@/Mentorship/utils/userPhotoHelper';
 
 
 
@@ -245,54 +246,12 @@ class NotificationService {
   public async resolveActorDisplay(userId: string): Promise<{ name: string; photoUrl: string | null }> {
     try {
       if (!userId) return { name: 'User', photoUrl: null };
-      const actorUser = await User.findByUserId(userId);
-      if (!actorUser) return { name: 'User', photoUrl: null };
-
-      const name =
-        (actorUser as any).fullName ||
-        `${(actorUser as any).firstName || ''} ${(actorUser as any).lastName || ''}`.trim() ||
-        (actorUser as any).username ||
-        (actorUser as any).email ||
-        'User';
-
-      let photoUrl: string | null = null;
-
-      if ((actorUser as any).profilePhotoId) {
-        try {
-          const photoDoc: any = await ProfilePhoto.findOne({ photoId: (actorUser as any).profilePhotoId }).lean();
-          if (photoDoc) {
-            photoUrl = photoDoc.cloudinarySecureUrl || photoDoc.cloudinaryUrl || null;
-          }
-        } catch {
-          // ignore lookup error
-        }
+      const detailsMap = await resolveUserDetails([userId]);
+      const resolved = detailsMap.get(String(userId));
+      if (resolved) {
+        return { name: resolved.name, photoUrl: resolved.photoUrl };
       }
-
-      if (!photoUrl) {
-        try {
-          const activePhoto: any = await ProfilePhoto.findActivePhoto(userId);
-          if (activePhoto) {
-            photoUrl = activePhoto.cloudinarySecureUrl || activePhoto.cloudinaryUrl || null;
-          }
-        } catch {
-          // ignore lookup error
-        }
-      }
-
-      if (!photoUrl) {
-        try {
-          const profile: any = await UserProfile.findByUserIdCached(userId);
-          photoUrl = profile?.avatar?.url || profile?.avatar || null;
-        } catch {
-          // ignore lookup error
-        }
-      }
-
-      if (!photoUrl && typeof (actorUser as any).profilePhotoId === 'string' && (actorUser as any).profilePhotoId.startsWith('http')) {
-        photoUrl = (actorUser as any).profilePhotoId;
-      }
-
-      return { name, photoUrl };
+      return { name: 'User', photoUrl: null };
     } catch (err: any) {
       logger.warn(`resolveActorDisplay failed for ${userId}: ${err?.message}`);
       return { name: 'User', photoUrl: null };

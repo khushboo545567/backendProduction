@@ -340,11 +340,13 @@ class SeniorSessionRepository {
    * Find all active (non-cancelled) one-to-one sessions
    * for the public discovery page.
    */
-  async findAllActiveOneToOneSessions(): Promise<SeniorSessionDocument[]> {
+  async findAllActiveOneToOneSessions(mentorId?: string): Promise<SeniorSessionDocument[]> {
     return await SeniorSession.find({
-      sessionType: { $ne: 'group' },
-      status: { $ne: 'cancelled' }
+      sessionType: 'one_to_one',
+      status: { $ne: 'cancelled' },
+      ...(mentorId ? { mentorId } : {}),
     })
+      .select('sessionId mentorId sessionType status title description duration category thumbnailImage createdAt')
       .sort({ createdAt: -1 })
       .lean<SeniorSessionDocument[]>();
   }

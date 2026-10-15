@@ -61,6 +61,17 @@ router.get(
   mentorController.getTrustScore as any 
 );
 
+/**
+ * @route   GET /api/v1/mentorship/mentors/me/roles
+ * @desc    Returns the logged-in user’s workspace role statuses in a single call.
+ * @access  Private
+ */
+router.get(
+  '/me/roles',
+  AuthMiddleware.authenticate as any,
+  mentorController.getMyRoles as any
+);
+
 // /**
 //  * @route   GET /api/mentors
 //  * @desc    Get all mentors with filters and pagination
@@ -73,13 +84,44 @@ router.get(
 );
 
 /**
- * @route   GET /api/mentors/:id/dashboard
+ * @route   GET /api/v1/mentorship/mentors/:id/dashboard
  * @desc    Get unified real mentor dashboard data (stats, profile, upcoming sessions)
- * @access  Private (mentor owner)
+ * @access  Private (mentor owner with active status only)
  */
+const mentorOwnershipGuard = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const Mentor = (await import('../models/Mentor')).default;
+    const { MentorStatus } = await import('../interface/mentor.types') as any;
+    const { id } = req.params;
+    const authReq = req as any;
+    const userId = authReq.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+    const doc = await Mentor.findOne({ $or: [{ mentorId: id }, { userId: id }] }).select('userId status').lean();
+    if (!doc) {
+      res.status(404).json({ success: false, message: 'Mentor profile not found' });
+      return;
+    }
+    if ((doc as any).userId !== userId) {
+      res.status(403).json({ success: false, message: 'Access denied: not your mentor profile' });
+      return;
+    }
+    if ((doc as any).status !== MentorStatus.ACTIVE) {
+      res.status(403).json({ success: false, message: 'Mentor profile is not active' });
+      return;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
 router.get(
   '/:id/dashboard',
   AuthMiddleware.authenticate as any,
+  mentorOwnershipGuard as any,
   mentorController.getMentorDashboard as any
 );
 
@@ -90,6 +132,7 @@ router.get(
  */
 router.get(
   '/:id',
+  AuthMiddleware.authenticateOptional as any,
   validate(MentorValidator.getMentorById()),
   mentorController.getProfile
 );

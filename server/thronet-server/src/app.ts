@@ -41,35 +41,61 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 // ==================== CORS ====================
-// Production me sirf CORS_ORIGIN (comma separated) wali origins allowed hain.
-// Vercel preview URLs sirf tab allowed jab ALLOW_VERCEL_PREVIEWS=true ho.
+// Production domains HAMESHA allowed hain (env set ho ya na ho).
+// Env (CORS_ORIGIN / ALLOWED_ORIGINS / CORS_ALLOWED_ORIGINS) se extra origins add hote hain,
+// ye defaults ko replace NAHI karte.
 // Localhost sirf non-production me allowed hai.
-const DEFAULT_ORIGINS = [
-    'http://localhost:3000',
-    'http://localhost:3001',
+// Vercel preview URLs sirf tab allowed jab ALLOW_VERCEL_PREVIEWS=true ho.
+const PRODUCTION_ORIGINS = [
+    'https://throne8.com',
+    'https://www.throne8.com',
     'https://throne8-client-main.vercel.app',
 ];
 
-const envOrigins = process.env['CORS_ORIGIN'] || process.env['ALLOWED_ORIGINS'] || '';
-const allowedOrigins: string[] = envOrigins
-    ? envOrigins.split(',').map((o) => o.trim()).filter(Boolean)
-    : DEFAULT_ORIGINS;
+const DEV_ORIGINS = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+];
+
+// Trailing slash hata do ("https://throne8.com/" != "https://throne8.com")
+const normalizeOrigin = (o: string): string => o.trim().replace(/\/+$/, '');
+
+const envOrigins = (
+    process.env['CORS_ORIGIN'] ||
+    process.env['ALLOWED_ORIGINS'] ||
+    process.env['CORS_ALLOWED_ORIGINS'] ||
+    ''
+)
+    .split(',')
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+const allowedOrigins: string[] = Array.from(new Set([
+    ...PRODUCTION_ORIGINS,
+    ...(isProduction ? [] : DEV_ORIGINS),
+    ...envOrigins,
+]));
 
 const allowVercelPreviews = process.env['ALLOW_VERCEL_PREVIEWS']
     ? process.env['ALLOW_VERCEL_PREVIEWS'] === 'true'
     : !isProduction;
+
+logger.info('CORS allowed origins', { allowedOrigins, allowVercelPreviews });
 
 app.use(cors({
     origin: (origin, callback) => {
         // Server-to-server calls (no origin) allow karo
         if (!origin) return callback(null, true);
 
-        const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(origin);
-        const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(origin);
+        const cleanOrigin = normalizeOrigin(origin);
+        const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(cleanOrigin);
+        const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(cleanOrigin);
 
-        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isVercel || isLocalhost) {
+        if (allowedOrigins.includes('*') || allowedOrigins.includes(cleanOrigin) || isVercel || isLocalhost) {
             return callback(null, origin);
         }
+
+        logger.warn('CORS blocked origin', { origin });
 
         const corsError: CustomError = new Error(`CORS: Origin ${origin} not allowed`);
         corsError.status = 403;
@@ -77,16 +103,13 @@ app.use(cors({
         return callback(corsError);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-        'Content-Type',
-        'Authorization',
-        'X-Requested-With',
-        'Accept',
-        'x-client-version',
-        'x-csrf-token'
-    ],
+    // allowedHeaders intentionally NOT set: cors package browser ke
+    // Access-Control-Request-Headers ko reflect karta hai, isliye koi
+    // naya custom header (x-device-id, x-request-id etc.) preflight fail nahi karega.
     exposedHeaders: ['Authorization', 'Content-Length', 'X-CSRF-Token'],
-    credentials: true
+    credentials: true,
+    maxAge: 86400,
+    optionsSuccessStatus: 204,
 }));
 
 // 1. Cookie parser and request logger

@@ -29,6 +29,10 @@ const MentorSchema = new Schema<MentorDocument>(
     bannerImage: { type: String, trim: true },
     cloudinaryPublicId: { type: String, trim: true },
     companyId: { type: String, index: true },
+    company: { type: String, trim: true },
+    college: { type: String, trim: true },
+    degree: { type: String, trim: true },
+    branch: { type: String, trim: true },
     status: {
       type: String,
       enum: Object.values(MentorStatus),
