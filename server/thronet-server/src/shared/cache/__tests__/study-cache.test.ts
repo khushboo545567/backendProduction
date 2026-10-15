@@ -290,6 +290,42 @@ async function runStudyCacheTests() {
       );
     }
 
+    // ── Test 5c: Weekly Leaderboard Rebuild on Expired Key Before ZADD ──
+    console.log('\n--- 5c. Weekly Leaderboard Guarded Rebuild via Atomic Lua ---');
+    const weeklyKey = LeaderboardCacheRepository.getWeeklySetKey();
+    await redis.del(weeklyKey);
+    assert((await redis.exists(weeklyKey)) === 0, 'Weekly leaderboard key deleted in Redis');
+
+    await Ranking.updateOne({ userId: userA }, { $set: { weeklyHours: 50 } });
+    await LeaderboardCacheRepository.updateUserScore(userA, 9999, undefined, 50);
+
+    const weeklyScore = await redis.zscore(weeklyKey, userA);
+    assert(weeklyScore !== null && parseFloat(weeklyScore) === 50, 'Weekly leaderboard rebuilt from MongoDB and userA weekly score is 50');
+
+    // ── Test 5d: Monthly Leaderboard Rebuild on Expired Key Before ZADD ──
+    console.log('\n--- 5d. Monthly Leaderboard Guarded Rebuild via Atomic Lua ---');
+    const monthlyKey = LeaderboardCacheRepository.getMonthlySetKey();
+    await redis.del(monthlyKey);
+    assert((await redis.exists(monthlyKey)) === 0, 'Monthly leaderboard key deleted in Redis');
+
+    await Ranking.updateOne({ userId: userA }, { $set: { monthlyHours: 200 } });
+    await LeaderboardCacheRepository.updateUserScore(userA, 9999, undefined, undefined, 200);
+
+    const monthlyScore = await redis.zscore(monthlyKey, userA);
+    assert(monthlyScore !== null && parseFloat(monthlyScore) === 200, 'Monthly leaderboard rebuilt from MongoDB and userA monthly score is 200');
+
+    // ── Test 5e: Category Leaderboard Rebuild on Expired Key Before ZADD ──
+    console.log('\n--- 5e. Category Leaderboard Guarded Rebuild via Atomic Lua ---');
+    const categoryKey = LeaderboardCacheRepository.getCategorySetKey(GroupCategory.OTHER);
+    await redis.del(categoryKey);
+    assert((await redis.exists(categoryKey)) === 0, 'Category leaderboard key deleted in Redis');
+
+    await Ranking.updateOne({ userId: userA }, { $set: { rankScore: 9999, category: GroupCategory.OTHER } });
+    await LeaderboardCacheRepository.updateUserScore(userA, 9999, GroupCategory.OTHER);
+
+    const catScore = await redis.zscore(categoryKey, userA);
+    assert(catScore !== null && parseFloat(catScore) === 9999, 'Category leaderboard rebuilt from MongoDB and userA score is 9999');
+
     // ── Test 6: ZREM on User Deactivation / Deletion ──────────────────
     console.log('\n--- 6. ZREM on User Deletion / Deactivation ---');
     await LeaderboardCacheRepository.removeUser(userC);

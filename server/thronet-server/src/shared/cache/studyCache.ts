@@ -132,6 +132,8 @@ export class StudyAnalyticsCacheRepository {
 // ============================================================================
 
 export class LeaderboardCacheRepository {
+  private static readonly inFlightRebuilds = new Map<string, Promise<any>>();
+
   static getGlobalSetKey(): string {
     return buildKey(LEADERBOARD_DOMAIN, 'global');
   }
@@ -148,7 +150,52 @@ export class LeaderboardCacheRepository {
     return buildKey(LEADERBOARD_DOMAIN, 'monthly');
   }
 
-  private static inFlightRebuilds = new Map<string, Promise<any>>();
+  private static readonly CONDITIONAL_ZADD_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+    return 1
+else
+    return 0
+end
+`;
+
+  /**
+   * Apply score update using atomic Lua script. If key is missing or expired,
+   * single-flight rebuilds that dimension from MongoDB and applies the score.
+   */
+  static async applyGuardedScore(
+    key: string,
+    score: number,
+    userId: string,
+    rebuildFn: () => Promise<any>
+  ): Promise<void> {
+    const redis = await getRedisClient();
+    const res = (await redis.eval(
+      this.CONDITIONAL_ZADD_LUA,
+      1,
+      key,
+      score,
+      userId,
+      LEADERBOARD_SET_TTL_SECONDS
+    )) as number;
+
+    if (res === 0) {
+      // Key does not exist or has expired — rebuild from MongoDB first
+      if (!this.inFlightRebuilds.has(key)) {
+        const p = rebuildFn().finally(() => {
+          this.inFlightRebuilds.delete(key);
+        });
+        this.inFlightRebuilds.set(key, p);
+      }
+      await this.inFlightRebuilds.get(key);
+
+      const pipeline = redis.pipeline();
+      pipeline.zadd(key, score, userId);
+      pipeline.expire(key, LEADERBOARD_SET_TTL_SECONDS);
+      await pipeline.exec();
+    }
+  }
 
   /**
    * Ensure global leaderboard key exists in Redis; if expired/missing, rebuild from MongoDB first (single-flight).
@@ -194,7 +241,6 @@ export class LeaderboardCacheRepository {
       pipeline.del(key);
 
       if (rankings.length > 0) {
-        // ZADD in batches of 500
         for (let i = 0; i < rankings.length; i += 500) {
           const batch = rankings.slice(i, i + 500);
           const args: (string | number)[] = [];
@@ -224,54 +270,125 @@ export class LeaderboardCacheRepository {
   }
 
   /**
+   * Rebuild category leaderboard sorted set directly from MongoDB authoritative rankings.
+   */
+  static async rebuildCategoryLeaderboard(category: string): Promise<number> {
+    try {
+      const rankings = await Ranking.find({ category, rankScore: { $gt: 0 } })
+        .sort({ rankScore: -1, userId: -1 })
+        .select('userId rankScore')
+        .lean()
+        .exec();
+
+      if (!isCacheEnabled(LEADERBOARD_DOMAIN)) return rankings.length;
+
+      const redis = await getRedisClient();
+      const key = this.getCategorySetKey(category);
+
+      const pipeline = redis.pipeline();
+      pipeline.del(key);
+
+      if (rankings.length > 0) {
+        for (let i = 0; i < rankings.length; i += 500) {
+          const batch = rankings.slice(i, i + 500);
+          const args: (string | number)[] = [];
+          for (const r of batch) {
+            if (r.userId && r.rankScore !== undefined) {
+              args.push(r.rankScore, String(r.userId));
+            }
+          }
+          if (args.length > 0) pipeline.zadd(key, ...(args as any));
+        }
+      }
+      pipeline.expire(key, LEADERBOARD_SET_TTL_SECONDS);
+      await pipeline.exec();
+      return rankings.length;
+    } catch (err: any) {
+      LoggerUtil.error('LeaderboardCache: failed to rebuild category leaderboard', { category, error: err.message });
+      return 0;
+    }
+  }
+
+  /**
+   * Rebuild weekly leaderboard sorted set directly from MongoDB authoritative rankings.
+   */
+  static async rebuildWeeklyLeaderboard(): Promise<number> {
+    try {
+      const rankings = await Ranking.find({ weeklyHours: { $gt: 0 } })
+        .sort({ weeklyHours: -1, userId: -1 })
+        .select('userId weeklyHours')
+        .lean()
+        .exec();
+
+      if (!isCacheEnabled(LEADERBOARD_DOMAIN)) return rankings.length;
+
+      const redis = await getRedisClient();
+      const key = this.getWeeklySetKey();
+
+      const pipeline = redis.pipeline();
+      pipeline.del(key);
+
+      if (rankings.length > 0) {
+        const args: (string | number)[] = [];
+        for (const r of rankings) {
+          if (r.userId && r.weeklyHours) args.push(r.weeklyHours, String(r.userId));
+        }
+        if (args.length > 0) pipeline.zadd(key, ...(args as any));
+      }
+      pipeline.expire(key, LEADERBOARD_SET_TTL_SECONDS);
+      await pipeline.exec();
+      return rankings.length;
+    } catch (err: any) {
+      LoggerUtil.error('LeaderboardCache: failed to rebuild weekly leaderboard', { error: err.message });
+      return 0;
+    }
+  }
+
+  /**
+   * Rebuild monthly leaderboard sorted set directly from MongoDB authoritative rankings.
+   */
+  static async rebuildMonthlyLeaderboard(): Promise<number> {
+    try {
+      const rankings = await Ranking.find({ monthlyHours: { $gt: 0 } })
+        .sort({ monthlyHours: -1, userId: -1 })
+        .select('userId monthlyHours')
+        .lean()
+        .exec();
+
+      if (!isCacheEnabled(LEADERBOARD_DOMAIN)) return rankings.length;
+
+      const redis = await getRedisClient();
+      const key = this.getMonthlySetKey();
+
+      const pipeline = redis.pipeline();
+      pipeline.del(key);
+
+      if (rankings.length > 0) {
+        const args: (string | number)[] = [];
+        for (const r of rankings) {
+          if (r.userId && r.monthlyHours) args.push(r.monthlyHours, String(r.userId));
+        }
+        if (args.length > 0) pipeline.zadd(key, ...(args as any));
+      }
+      pipeline.expire(key, LEADERBOARD_SET_TTL_SECONDS);
+      await pipeline.exec();
+      return rankings.length;
+    } catch (err: any) {
+      LoggerUtil.error('LeaderboardCache: failed to rebuild monthly leaderboard', { error: err.message });
+      return 0;
+    }
+  }
+
+  /**
    * Rebuild all dimension leaderboards (global, category, weekly, monthly).
    */
   static async rebuildAllLeaderboards(): Promise<void> {
     try {
-      await this.rebuildGlobalLeaderboard();
-      // Also rebuild weekly & monthly
-      const [weeklyRankings, monthlyRankings] = await Promise.all([
-        Ranking.find({ weeklyHours: { $gt: 0 } })
-          .sort({ weeklyHours: -1, userId: -1 })
-          .select('userId weeklyHours')
-          .lean()
-          .exec(),
-        Ranking.find({ monthlyHours: { $gt: 0 } })
-          .sort({ monthlyHours: -1, userId: -1 })
-          .select('userId monthlyHours')
-          .lean()
-          .exec(),
+      await Promise.all([
+        this.rebuildGlobalLeaderboard(),
+        this.rebuildWeeklyLeaderboard(),
+        this.rebuildMonthlyLeaderboard(),
       ]);
-
-      if (isCacheEnabled(LEADERBOARD_DOMAIN)) {
-        const redis = await getRedisClient();
-        const weeklyKey = this.getWeeklySetKey();
-        const monthlyKey = this.getMonthlySetKey();
-
-        const pipeline = redis.pipeline();
-        pipeline.del(weeklyKey);
-        pipeline.del(monthlyKey);
-
-        if (weeklyRankings.length > 0) {
-          const wArgs: (string | number)[] = [];
-          for (const r of weeklyRankings) {
-            if (r.userId && r.weeklyHours) wArgs.push(r.weeklyHours, String(r.userId));
-          }
-          if (wArgs.length > 0) pipeline.zadd(weeklyKey, ...(wArgs as any));
-        }
-
-        if (monthlyRankings.length > 0) {
-          const mArgs: (string | number)[] = [];
-          for (const r of monthlyRankings) {
-            if (r.userId && r.monthlyHours) mArgs.push(r.monthlyHours, String(r.userId));
-          }
-          if (mArgs.length > 0) pipeline.zadd(monthlyKey, ...(mArgs as any));
-        }
-
-        pipeline.expire(weeklyKey, LEADERBOARD_SET_TTL_SECONDS);
-        pipeline.expire(monthlyKey, LEADERBOARD_SET_TTL_SECONDS);
-        await pipeline.exec();
-      }
     } catch (err: any) {
       LoggerUtil.warn('LeaderboardCache: failed to rebuild all leaderboards', {
         error: err.message,
@@ -364,7 +481,8 @@ export class LeaderboardCacheRepository {
   }
 
   /**
-   * Update a user's score in sorted sets (called when ranking metrics change).
+   * Update a user's score in sorted sets using atomic Lua guard across all dimensions
+   * (global, category, weekly, monthly). Rebuilds dimension from MongoDB if key is missing/expired.
    */
   static async updateUserScore(
     userId: string,
@@ -380,49 +498,37 @@ export class LeaderboardCacheRepository {
       const globalKey = this.getGlobalSetKey();
 
       if (rankScore > 0) {
-        // Must never run ZADD on a missing or expired key - rebuild from MongoDB first
-        await this.ensureGlobalLeaderboardExists();
-      }
-
-      const pipeline = redis.pipeline();
-      if (rankScore > 0) {
-        pipeline.zadd(globalKey, rankScore, userId);
-        pipeline.expire(globalKey, LEADERBOARD_SET_TTL_SECONDS);
+        await this.applyGuardedScore(globalKey, rankScore, userId, () => this.rebuildGlobalLeaderboard());
       } else {
-        pipeline.zrem(globalKey, userId);
+        await redis.zrem(globalKey, userId);
       }
 
       if (category) {
         const catKey = this.getCategorySetKey(category);
         if (rankScore > 0) {
-          pipeline.zadd(catKey, rankScore, userId);
-          pipeline.expire(catKey, LEADERBOARD_SET_TTL_SECONDS);
+          await this.applyGuardedScore(catKey, rankScore, userId, () => this.rebuildCategoryLeaderboard(category));
         } else {
-          pipeline.zrem(catKey, userId);
+          await redis.zrem(catKey, userId);
         }
       }
 
       if (weeklyHours !== undefined) {
         const weeklyKey = this.getWeeklySetKey();
         if (weeklyHours > 0) {
-          pipeline.zadd(weeklyKey, weeklyHours, userId);
-          pipeline.expire(weeklyKey, LEADERBOARD_SET_TTL_SECONDS);
+          await this.applyGuardedScore(weeklyKey, weeklyHours, userId, () => this.rebuildWeeklyLeaderboard());
         } else {
-          pipeline.zrem(weeklyKey, userId);
+          await redis.zrem(weeklyKey, userId);
         }
       }
 
       if (monthlyHours !== undefined) {
         const monthlyKey = this.getMonthlySetKey();
         if (monthlyHours > 0) {
-          pipeline.zadd(monthlyKey, monthlyHours, userId);
-          pipeline.expire(monthlyKey, LEADERBOARD_SET_TTL_SECONDS);
+          await this.applyGuardedScore(monthlyKey, monthlyHours, userId, () => this.rebuildMonthlyLeaderboard());
         } else {
-          pipeline.zrem(monthlyKey, userId);
+          await redis.zrem(monthlyKey, userId);
         }
       }
-
-      await pipeline.exec();
     } catch (err: any) {
       LoggerUtil.warn('LeaderboardCache: failed to update user score in sorted sets', {
         userId,
