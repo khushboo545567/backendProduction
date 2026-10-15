@@ -378,6 +378,29 @@ async function runSocketAdapterPresenceTests() {
     const participants = await SocketLiveRoomRepository.getRoomParticipants(testRoomId);
     assert(participants.length === 2, 'Exactly 2 participants recorded in Redis');
 
+    // ── Test 7b: Crashed Participant Disappears After TTL & Room Becomes Joinable Again ──
+    console.log('\n--- 7b. Live Room Crash Pruning: Crashed Participant Disappears After TTL & Room Joinable Again ---');
+    // Its heartbeat score becomes older than TTL
+    const socketsKey = SocketLiveRoomRepository.getSocketsKey(testRoomId);
+    const expiredScore = Date.now() - (SocketPresenceRepository.getHeartbeatTTLMs() + 5000);
+    await redis.zadd(socketsKey, expiredScore, 'socket_p1');
+
+    // Attempt to join with socket_p3 again:
+    // Lua capacity script must prune stale socket_p1 BEFORE counting, freeing capacity to 1,
+    // so socket_p3 successfully joins!
+    const joinAfterCrash = await SocketLiveRoomRepository.addParticipant(
+      testRoomId,
+      'user_peer_3',
+      'socket_p3',
+      { userName: 'Peer Three' },
+      2
+    );
+    assert(joinAfterCrash.success === true, 'Room is joinable again after crashed instance participant heartbeat expired');
+    const participantsAfterCrash = await SocketLiveRoomRepository.getRoomParticipants(testRoomId);
+    assert(participantsAfterCrash.length === 2, 'Room currently has 2 active participants (p2 and p3)');
+    assert(!participantsAfterCrash.some((p) => p.socketId === 'socket_p1'), 'Crashed socket_p1 was completely pruned from Redis ZSET and Hash');
+    assert(participantsAfterCrash.some((p) => p.socketId === 'socket_p3'), 'New participant socket_p3 is active in room');
+
     // ── Test 8: Study Session Timer Survives Server Restart ──────────────────
     console.log('\n--- 8. Study Session Timer Survives Instance Restart ---');
     const sessionTimerRoom = 'test_timer_room_777';

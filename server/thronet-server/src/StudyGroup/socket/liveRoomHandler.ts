@@ -266,6 +266,13 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
     });
   });
 
+  // ── Heartbeat for live room presence ──────────────────────────────────────
+  socket.on('liveroom:heartbeat', async (data: { roomId: string }) => {
+    if (data?.roomId) {
+      await SocketLiveRoomRepository.heartbeat(data.roomId, socket.id);
+    }
+  });
+
   // ── Camera toggle ──────────────────────────────────────────────────────────
   socket.on('toggle-camera', async (data: ToggleCameraPayload) => {
     const { roomId, cameraOn } = data;

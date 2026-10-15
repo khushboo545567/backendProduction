@@ -9,7 +9,8 @@
  *    Prunes stale members on every read and write so crashed instances don't leave dead sockets.
  * 4. Cluster-wide debounced MongoDB lastActive writes (max 1 write per 60s per user).
  * 5. Live room participant sets and study session timer state with atomic Lua capacity checks.
- * 6. Redis-backed group active sessions and group rooms replacing local Maps.
+ *    Uses Redis Sorted Set (member=socketId, score=lastHeartbeat) and prunes stale members BEFORE counting.
+ * 6. Redis-backed group active sessions and group rooms with heartbeat pruning replacing local Maps.
  * 7. Full in-memory fallback if Redis is disabled or unavailable.
  */
 
@@ -34,13 +35,13 @@ const memPresenceUserSockets = new Map<string, Map<string, number>>();
 const memPresenceSocketUser = new Map<string, string>(); // socketId -> userId
 const memLastActiveWriteTs = new Map<string, number>(); // userId -> timestamp
 
-// Live room in-memory fallback
-const memLiveRoomSockets = new Map<string, Set<string>>(); // roomId -> Set<socketId>
+// Live room in-memory fallback: roomId -> Map<socketId, lastHeartbeatTs>
+const memLiveRoomSockets = new Map<string, Map<string, number>>();
 const memLiveRoomParticipants = new Map<string, Map<string, any>>(); // roomId -> Map<socketId, participantData>
 const memLiveRoomSessions = new Map<string, { active: boolean; startedAt: number | null; accumulatedTime: number }>();
 
-// Group rooms and active sessions in-memory fallback
-const memGroupMembers = new Map<string, Set<string>>(); // groupId -> Set<userId>
+// Group rooms and active sessions in-memory fallback: groupId -> Map<userId, lastHeartbeatTs>
+const memGroupMembers = new Map<string, Map<string, number>>();
 const memSocketGroups = new Map<string, Set<string>>(); // socketId -> Set<groupId>
 const memGroupActiveSessions = new Map<string, Map<string, { lastSeen: number; elapsedTime: number }>>();
 
@@ -126,6 +127,10 @@ export class SocketPresenceRepository {
     return buildKey(PRESENCE_DOMAIN, `user:${userId}:last_active_lock`);
   }
 
+  static getActiveUsersKey(): string {
+    return buildKey(PRESENCE_DOMAIN, 'active_users');
+  }
+
   static getHeartbeatTTLMs(): number {
     if (process.env['PRESENCE_SOCKET_TTL_MS']) {
       const val = Number(process.env['PRESENCE_SOCKET_TTL_MS']);
@@ -187,6 +192,10 @@ export class SocketPresenceRepository {
       const results = await pipeline.exec();
       const countBefore = (results?.[1]?.[1] as number) || 0;
       const isFirst = countBefore === 0;
+
+      if (isFirst) {
+        redis.sadd(this.getActiveUsersKey(), userId).catch(() => {});
+      }
 
       return {
         isFirstSocket: isFirst,
@@ -325,7 +334,10 @@ export class SocketPresenceRepository {
       const isLast = remaining === 0;
 
       if (isLast) {
-        await redis.del(userKey);
+        await Promise.all([
+          redis.del(userKey),
+          redis.srem(this.getActiveUsersKey(), resolvedUserId),
+        ]);
       } else {
         await redis.expire(userKey, ttlSec * 2);
       }
@@ -505,6 +517,21 @@ export class SocketPresenceRepository {
   }
 
   /**
+   * Get total online user count across cluster for Prometheus metrics.
+   */
+  static async getOnlineUserCount(): Promise<number> {
+    if (!isCacheEnabled(SOCKET_DOMAIN)) {
+      return memPresenceUserSockets.size;
+    }
+    try {
+      const redis = getRedisClient();
+      return await redis.scard(this.getActiveUsersKey());
+    } catch {
+      return memPresenceUserSockets.size;
+    }
+  }
+
+  /**
    * Resolve userId from socketId.
    */
   static async getSocketUserId(socketId: string): Promise<string | null> {
@@ -562,9 +589,13 @@ export class SocketPresenceRepository {
  * ============================================================================
  * 3. LIVE ROOM REPOSITORY (Participants, atomic Lua capacity & study timer in Redis)
  * ============================================================================
+ * Heartbeat-backed sorted set design:
+ * - `liveroom:<roomId>:sockets`: ZSET (member=socketId, score=lastHeartbeatMs)
+ * - `liveroom:<roomId>:participants`: HASH (socketId -> JSON(ParticipantInfo))
+ * Stale members are pruned BEFORE counting capacity so dead sockets never consume capacity.
  */
 export class SocketLiveRoomRepository {
-  private static getSocketsKey(roomId: string): string {
+  static getSocketsKey(roomId: string): string {
     return buildKey(LIVEROOM_DOMAIN, `${roomId}:sockets`);
   }
 
@@ -576,28 +607,42 @@ export class SocketLiveRoomRepository {
     return buildKey(LIVEROOM_DOMAIN, `${roomId}:session`);
   }
 
-  // Atomic Lua script for live-room join capacity check and registration
+  // Atomic Lua script: prunes stale sockets from ZSET/HASH BEFORE checking capacity and adding
   private static readonly ADD_PARTICIPANT_LUA = `
 local socketsKey = KEYS[1]
 local participantsKey = KEYS[2]
 local maxCapacity = tonumber(ARGV[1])
 local socketId = ARGV[2]
 local participantJson = ARGV[3]
-local ttlSeconds = tonumber(ARGV[4])
+local now = tonumber(ARGV[4])
+local ttlMs = tonumber(ARGV[5])
+local ttlSeconds = tonumber(ARGV[6])
 
-local isMember = redis.call('SISMEMBER', socketsKey, socketId)
-if isMember == 0 then
-    local currentCount = redis.call('SCARD', socketsKey)
+local cutoff = now - ttlMs
+-- 1. Prune stale members whose heartbeat expired before counting
+local stale = redis.call('ZRANGEBYSCORE', socketsKey, '-inf', cutoff)
+if #stale > 0 then
+    redis.call('ZREMRANGEBYSCORE', socketsKey, '-inf', cutoff)
+    for i, sId in ipairs(stale) do
+        redis.call('HDEL', participantsKey, sId)
+    end
+end
+
+-- 2. Check if this socket is already active in the room
+local isMember = redis.call('ZSCORE', socketsKey, socketId)
+if not isMember then
+    local currentCount = redis.call('ZCARD', socketsKey)
     if currentCount >= maxCapacity then
         return {0, currentCount}
     end
-    redis.call('SADD', socketsKey, socketId)
 end
 
+-- 3. Add or update socket in ZSET and Hash
+redis.call('ZADD', socketsKey, now, socketId)
 redis.call('HSET', participantsKey, socketId, participantJson)
 redis.call('EXPIRE', socketsKey, ttlSeconds)
 redis.call('EXPIRE', participantsKey, ttlSeconds)
-local newCount = redis.call('SCARD', socketsKey)
+local newCount = redis.call('ZCARD', socketsKey)
 return {1, newCount}
 `;
 
@@ -607,11 +652,22 @@ local socketsKey = KEYS[1]
 local participantsKey = KEYS[2]
 local sessionKey = KEYS[3]
 local socketId = ARGV[1]
+local now = tonumber(ARGV[2])
+local ttlMs = tonumber(ARGV[3])
+
+local cutoff = now - ttlMs
+local stale = redis.call('ZRANGEBYSCORE', socketsKey, '-inf', cutoff)
+if #stale > 0 then
+    redis.call('ZREMRANGEBYSCORE', socketsKey, '-inf', cutoff)
+    for i, sId in ipairs(stale) do
+        redis.call('HDEL', participantsKey, sId)
+    end
+end
 
 local participantJson = redis.call('HGET', participantsKey, socketId)
-local wasRemoved = redis.call('SREM', socketsKey, socketId)
+local wasRemoved = redis.call('ZREM', socketsKey, socketId)
 redis.call('HDEL', participantsKey, socketId)
-local remaining = redis.call('SCARD', socketsKey)
+local remaining = redis.call('ZCARD', socketsKey)
 
 if remaining == 0 then
     redis.call('DEL', socketsKey, participantsKey, sessionKey)
@@ -622,7 +678,7 @@ return {wasRemoved, remaining, participantJson}
 
   /**
    * Atomically adds a participant to a live room while strictly enforcing MAX_ROOM_SIZE
-   * using an atomic Redis Lua script.
+   * after pruning stale members via an atomic Redis Lua script.
    */
   static async addParticipant(
     roomId: string,
@@ -635,26 +691,37 @@ return {wasRemoved, remaining, participantJson}
       return { success: false, isFirst: false, currentCount: 0, errorReason: 'Missing parameters' };
     }
 
+    const now = Date.now();
+    const ttlMs = SocketPresenceRepository.getHeartbeatTTLMs();
+
     const fullParticipant: ParticipantInfo = {
       userId,
       userName: participantData.userName || 'Unknown',
       socketId,
       camOn: !!participantData.camOn,
       micOn: !!participantData.micOn,
-      joinedAt: Date.now(),
+      joinedAt: now,
     };
 
     if (!isCacheEnabled(SOCKET_DOMAIN)) {
-      // In-memory fallback
+      // In-memory fallback with stale score pruning
       if (!memLiveRoomSockets.has(roomId)) {
-        memLiveRoomSockets.set(roomId, new Set());
+        memLiveRoomSockets.set(roomId, new Map());
       }
       const sockets = memLiveRoomSockets.get(roomId)!;
+      const cutoff = now - ttlMs;
+      for (const [sId, score] of sockets.entries()) {
+        if (score <= cutoff) {
+          sockets.delete(sId);
+          memLiveRoomParticipants.get(roomId)?.delete(sId);
+        }
+      }
+
       if (!sockets.has(socketId) && sockets.size >= maxCapacity) {
         return { success: false, isFirst: false, currentCount: sockets.size, errorReason: 'Room is full' };
       }
       const isFirst = sockets.size === 0;
-      sockets.add(socketId);
+      sockets.set(socketId, now);
 
       if (!memLiveRoomParticipants.has(roomId)) {
         memLiveRoomParticipants.set(roomId, new Map());
@@ -664,7 +731,7 @@ return {wasRemoved, remaining, participantJson}
       if (isFirst && !memLiveRoomSessions.has(roomId)) {
         memLiveRoomSessions.set(roomId, {
           active: true,
-          startedAt: Date.now(),
+          startedAt: now,
           accumulatedTime: 0,
         });
       }
@@ -685,6 +752,8 @@ return {wasRemoved, remaining, participantJson}
         maxCapacity,
         socketId,
         safeJsonStringify(fullParticipant),
+        now,
+        ttlMs,
         LIVEROOM_SESSION_TTL_SECONDS
       )) as [number, number];
 
@@ -717,10 +786,36 @@ return {wasRemoved, remaining, participantJson}
       };
     } catch (err: any) {
       LoggerUtil.warn('SocketLiveRoomRepository.addParticipant fallback', { error: err.message });
-      if (!memLiveRoomSockets.has(roomId)) memLiveRoomSockets.set(roomId, new Set());
+      if (!memLiveRoomSockets.has(roomId)) memLiveRoomSockets.set(roomId, new Map());
       const sockets = memLiveRoomSockets.get(roomId)!;
-      sockets.add(socketId);
+      sockets.set(socketId, now);
       return { success: true, isFirst: sockets.size === 1, currentCount: sockets.size };
+    }
+  }
+
+  /**
+   * Update heartbeat timestamp for a participant in a live room.
+   */
+  static async heartbeat(roomId: string, socketId: string): Promise<void> {
+    if (!roomId || !socketId) return;
+    const now = Date.now();
+
+    if (!isCacheEnabled(SOCKET_DOMAIN)) {
+      memLiveRoomSockets.get(roomId)?.set(socketId, now);
+      return;
+    }
+
+    try {
+      const redis = getRedisClient();
+      const socketsKey = this.getSocketsKey(roomId);
+      const participantsKey = this.getParticipantsKey(roomId);
+      const pipeline = redis.pipeline();
+      pipeline.zadd(socketsKey, 'XX', now, socketId);
+      pipeline.expire(socketsKey, LIVEROOM_SESSION_TTL_SECONDS);
+      pipeline.expire(participantsKey, LIVEROOM_SESSION_TTL_SECONDS);
+      await pipeline.exec();
+    } catch (err: any) {
+      LoggerUtil.warn('SocketLiveRoomRepository.heartbeat failed', { error: err.message });
     }
   }
 
@@ -734,6 +829,9 @@ return {wasRemoved, remaining, participantJson}
     if (!roomId || !socketId) {
       return { userId: null, remainingCount: 0, isRoomEmpty: true, wasRemoved: false };
     }
+
+    const now = Date.now();
+    const ttlMs = SocketPresenceRepository.getHeartbeatTTLMs();
 
     if (!isCacheEnabled(SOCKET_DOMAIN)) {
       const sockets = memLiveRoomSockets.get(roomId);
@@ -768,7 +866,9 @@ return {wasRemoved, remaining, participantJson}
         socketsKey,
         participantsKey,
         sessionKey,
-        socketId
+        socketId,
+        now,
+        ttlMs
       )) as [number, number, string | null];
 
       const wasRemoved = res?.[0] === 1;
@@ -791,27 +891,54 @@ return {wasRemoved, remaining, participantJson}
   }
 
   /**
-   * Get all participants in a live room across all server instances.
+   * Get all live participants in a room across all instances (pruning stale members on read).
    */
   static async getRoomParticipants(roomId: string): Promise<ParticipantInfo[]> {
     if (!roomId) return [];
 
+    const now = Date.now();
+    const ttlMs = SocketPresenceRepository.getHeartbeatTTLMs();
+    const cutoff = now - ttlMs;
+
     if (!isCacheEnabled(SOCKET_DOMAIN)) {
+      const sockets = memLiveRoomSockets.get(roomId);
       const map = memLiveRoomParticipants.get(roomId);
-      return map ? Array.from(map.values()) : [];
+      if (!sockets || !map) return [];
+      const live: ParticipantInfo[] = [];
+      for (const [sId, score] of sockets.entries()) {
+        if (score > cutoff) {
+          const p = map.get(sId);
+          if (p) live.push(p);
+        } else {
+          sockets.delete(sId);
+          map.delete(sId);
+        }
+      }
+      return live;
     }
 
     try {
       const redis = getRedisClient();
-      const rawValues = await redis.hvals(this.getParticipantsKey(roomId));
+      const socketsKey = this.getSocketsKey(roomId);
+      const participantsKey = this.getParticipantsKey(roomId);
+
+      // Prune stale members from ZSET and Hash
+      const staleSockets = await redis.zrangebyscore(socketsKey, '-inf', cutoff);
+      if (staleSockets.length > 0) {
+        const pipeline = redis.pipeline();
+        pipeline.zremrangebyscore(socketsKey, '-inf', cutoff);
+        pipeline.hdel(participantsKey, ...staleSockets);
+        await pipeline.exec();
+      }
+
+      const liveSocketIds = await redis.zrangebyscore(socketsKey, cutoff, '+inf');
+      if (liveSocketIds.length === 0) {
+        return [];
+      }
+
+      const rawValues = await redis.hmget(participantsKey, ...liveSocketIds);
       return rawValues
-        .map((str) => {
-          try {
-            return safeJsonParse<ParticipantInfo>(str);
-          } catch {
-            return null;
-          }
-        })
+        .map((str) => (str ? safeJsonParse<ParticipantInfo>(str) : null))
         .filter((p): p is ParticipantInfo => !!p && !!p.userId);
     } catch {
       const map = memLiveRoomParticipants.get(roomId);
@@ -993,6 +1120,7 @@ return {wasRemoved, remaining, participantJson}
  * 4. GROUP ACTIVE SESSIONS REPOSITORY (Replaces local groupActiveSessions Map)
  * ============================================================================
  * Key: `liveroom:group:<groupId>:active_sessions` -> Redis Hash (userId -> JSON({ lastSeen, elapsedTime }))
+ * Prunes sessions inactive for >90s on read and write.
  */
 export class SocketGroupSessionRepository {
   private static getActiveSessionsKey(groupId: string): string {
@@ -1005,21 +1133,41 @@ export class SocketGroupSessionRepository {
     elapsedTime: number
   ): Promise<void> {
     if (!groupId || !userId) return;
-    const sessionData = { lastSeen: Date.now(), elapsedTime };
+    const now = Date.now();
+    const sessionData = { lastSeen: now, elapsedTime };
+
+    const thresholdMs = 90_000;
 
     if (!isCacheEnabled(SOCKET_DOMAIN)) {
       if (!memGroupActiveSessions.has(groupId)) {
         memGroupActiveSessions.set(groupId, new Map());
       }
-      memGroupActiveSessions.get(groupId)!.set(userId, sessionData);
+      const map = memGroupActiveSessions.get(groupId)!;
+      for (const [uId, val] of map.entries()) {
+        if (now - val.lastSeen > thresholdMs) map.delete(uId);
+      }
+      map.set(userId, sessionData);
       return;
     }
 
     try {
       const redis = getRedisClient();
       const key = this.getActiveSessionsKey(groupId);
-      await redis.hset(key, userId, safeJsonStringify(sessionData));
-      await redis.expire(key, LIVEROOM_SESSION_TTL_SECONDS);
+      const all = await redis.hgetall(key);
+      const staleUserIds: string[] = [];
+      for (const [uId, str] of Object.entries(all || {})) {
+        const parsed = safeJsonParse<{ lastSeen: number; elapsedTime: number }>(str);
+        if (parsed && now - parsed.lastSeen > thresholdMs) {
+          staleUserIds.push(uId);
+        }
+      }
+      const pipeline = redis.pipeline();
+      if (staleUserIds.length > 0) {
+        pipeline.hdel(key, ...staleUserIds);
+      }
+      pipeline.hset(key, userId, safeJsonStringify(sessionData));
+      pipeline.expire(key, LIVEROOM_SESSION_TTL_SECONDS);
+      await pipeline.exec();
     } catch {
       if (!memGroupActiveSessions.has(groupId)) memGroupActiveSessions.set(groupId, new Map());
       memGroupActiveSessions.get(groupId)!.set(userId, sessionData);
@@ -1053,13 +1201,13 @@ export class SocketGroupSessionRepository {
       const sessions = memGroupActiveSessions.get(groupId);
       const activeList: { userId: string; elapsedTime: number }[] = [];
       if (sessions) {
-        sessions.forEach((val, uId) => {
+        for (const [uId, val] of sessions.entries()) {
           if (now - val.lastSeen <= thresholdMs) {
             activeList.push({ userId: uId, elapsedTime: val.elapsedTime });
           } else {
             sessions.delete(uId);
           }
-        });
+        }
       }
       return activeList;
     }
@@ -1104,7 +1252,7 @@ export class SocketGroupSessionRepository {
  * ============================================================================
  * 5. GROUP ROOM MEMBERS REPOSITORY (Replaces local groupRooms Map)
  * ============================================================================
- * Key: `liveroom:group:<groupId>:members` -> Redis Set of userIds
+ * Key: `liveroom:group:<groupId>:members` -> Redis Sorted Set (member=userId, score=lastHeartbeatMs)
  * Key: `presence:socket:<socketId>:groups` -> Redis Set of groupIds joined by this socket
  */
 export class SocketGroupRoomRepository {
@@ -1119,9 +1267,18 @@ export class SocketGroupRoomRepository {
   static async joinGroup(groupId: string, userId: string, socketId: string): Promise<void> {
     if (!groupId || !userId || !socketId) return;
 
+    const now = Date.now();
+    const ttlMs = SocketPresenceRepository.getHeartbeatTTLMs();
+    const cutoff = now - ttlMs;
+
     if (!isCacheEnabled(SOCKET_DOMAIN)) {
-      if (!memGroupMembers.has(groupId)) memGroupMembers.set(groupId, new Set());
-      memGroupMembers.get(groupId)!.add(userId);
+      if (!memGroupMembers.has(groupId)) memGroupMembers.set(groupId, new Map());
+      const m = memGroupMembers.get(groupId)!;
+      for (const [uId, score] of m.entries()) {
+        if (score <= cutoff) m.delete(uId);
+      }
+      m.set(userId, now);
+
       if (!memSocketGroups.has(socketId)) memSocketGroups.set(socketId, new Set());
       memSocketGroups.get(socketId)!.add(groupId);
       return;
@@ -1132,14 +1289,15 @@ export class SocketGroupRoomRepository {
       const pipeline = redis.pipeline();
       const groupKey = this.getGroupMembersKey(groupId);
       const socketKey = this.getSocketGroupsKey(socketId);
-      pipeline.sadd(groupKey, userId);
+      pipeline.zremrangebyscore(groupKey, '-inf', cutoff);
+      pipeline.zadd(groupKey, now, userId);
       pipeline.expire(groupKey, LIVEROOM_SESSION_TTL_SECONDS);
       pipeline.sadd(socketKey, groupId);
       pipeline.expire(socketKey, LIVEROOM_SESSION_TTL_SECONDS);
       await pipeline.exec();
     } catch {
-      if (!memGroupMembers.has(groupId)) memGroupMembers.set(groupId, new Set());
-      memGroupMembers.get(groupId)!.add(userId);
+      if (!memGroupMembers.has(groupId)) memGroupMembers.set(groupId, new Map());
+      memGroupMembers.get(groupId)!.set(userId, now);
       if (!memSocketGroups.has(socketId)) memSocketGroups.set(socketId, new Set());
       memSocketGroups.get(socketId)!.add(groupId);
     }
@@ -1157,7 +1315,7 @@ export class SocketGroupRoomRepository {
     try {
       const redis = getRedisClient();
       const pipeline = redis.pipeline();
-      pipeline.srem(this.getGroupMembersKey(groupId), userId);
+      pipeline.zrem(this.getGroupMembersKey(groupId), userId);
       if (socketId) pipeline.srem(this.getSocketGroupsKey(socketId), groupId);
       await pipeline.exec();
     } catch {
@@ -1169,17 +1327,32 @@ export class SocketGroupRoomRepository {
   static async getOnlineUsersInGroup(groupId: string): Promise<string[]> {
     if (!groupId) return [];
 
+    const now = Date.now();
+    const ttlMs = SocketPresenceRepository.getHeartbeatTTLMs();
+    const cutoff = now - ttlMs;
+
     if (!isCacheEnabled(SOCKET_DOMAIN)) {
-      const members = memGroupMembers.get(groupId);
-      return members ? Array.from(members) : [];
+      const m = memGroupMembers.get(groupId);
+      if (!m) return [];
+      const live: string[] = [];
+      for (const [uId, score] of m.entries()) {
+        if (score > cutoff) live.push(uId);
+        else m.delete(uId);
+      }
+      return live;
     }
 
     try {
       const redis = getRedisClient();
-      return await redis.smembers(this.getGroupMembersKey(groupId));
+      const groupKey = this.getGroupMembersKey(groupId);
+      const pipeline = redis.pipeline();
+      pipeline.zremrangebyscore(groupKey, '-inf', cutoff);
+      pipeline.zrange(groupKey, 0, -1);
+      const res = await pipeline.exec();
+      return (res?.[1]?.[1] as string[]) || [];
     } catch {
-      const members = memGroupMembers.get(groupId);
-      return members ? Array.from(members) : [];
+      const m = memGroupMembers.get(groupId);
+      return m ? Array.from(m.keys()) : [];
     }
   }
 
