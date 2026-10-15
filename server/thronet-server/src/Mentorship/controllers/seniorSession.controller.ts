@@ -87,7 +87,15 @@ class SeniorSessionController {
    */
   async getDiscoverySessions(req: AuthRequest, res: Response) {
     try {
-      const sessions = await SeniorSessionService.getDiscoverySessions();
+      const queryMentorId = req.query.mentorId;
+      if (
+        queryMentorId !== undefined &&
+        (typeof queryMentorId !== 'string' || queryMentorId.trim().length === 0)
+      ) {
+        return ResponseHandler.error(res, 'mentorId must be a non-empty string', 400);
+      }
+      const mentorId = typeof queryMentorId === 'string' ? queryMentorId.trim() : undefined;
+      const sessions = await SeniorSessionService.getDiscoverySessions(mentorId);
 
       return ResponseHandler.success(
         res,

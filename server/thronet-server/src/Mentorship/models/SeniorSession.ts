@@ -23,6 +23,49 @@ export interface SeniorSessionDocument
  * Each object represents one junior
  * registered for this senior session.
  */
+const SeniorSessionPaymentSchema = new Schema<
+  NonNullable<ISeniorSessionBooking['payment']>
+>(
+  {
+    status: {
+      type: String,
+    },
+
+    method: {
+      type: String,
+    },
+  },
+  { _id: false }
+);
+
+const SeniorSessionPricingSchema = new Schema<
+  NonNullable<ISeniorSessionBooking['pricing']>
+>(
+  {
+    basePrice: {
+      type: Number,
+      min: 0,
+    },
+
+    platformFee: {
+      type: Number,
+      min: 0,
+    },
+
+    totalAmount: {
+      type: Number,
+      min: 0,
+    },
+
+    currency: {
+      type: String,
+      default: 'INR',
+    },
+  },
+  { _id: false }
+);
+
+// Retained for legacy bookings only; new Senior Session bookings omit both subdocuments.
 const SeniorSessionBookingSchema = new Schema<ISeniorSessionBooking>(
   {
     menteeId: {
@@ -62,35 +105,13 @@ const SeniorSessionBookingSchema = new Schema<ISeniorSessionBooking>(
     },
 
     payment: {
-      status: {
-        type: String,
-      },
-
-      method: {
-        type: String,
-      },
+      type: SeniorSessionPaymentSchema,
+      default: undefined,
     },
 
     pricing: {
-      basePrice: {
-        type: Number,
-        min: 0,
-      },
-
-      platformFee: {
-        type: Number,
-        min: 0,
-      },
-
-      totalAmount: {
-        type: Number,
-        min: 0,
-      },
-
-      currency: {
-        type: String,
-        default: 'INR',
-      },
+      type: SeniorSessionPricingSchema,
+      default: undefined,
     },
   },
   {
@@ -192,6 +213,27 @@ const SeniorSessionSchema = new Schema<SeniorSessionDocument>(
     thumbnailImage: {
       type: String,
       trim: true,
+    },
+
+    shortDescription: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Short description cannot exceed 200 characters'],
+    },
+
+    tags: {
+      type: [String],
+      default: [],
+    },
+
+    learningOutcomes: {
+      type: [String],
+      default: [],
+    },
+
+    prerequisites: {
+      type: [String],
+      default: [],
     },
 
     /**

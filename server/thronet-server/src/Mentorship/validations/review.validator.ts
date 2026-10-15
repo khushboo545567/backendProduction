@@ -143,23 +143,16 @@ export const deleteReviewValidation = [
 ];
 
 export const reportReviewValidation = [
-  param('id')
-    .notEmpty()
-    .withMessage('Review ID is required')
-    .isMongoId()
-    .withMessage('Invalid review ID'),
-
+  param('id').notEmpty().withMessage('Review ID is required'),
   body('reason')
     .notEmpty()
-    .withMessage('Reason is required')
-    .isIn(['spam', 'inappropriate', 'offensive', 'fake', 'other'])
-    .withMessage('Invalid reason'),
-
-  body('details')
+    .withMessage('Report reason is required')
+    .isIn(['spam', 'inappropriate', 'fake', 'harassment', 'other'])
+    .withMessage('Reason must be one of: spam, inappropriate, fake, harassment, other'),
+  body('note')
     .optional()
     .isString()
-    .withMessage('Details must be a string')
     .trim()
-    .isLength({ max: 500 })
-    .withMessage('Details cannot exceed 500 characters'),
+    .isLength({ max: 300 })
+    .withMessage('Note cannot exceed 300 characters'),
 ];

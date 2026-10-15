@@ -207,9 +207,7 @@ MentorshipReviewSchema.methods.incrementHelpful = async function (): Promise<Met
 
 MentorshipReviewSchema.methods.incrementReport = async function (): Promise<MetorshipReviewDocument> {
   this.reportCount += 1;
-  if (this.reportCount >= 5) {
-    this.isPublic = false;
-  }
+  // Auto-hide behavior removed per new requirements; review remains public.
   return await this.save();
 };
 

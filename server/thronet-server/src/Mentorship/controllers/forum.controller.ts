@@ -13,6 +13,7 @@ import {
   reportListQuerySchema,
   updateReportStatusSchema,
 } from '@/Mentorship/validations/forum.validator';
+import AdminAction from '@/Mentorship/models/AdminAction';
 
 
 
@@ -208,6 +209,32 @@ class ForumController {
       }
       const { status } = updateReportStatusSchema.parse(req.body);
       const updated = await forumService.updateReportStatus(req.params.reportId, status);
+
+      // Audit log (BUG-06)
+      try {
+        const adminUser = req.user;
+        const actionType = status === 'resolved' ? 'report_resolve' : 'report_dismiss';
+        if (adminUser?.userId || adminUser?.id) {
+          await (AdminAction as any).logAction(
+            adminUser?.userId || adminUser?.id || '',
+            adminUser?.email || '',
+            actionType,
+            'Report',
+            req.params.reportId,
+            {
+              changes: { after: { status } },
+              ipAddress: req.ip,
+              userAgent: req.get('user-agent'),
+            }
+          );
+        }
+      } catch (logErr: unknown) {
+        logger.error(
+          'Failed to log admin action for community report status update:',
+          logErr instanceof Error ? logErr : { error: String(logErr) }
+        );
+      }
+
       ResponseHandler.success(res, 'Report status updated successfully', updated);
     } catch (error: any) {
       logger.error('Error updating report status:', error);

@@ -7,6 +7,7 @@ import SeniorMentorApplicationValidator from '../validations/seniorMentorApplica
 import { uploadFields } from '@/shared/upload/upload';
 
 const router = Router();
+export const publicSeniorMentorRouter = Router();
 
 // Multipart form fields (otherSkills, technologies, achievements, certifications,
 // helpAreas) arrive as JSON strings from the client — parse them back to arrays
@@ -32,6 +33,26 @@ const applicationFileUpload = uploadFields([
   { name: 'resume', maxCount: 1 },
   { name: 'proofDocument', maxCount: 1 },
 ]);
+
+/**
+ * @route   GET /api/v1/mentorship/senior-mentors
+ * @desc    List approved Senior Mentors with public profile fields only
+ * @access  Public
+ */
+publicSeniorMentorRouter.get(
+  '/',
+  seniorMentorApplicationController.listPublicSeniorMentors as any
+);
+
+/**
+ * @route   GET /api/v1/mentorship/senior-mentors/:id
+ * @desc    Get one approved Senior Mentor with public profile fields only
+ * @access  Public
+ */
+publicSeniorMentorRouter.get(
+  '/:id',
+  seniorMentorApplicationController.getPublicSeniorMentorById as any
+);
 
 /**
  * @route   POST /api/v1/mentorship/senior-mentor-applications/apply

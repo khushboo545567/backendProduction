@@ -191,6 +191,52 @@ class SeniorMentorApplicationController {
   }
 
   /**
+   * @route   GET /api/v1/mentorship/senior-mentors
+   * @access  Public
+   */
+  async listPublicSeniorMentors(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { page, limit: requestedLimit } = PaginationHelper.validateParams(
+        Number(req.query.page),
+        Number(req.query.limit)
+      );
+      const limit = Math.min(50, requestedLimit);
+      const { mentors, total } = await seniorMentorApplicationService.listPublicSeniorMentors(
+        page,
+        limit
+      );
+
+      ResponseHandler.paginated(
+        res,
+        'Senior mentors retrieved successfully',
+        mentors,
+        page,
+        limit,
+        total
+      );
+    } catch (error: any) {
+      logger.error('Error listing public senior mentors:', error);
+      next(error);
+    }
+  }
+
+  /**
+   * @route   GET /api/v1/mentorship/senior-mentors/:id
+   * @access  Public
+   */
+  async getPublicSeniorMentorById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const mentor = await seniorMentorApplicationService.getPublicSeniorMentorByUserId(
+        req.params.id
+      );
+      ResponseHandler.success(res, 'Senior mentor retrieved successfully', mentor);
+    } catch (error: any) {
+      logger.error('Error retrieving public senior mentor:', error);
+      next(error);
+    }
+  }
+
+  /**
    * @route   GET /api/v1/mentorship/senior-mentor-applications/:id
    * @access  Private (Admin)
    */

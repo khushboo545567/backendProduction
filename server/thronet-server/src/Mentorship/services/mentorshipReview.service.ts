@@ -2,6 +2,7 @@ import { BookingStatus } from "@/shared/constants/bookingStatus";
 // import { Mentor, MentorshipReview, SessionMentor } from "../models";
 import { logger } from "@/shared/logger.util";
 import { Mentor, MentorshipReview, SessionMentor } from "../models";
+import ReviewReport from "../models/ReviewReport";
 import reviewRepository, { ReviewSort, ReviewReaction } from "../repositories/review.repository";
 import { generateSecureId } from "@/shared/security";
 import { TrustScoreEvents } from '../events/trustScore.events';
@@ -142,29 +143,11 @@ class ReviewService {
     page: number = 1,
     limit: number = 10,
     includePrivate: boolean = false,
-    sort: ReviewSort = 'newest'
+    sort: ReviewSort = 'newest',
+    callerUserId?: string
   ): Promise<{ reviews: any[]; total: number; stats: any }> {
     try {
       const skip = (page - 1) * limit;
-
-      const query: any = {
-        mentorId,
-        isDeleted: false,
-      };
-
-      if (!includePrivate) {
-        query.isPublic = true;
-      }
-
-      // const [reviews, total, stats] = await Promise.all([
-      //   MentorshipReview.find(query)
-      //     .sort({ createdAt: -1 })
-      //     .skip(skip)
-      //     .limit(limit)
-      //     .lean(),
-      //   MentorshipReview.countDocuments(query),
-      //   MentorshipReview.getAverageRating(mentorId),
-      // ]);
 
       const [reviews, total, stats] = await Promise.all([
         reviewRepository.findByMentorId(mentorId, skip, limit, includePrivate, sort),        
@@ -172,7 +155,36 @@ class ReviewService {
         reviewRepository.getAverageRating(mentorId),
       ]);
 
-      return { reviews, total, stats };
+      let enrichedReviews = reviews;
+
+      // Privacy check: reportedPending is added ONLY when authenticated AND
+      // callerUserId matches the Mentor whose reviews are listed.
+      let isReviewedMentor = false;
+      if (callerUserId) {
+        const mentorDoc = await Mentor.findOne({ mentorId, isDeleted: false }).select('userId').lean();
+        if (mentorDoc && mentorDoc.userId === callerUserId) {
+          isReviewedMentor = true;
+        }
+      }
+
+      if (isReviewedMentor && reviews.length > 0) {
+        const reviewIds = reviews.map((r: any) => r.reviewId).filter(Boolean);
+        const pendingReports = await ReviewReport.find(
+          { reviewId: { $in: reviewIds }, status: 'pending' },
+          { reviewId: 1, _id: 0 }
+        ).lean();
+        const pendingReviewIdSet = new Set(pendingReports.map((p: any) => p.reviewId));
+
+        enrichedReviews = reviews.map((r: any) => {
+          const item = { ...r };
+          if (pendingReviewIdSet.has(r.reviewId)) {
+            item.reportedPending = true;
+          }
+          return item;
+        });
+      }
+
+      return { reviews: enrichedReviews, total, stats };
     } catch (error: any) {
       logger.error('❌ Failed to get mentor reviews:', error);
       throw error;
@@ -457,37 +469,51 @@ class ReviewService {
   }
 
   /**
-   * Report a review
+   * Report a review (mentor-only: can only report reviews on their own profile)
+   * Inserts a ReviewReport (status='pending') and increments reportCount.
+   * The review is NOT hidden — it stays public exactly as it is.
    */
-  async reportReview(reviewId: string, _reason: string): Promise<void> {
+  async reportReview(
+    reviewId: string,
+    reason: string,
+    reporterId: string,
+    mentorId: string,
+    note?: string
+  ): Promise<void> {
+    logger.info(`🚩 Mentor ${reporterId} reporting review: ${reviewId}`);
+
+    // 1. Insert ReviewReport first. Duplicate key (11000) yields 409 and no increment occurs.
     try {
-      logger.info(`🚩 Reporting review: ${reviewId}`);
+      await ReviewReport.create({
+        reportId: generateSecureId(),
+        reviewId,
+        mentorId,
+        reporterId,
+        reason,
+        note: note ? note.trim() : undefined,
+        status: 'pending',
+      });
+    } catch (err: any) {
+      if (err?.code === 11000 || (typeof err?.message === 'string' && err.message.includes('E11000'))) {
+        const dupError: any = new Error('You already reported this review');
+        dupError.statusCode = 409;
+        throw dupError;
+      }
+      logger.error('❌ Failed to create ReviewReport document:', err);
+      throw err;
+    }
 
-      // const review = await reviewRepository.findByReviewId(reviewId);
-      // if (!review) {
-      //   throw new Error('Review not found');
-      // }
-
-      // // Call the instance method - now properly typed
-      // await review.incrementReport();
-
+    // 2. Only after successful insert call incrementReportAtomic once
+    try {
       const review = await reviewRepository.incrementReportAtomic(reviewId);
-      if (!review) throw new Error('Review not found');
-
-      // auto-hide logic yahan check karo
-      if (review.reportCount >= 5) {
-        logger.warn(`🔒 Review auto-hidden: ${reviewId}`);
+      if (!review) {
+        logger.error(`❌ Review ${reviewId} not found when incrementing report count`);
+        throw new Error('Review not found');
       }
-
-      logger.info(`⚠️ Review reported: ${reviewId} (${review.reportCount} reports)`);
-
-      // Auto-hide after 5 reports (handled in model method)
-      if (review.reportCount >= 5) {
-        logger.warn(`🔒 Review auto-hidden due to reports: ${reviewId}`);
-      }
-    } catch (error: any) {
-      logger.error('❌ Failed to report review:', error);
-      throw error;
+      logger.info(`⚠️ Review reported: ${reviewId} (${review.reportCount} reports total)`);
+    } catch (err: any) {
+      logger.error(`❌ Failed to increment report count for review ${reviewId}:`, err);
+      throw new Error('Failed to update review report count');
     }
   }
 
@@ -547,10 +573,14 @@ class ReviewService {
 
   /**
    * Moderate review (Admin only)
+   * Actions:
+   *  - 'keep'   : dismiss the report. reportCount -> 0, ReviewReport status -> 'kept'.
+   *               The review stays public as-is. (was 'approve')
+   *  - 'delete' : soft-delete the review. ReviewReport status -> 'deleted'.
    */
   async moderateReview(
     reviewId: string,
-    action: 'approve' | 'hide' | 'delete',
+    action: 'keep' | 'delete',
     _reason?: string
   ): Promise<any> {
     try {
@@ -562,21 +592,24 @@ class ReviewService {
       }
 
       switch (action) {
-        case 'approve':
-          review.isPublic = true;
+        case 'keep':
+          // Dismiss reports — reset counter, leave isPublic untouched.
           review.reportCount = 0;
-          break;
-        case 'hide':
-          review.isPublic = false;
+          await review.save();
+          // Update all pending ReviewReports for this review to 'kept'
+          await ReviewReport.updateMany(
+            { reviewId, status: 'pending' },
+            { $set: { status: 'kept' } }
+          );
           break;
         case 'delete':
-          // Call the instance method - now properly typed
           await review.softDelete();
+          await ReviewReport.updateMany(
+            { reviewId, status: 'pending' },
+            { $set: { status: 'deleted' } }
+          );
+          await this.updateMentorRating(review.mentorId);
           break;
-      }
-
-      if (action !== 'delete') {
-        await review.save();
       }
 
       logger.info(`✅ Review moderated: ${reviewId}`);

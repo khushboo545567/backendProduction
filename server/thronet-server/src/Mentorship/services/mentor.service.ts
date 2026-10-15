@@ -1,4 +1,4 @@
-import { User, ProfilePhoto } from '@/shared/models/index.models';
+import { User, ProfilePhoto, Education, Experience } from '@/shared/models/index.models';
 import mongoose from 'mongoose';
 import Company from '@/company/models/Company.model';
 import { Mentor, SessionMentor, GroupSession } from '../models';
@@ -140,7 +140,11 @@ class MentorService {
   /**
    * Get mentor by mentorId (UUID) with relations
    */
-  async getMentorById(mentorId: string, authToken?: string): Promise<MentorWithRelations> {
+  async getMentorById(
+    mentorId: string,
+    authToken?: string,
+    currentUser?: any
+  ): Promise<MentorWithRelations> {
     try {
       logger.info(`Fetching mentor: ${mentorId}`);
 
@@ -149,8 +153,16 @@ class MentorService {
         throw new NotFoundError('MENTOR_NOT_FOUND');
       }
 
-      if (mentor.status !== MentorStatus.ACTIVE && !authToken) {
-        throw new ForbiddenError('Mentor profile is not available');
+      if (mentor.status !== MentorStatus.ACTIVE) {
+        const currentUserId = currentUser?.userId || currentUser?.id;
+        const isOwner =
+          Boolean(currentUserId) &&
+          String(currentUserId) === String(mentor.userId);
+        const isAdmin = currentUser?.role === 'admin';
+
+        if (!isOwner && !isAdmin) {
+          throw new ForbiddenError('Mentor profile is not available');
+        }
       }
 
       return await this.enrichMentorWithRelations(mentor, authToken);
@@ -254,14 +266,23 @@ class MentorService {
 
       logger.info(`Mentor updated: ${mentorId}`);
 
-      TrustScoreEvents.emit('ProfileUpdated', {
-        mentorId,
-        timestamp: new Date()
-      });
+      try {
+        TrustScoreEvents.emit('ProfileUpdated', {
+          mentorId,
+          timestamp: new Date()
+        });
+      } catch (eventErr: any) {
+        // Trust score listener fail ho to bhi profile update fail nahi honi chahiye
+        logger.warn(`TrustScore event failed for ${mentorId}: ${eventErr?.message}`);
+      }
 
       return await this.enrichMentorWithRelations(updatedMentor, authToken);
     } catch (error: any) {
-      logger.error(`Failed to update mentor ${mentorId}: ${error.message}`);
+      logger.error(`Failed to update mentor ${mentorId}: ${error?.message}`, {
+        name: error?.name,
+        stack: error?.stack,
+        http_code: error?.http_code,
+      });
       throw error;
     }
   }
@@ -387,6 +408,160 @@ class MentorService {
         mentors.map((mentor: any) => this.enrichMentorWithRelations(mentor, authToken))
       );
 
+      // Batch fetch education for all returned mentors (1 query)
+      let finalMentors: any[] = enrichedMentors;
+      try {
+        const userIds = enrichedMentors.map((m: any) => m.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const eduDocs = await Education.find(
+            { userId: { $in: userIds }, isDeleted: false, isArchived: false },
+            { userId: 1, schoolCollegeName: 1, degree: 1, specialization: 1, startDate: 1, endDate: 1, isOngoing: 1 }
+          ).lean();
+          const eduByUser: Record<string, any[]> = {};
+          for (const d of eduDocs) {
+            (eduByUser[d.userId] ||= []).push(d);
+          }
+          finalMentors = enrichedMentors.map((m: any) => {
+            const list = eduByUser[m.userId] || [];
+            let chosenCollege = '';
+            let chosenDegree = '';
+            let chosenBranch = '';
+            if (list.length > 0) {
+              const ongoing = list.filter((e: any) => e.isOngoing || !e.endDate);
+              const chosen = ongoing.length
+                ? ongoing.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  )
+                : list.reduce((a: any, b: any) =>
+                    (b.endDate ? new Date(b.endDate).getTime() : 0) >
+                    (a.endDate ? new Date(a.endDate).getTime() : 0)
+                      ? b
+                      : a
+                  );
+              if (typeof chosen?.schoolCollegeName === 'string' && /[a-zA-Z0-9]/.test(chosen.schoolCollegeName)) {
+                chosenCollege = chosen.schoolCollegeName.trim();
+              }
+              if (typeof chosen?.degree === 'string' && /[a-zA-Z0-9]/.test(chosen.degree)) {
+                chosenDegree = chosen.degree.trim();
+              }
+              if (typeof chosen?.specialization === 'string' && /[a-zA-Z0-9]/.test(chosen.specialization)) {
+                chosenBranch = chosen.specialization.trim();
+              }
+            }
+            const college = (typeof m.college === 'string' && /[a-zA-Z0-9]/.test(m.college) ? m.college.trim() : '') || chosenCollege;
+            const degree = (typeof m.degree === 'string' && /[a-zA-Z0-9]/.test(m.degree) ? m.degree.trim() : '') || chosenDegree;
+            const branch = (typeof m.branch === 'string' && /[a-zA-Z0-9]/.test(m.branch) ? m.branch.trim() : '') || chosenBranch;
+            return {
+              ...m,
+              ...(college ? { college } : {}),
+              ...(degree ? { degree } : {}),
+              ...(branch ? { branch } : {}),
+            };
+          });
+        }
+      } catch (eduErr: any) {
+        logger.warn(`Failed to fetch education for mentors: ${eduErr.message}`);
+      }
+
+      // Batch fetch work experience company for all returned mentors (1 query)
+      try {
+        const userIds = finalMentors.map((m: any) => m.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const expDocs = await Experience.find(
+            { userId: { $in: userIds }, isDeleted: false, isArchived: false },
+            { userId: 1, companyName: 1, startDate: 1, endDate: 1, currentlyWorking: 1 }
+          ).lean();
+          const expByUser: Record<string, any[]> = {};
+          for (const d of expDocs) {
+            (expByUser[d.userId] ||= []).push(d);
+          }
+          finalMentors = finalMentors.map((m: any) => {
+            const list = expByUser[m.userId] || [];
+            let resolvedCompany = typeof m.company === 'string' && /[a-zA-Z0-9]/.test(m.company) ? m.company.trim() : '';
+            if (!resolvedCompany && list.length > 0) {
+              const current = list.filter((e: any) => e.currentlyWorking || !e.endDate);
+              const chosen = current.length
+                ? current.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  )
+                : list.reduce((a: any, b: any) =>
+                    (b.startDate ? new Date(b.startDate).getTime() : 0) >
+                    (a.startDate ? new Date(a.startDate).getTime() : 0)
+                      ? b
+                      : a
+                  );
+              if (typeof chosen?.companyName === 'string' && /[a-zA-Z0-9]/.test(chosen.companyName)) {
+                resolvedCompany = chosen.companyName.trim();
+              }
+            }
+            if (!resolvedCompany && typeof m.user?.company === 'string' && /[a-zA-Z0-9]/.test(m.user.company)) {
+              resolvedCompany = m.user.company.trim();
+            }
+            return {
+              ...m,
+              ...(resolvedCompany ? { company: resolvedCompany } : {}),
+            };
+          });
+        }
+      } catch (expErr: any) {
+        logger.warn(`Failed to fetch experience for mentors: ${expErr.message}`);
+      }
+
+      // Batch fetch company logos for all returned mentors (1 query)
+      try {
+        const companyIds = finalMentors.map((m: any) => m.companyId).filter(Boolean);
+        const companyNames = finalMentors.map((m: any) => m.company).filter((c: any) => typeof c === 'string' && c.trim());
+
+        if (companyIds.length > 0 || companyNames.length > 0) {
+          const escapedNames = Array.from(new Set(companyNames)).map((n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+          const companyDocs = await Company.find(
+            {
+              $or: [
+                ...(companyIds.length ? [{ companyId: { $in: companyIds } }] : []),
+                ...(escapedNames.length ? [{ companyName: { $in: escapedNames.map(en => new RegExp(`^${en}$`, 'i')) } }] : []),
+              ],
+              'audit.isDeleted': false,
+            },
+            { companyId: 1, companyName: 1, 'media.logo': 1 }
+          ).lean();
+
+          const compById: Record<string, any> = {};
+          const compByName: Record<string, any> = {};
+          for (const c of companyDocs) {
+            if (c.companyId) compById[c.companyId] = c;
+            if (c.companyName) compByName[c.companyName.toLowerCase().trim()] = c;
+          }
+
+          finalMentors = finalMentors.map((m: any) => {
+            const matchedComp = (m.companyId && compById[m.companyId]) ||
+              (typeof m.company === 'string' && compByName[m.company.toLowerCase().trim()]);
+
+            let companyLogo: string | undefined = undefined;
+            if (matchedComp?.media?.logo) {
+              const { url, publicId } = matchedComp.media.logo;
+              if (url && typeof url === 'string' && url.startsWith('http')) {
+                companyLogo = url;
+              } else if (publicId && typeof publicId === 'string') {
+                companyLogo = cloudinary.url(publicId, { secure: true });
+              }
+            }
+
+            return {
+              ...m,
+              ...(companyLogo ? { companyLogo } : {}),
+            };
+          });
+        }
+      } catch (compErr: any) {
+        logger.warn(`Failed to fetch company logos for mentors: ${compErr.message}`);
+      }
+
       const meta = PaginationHelper.calculateMeta({
         page: validPage,
         limit: validLimit,
@@ -394,7 +569,7 @@ class MentorService {
       });
 
       return {
-        mentors: enrichedMentors,
+        mentors: finalMentors,
         total: meta.total,
         page: meta.page,
         limit: meta.limit,
@@ -422,7 +597,7 @@ class MentorService {
           userId: mentorObj.userId,
           'flags.isDeleted': false,
         })
-          .select('userId email firstName lastName fullName profilePhotoId')
+          .select('userId email firstName lastName fullName profilePhotoId company')
           .lean();
       } catch (error: any) {
         logger.error(`Failed to fetch user for mentor enrichment: ${error.message}`, {
@@ -486,7 +661,11 @@ class MentorService {
         logger.warn(`Failed to dynamically compute mentor stats: ${statsErr.message}`);
       }
 
-      return { ...mentorObj, user, company };
+      return {
+        ...mentorObj,
+        user,
+        ...(company ? { company } : {}),
+      };
     } catch (error: any) {
       logger.error(`Failed to enrich mentor: ${error.message}`);
       return mentor.toObject ? mentor.toObject() : mentor;
@@ -646,7 +825,18 @@ class MentorService {
           overwrite: true,
         },
         (error: any, result: any) => {
-          if (error) return reject(error);
+          if (error || !result) {
+            logger.error('Cloudinary upload failed', {
+              message: error?.message,
+              http_code: error?.http_code,
+              name: error?.name,
+            });
+            return reject(
+              new BadRequestError(
+                `Image upload failed: ${error?.message || 'Unknown Cloudinary error'}`
+              )
+            );
+          }
           resolve(result.secure_url);
         }
       );
