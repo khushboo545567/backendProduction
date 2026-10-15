@@ -8,13 +8,11 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
-import session from 'express-session';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import mongoSanitize from 'express-mongo-sanitize';
 import hpp from 'hpp';
 import mongoose from 'mongoose';
-import { MongoStore } from 'connect-mongo';
 import passport from '@/config/oauth/passport.config';
 
 // Routes (saari mounting routes/index.ts me hoti hai)
@@ -25,6 +23,7 @@ import { User } from './auth/models';
 // Config
 import { LoggerUtil, requestLogger } from './shared/logger.util';
 import NotificationService from './auth/services/notification.service';
+import { prometheusRouter } from './shared/observability/metrics/exporters/prometheus.exporter';
 
 interface CustomError extends Error {
     status?: number;
@@ -120,6 +119,7 @@ const limiter = rateLimit({
     max: 1000,
     standardHeaders: true,
     legacyHeaders: false,
+    skip: () => process.env['NODE_ENV'] === 'test',
 });
 app.use('/api', limiter);
 
@@ -130,51 +130,13 @@ const authLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { status: 'error', message: 'Too many auth attempts, please try again later.' },
+    skip: () => process.env['NODE_ENV'] === 'test',
 });
 app.use('/api/v1/auth', authLimiter);
 
-// ==================== SESSION ====================
-const sessionSecret = process.env['SESSION_SECRET'];
-if (!sessionSecret) {
-    throw new Error('SESSION_SECRET environment variable is required. Set it in .env.production');
-}
-
-app.use(session({
-    secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    store: process.env['MONGODB_URI']
-        ? MongoStore.create({
-            mongoUrl: process.env['MONGODB_URI'],
-            collectionName: 'sessions',
-            ttl: 5 * 60,
-            autoRemove: 'native',
-        })
-        : MongoStore.create({
-            clientPromise: mongoose.connection.asPromise().then((m) => m.getClient()),
-            collectionName: 'sessions',
-            ttl: 5 * 60,
-            autoRemove: 'native',
-        }),
-    cookie: {
-        secure: isProduction,
-        httpOnly: true,
-        sameSite: 'lax',
-        maxAge: 5 * 60 * 1000 // 5 min in ms
-    }
-}));
-
+// ==================== PASSPORT INITIALIZATION ====================
+// Used for Google and GitHub OAuth strategies (session: false stateless JWT)
 app.use(passport.initialize());
-
-passport.serializeUser((user: any, done) => done(null, user.userId));
-passport.deserializeUser(async (userId: string, done) => {
-    try {
-        const user = await User.findOne({ userId });
-        done(null, user as any);
-    } catch (err) {
-        done(err as Error);
-    }
-});
 
 // ==================== HEALTH CHECK ====================
 // Liveness probe
@@ -203,6 +165,9 @@ app.get('/api/v1/health/ready', (_req: Request, res: Response) => {
         },
     });
 });
+
+// ==================== METRICS ====================
+app.use(prometheusRouter);
 
 // ==================== ROUTES ====================
 app.use('/api/v1', apiRoutes);
