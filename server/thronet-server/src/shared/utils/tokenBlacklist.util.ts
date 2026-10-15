@@ -4,11 +4,16 @@
  * @module utils/tokenBlacklist.util
  */
 
+import crypto from 'crypto';
 import CacheUtil from '@/shared/cache.util';
 import Constants from '@/shared/constants.util';
 import { LoggerUtil } from '@/shared/logger.util';
 
 const logger = LoggerUtil;
+
+export function hashTokenForBlacklist(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 interface BlacklistEntry {
     tokenId: string;
@@ -27,7 +32,8 @@ class TokenBlacklistUtil {
         reason: string = 'manual_logout'
     ): Promise<boolean> {
         try {
-            const key = `${Constants.CACHE_PREFIXES.BLACKLIST_ACCESS}${token}`;
+            const tokenHash = hashTokenForBlacklist(token);
+            const key = `${Constants.CACHE_PREFIXES.BLACKLIST_ACCESS}${tokenHash}`;
             const entry: BlacklistEntry = {
                 tokenId: token.substring(0, 20), // Store partial for privacy
                 userId,
@@ -61,7 +67,8 @@ class TokenBlacklistUtil {
         reason: string = 'token_rotation'
     ): Promise<boolean> {
         try {
-            const key = `${Constants.CACHE_PREFIXES.BLACKLIST_REFRESH}${token}`;
+            const tokenHash = hashTokenForBlacklist(token);
+            const key = `${Constants.CACHE_PREFIXES.BLACKLIST_REFRESH}${tokenHash}`;
             const entry: BlacklistEntry = {
                 tokenId: token.substring(0, 20),
                 userId,
@@ -91,9 +98,19 @@ class TokenBlacklistUtil {
      */
     static async isAccessTokenBlacklisted(token: string): Promise<boolean> {
         try {
-            const key = `${Constants.CACHE_PREFIXES.BLACKLIST_ACCESS}${token}`;
-            const entry = await CacheUtil.get(key);
-            return !!entry;
+            const tokenHash = hashTokenForBlacklist(token);
+            const hashedKey = `${Constants.CACHE_PREFIXES.BLACKLIST_ACCESS}${tokenHash}`;
+            const entry = await CacheUtil.get(hashedKey);
+            if (entry) return true;
+
+            // Migration safety: check legacy raw key if flag is enabled (default true)
+            if (process.env['BLACKLIST_LEGACY_RAW_KEYS_ENABLED'] !== 'false') {
+                const legacyKey = `${Constants.CACHE_PREFIXES.BLACKLIST_ACCESS}${token}`;
+                const legacyEntry = await CacheUtil.get(legacyKey);
+                if (legacyEntry) return true;
+            }
+
+            return false;
         } catch (error: any) {
             logger.error('Failed to check access token blacklist', {
                 error: error.message,
@@ -107,9 +124,19 @@ class TokenBlacklistUtil {
      */
     static async isRefreshTokenBlacklisted(token: string): Promise<boolean> {
         try {
-            const key = `${Constants.CACHE_PREFIXES.BLACKLIST_REFRESH}${token}`;
-            const entry = await CacheUtil.get(key);
-            return !!entry;
+            const tokenHash = hashTokenForBlacklist(token);
+            const hashedKey = `${Constants.CACHE_PREFIXES.BLACKLIST_REFRESH}${tokenHash}`;
+            const entry = await CacheUtil.get(hashedKey);
+            if (entry) return true;
+
+            // Migration safety: check legacy raw key if flag is enabled (default true)
+            if (process.env['BLACKLIST_LEGACY_RAW_KEYS_ENABLED'] !== 'false') {
+                const legacyKey = `${Constants.CACHE_PREFIXES.BLACKLIST_REFRESH}${token}`;
+                const legacyEntry = await CacheUtil.get(legacyKey);
+                if (legacyEntry) return true;
+            }
+
+            return false;
         } catch (error: any) {
             logger.error('Failed to check refresh token blacklist', {
                 error: error.message,
@@ -172,8 +199,14 @@ class TokenBlacklistUtil {
                 ? Constants.CACHE_PREFIXES.BLACKLIST_ACCESS
                 : Constants.CACHE_PREFIXES.BLACKLIST_REFRESH;
 
-            const key = `${prefix}${token}`;
-            await CacheUtil.del(key);
+            const tokenHash = hashTokenForBlacklist(token);
+            const hashedKey = `${prefix}${tokenHash}`;
+            const legacyKey = `${prefix}${token}`;
+
+            await Promise.all([
+                CacheUtil.del(hashedKey),
+                CacheUtil.del(legacyKey),
+            ]);
 
             logger.info('Token removed from blacklist', { type });
             return true;

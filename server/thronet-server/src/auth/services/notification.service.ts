@@ -1350,8 +1350,8 @@ class NotificationService {
 
       if (!this.emailTransporter) {
         LoggerUtil.warn('Email transporter not available', { to: options.to });
-        // Return mock success in development
-        if (process.env.NODE_ENV === 'development') {
+        // Return mock success in development / test environments
+        if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
           return { success: true, messageId: 'mock-dev-id', to: options.to, duration: Date.now() - startTime };
         }
         throw new Error('Email service not configured');
@@ -1445,6 +1445,13 @@ class NotificationService {
 
       throw error;
     }
+  }
+
+  /**
+   * Direct email send bypass (used by queue workers to avoid re-queueing)
+   */
+  static async sendEmailDirect(options: EmailOptions): Promise<SendResult> {
+    return this.sendEmail(options);
   }
 
   // ==================== SMS METHODS ====================
