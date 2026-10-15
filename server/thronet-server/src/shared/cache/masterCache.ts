@@ -70,7 +70,7 @@ export class MasterDataCacheRepository {
     if (!isCacheEnabled(MASTER_DOMAIN) || !type || !data) return;
     const key = this.getKey(type);
     await CacheHelper.set(key, data, {
-      ttlSeconds: applyJitter(MASTER_DATA_TTL_SECONDS),
+      ttlSeconds: MASTER_DATA_TTL_SECONDS,
       domain: MASTER_DOMAIN,
     });
   }

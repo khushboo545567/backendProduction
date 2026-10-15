@@ -90,6 +90,12 @@ async function initializeApp(): Promise<void> {
     logger.info("STEP 2: Starting Redis initialization...");
 
     try {
+      // 1. Initialize primary ioredis connection pool
+      const { initRedis } = await import("./src/shared/cache/redisConnection");
+      const ioredisConnected = await initRedis();
+      logger.info("IOREDIS CONNECTION INITIALIZED", { connected: ioredisConnected });
+
+      // 2. Initialize CacheUtil legacy manager
       const cacheResult = await CacheUtil.init();
 
       logger.info("CACHE INIT FINISHED", {
@@ -97,7 +103,7 @@ async function initializeApp(): Promise<void> {
         status: CacheUtil.status,
       });
 
-      if (cacheResult) {
+      if (cacheResult || ioredisConnected) {
         logger.info("Redis cache initialized successfully");
 
         // Item I: Warm up / rebuild leaderboards on startup from MongoDB truth (non-blocking)

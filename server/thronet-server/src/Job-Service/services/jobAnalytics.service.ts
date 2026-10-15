@@ -158,7 +158,22 @@ async trackJobView(jobId: string | number, userId: string | number): Promise<voi
 
   async getPopularSearches(limit = 20): Promise<Array<{ term: string; count: number }>> {
     try {
-      const keys = await this.redis.keys(`${this.PREFIXES.POPULAR_SEARCH}:*`);
+      let cursor = '0';
+      const keys: string[] = [];
+      do {
+        const [nextCursor, matchedKeys] = await this.redis.scan(
+          cursor,
+          'MATCH',
+          `${this.PREFIXES.POPULAR_SEARCH}:*`,
+          'COUNT',
+          100
+        );
+        cursor = nextCursor;
+        if (matchedKeys && matchedKeys.length > 0) {
+          keys.push(...matchedKeys);
+        }
+      } while (cursor !== '0');
+
       if (keys.length === 0) return [];
 
       const counts = await this.redis.mget(...keys);

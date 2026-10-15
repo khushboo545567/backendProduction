@@ -6,6 +6,13 @@
 
 import dotenv from 'dotenv';
 dotenv.config();
+process.env['NODE_ENV'] = 'test';
+process.env['MONGODB_TEST_URI'] = 'mongodb://127.0.0.1:27017/thronet_test';
+process.env['MONGODB_URI'] = 'mongodb://127.0.0.1:27017/thronet_test';
+process.env['REDIS_HOST'] = '127.0.0.1';
+process.env['REDIS_PORT'] = '6379';
+process.env['REDIS_URL'] = 'redis://127.0.0.1:6379';
+process.env['LOG_DIR'] = './logs';
 import { spawn } from 'child_process';
 import path from 'path';
 import { assertTestEnvironmentSafety } from './testSafetyGuard';
@@ -32,6 +39,9 @@ const testFiles = [
   'src/shared/cache/__tests__/master-cache.test.ts',
   'src/shared/cache/__tests__/socket-adapter-presence.test.ts',
   'src/shared/cache/__tests__/prometheus-metrics.test.ts',
+  'src/shared/cache/__tests__/headline-allowlist.test.ts',
+  'src/shared/cache/__tests__/testSafetyGuard.test.ts',
+  'src/shared/cache/__tests__/real-server-boot-blacklist.test.ts',
 ];
 
 async function runTestFile(file: string): Promise<boolean> {

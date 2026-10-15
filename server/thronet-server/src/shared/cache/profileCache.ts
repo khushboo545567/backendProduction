@@ -60,7 +60,15 @@ export interface ViewerSpecificProfileResponse {
   profile: PublicProfilePayload | null;
 }
 
+let isConnectionResolver: ((viewerId: string, targetUserId: string) => Promise<boolean>) | null = null;
+
 export class ProfileCacheRepository {
+  /**
+   * Set dynamic connection resolver function
+   */
+  static setIsConnectionFn(fn: ((viewerId: string, targetUserId: string) => Promise<boolean>) | null): void {
+    isConnectionResolver = fn;
+  }
   /**
    * Get monotonic version for user's public profile.
    */
@@ -192,11 +200,46 @@ export class ProfileCacheRepository {
       }
     }
 
-    // 3. Return viewer-specific combined response
+    if (!publicProfile) {
+      return {
+        isBlocked: false,
+        canInteract: true,
+        profile: null,
+      };
+    }
+
+    // 3. Dynamic viewer privacy filtering (Connection vs Non-connection)
+    const isSelf = viewerId === targetUserId;
+    const isConnected = isSelf || (isConnectionResolver ? await isConnectionResolver(viewerId, targetUserId) : false);
+
+    let filteredProfile = publicProfile;
+    if (!isConnected) {
+      // Strip any fields or entries marked as connections-only
+      filteredProfile = {
+        ...publicProfile,
+        experiences: (publicProfile.experiences || []).filter(
+          (e: any) => e.visibility !== 'connections_only' && e.visibility !== 'connections' && !e.connectionsOnly
+        ),
+        skills: (publicProfile.skills || []).filter(
+          (s: any) => s.visibility !== 'connections_only' && s.visibility !== 'connections' && !s.connectionsOnly
+        ),
+        positions: (publicProfile.positions || []).filter(
+          (p: any) => p.visibility !== 'connections_only' && p.visibility !== 'connections' && !p.connectionsOnly
+        ),
+        projects: (publicProfile.projects || []).filter(
+          (p: any) => p.visibility !== 'connections_only' && p.visibility !== 'connections' && !p.connectionsOnly
+        ),
+        honors: (publicProfile.honors || []).filter(
+          (h: any) => h.visibility !== 'connections_only' && h.visibility !== 'connections' && !h.connectionsOnly
+        ),
+      };
+    }
+
+    // 4. Return viewer-specific combined response
     return {
       isBlocked: false,
       canInteract: true,
-      profile: publicProfile,
+      profile: filteredProfile,
     };
   }
 }

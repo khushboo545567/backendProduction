@@ -50,9 +50,30 @@ class RedisConfigManager {
                 return { host, port: parseInt(port || '6379') };
             });
 
+        let host = process.env.REDIS_HOST || 'localhost';
+        let port = parseInt(process.env.REDIS_PORT || '6379');
+        let password = process.env.REDIS_PASSWORD || undefined;
+        let db = parseInt(process.env.REDIS_DB || '0');
+
+        const rawUrl = process.env.REDIS_URL;
+        if (rawUrl && !rawUrl.includes('${')) {
+            try {
+                const parsed = new URL(rawUrl);
+                if (parsed.hostname) host = parsed.hostname;
+                if (parsed.port) port = parseInt(parsed.port, 10);
+                if (parsed.password) password = decodeURIComponent(parsed.password);
+                if (parsed.pathname && parsed.pathname.length > 1) {
+                    const parsedDb = parseInt(parsed.pathname.slice(1), 10);
+                    if (!isNaN(parsedDb)) db = parsedDb;
+                }
+            } catch {}
+        }
+
         const redisOptions: RedisOptions = {
-            password: process.env.REDIS_PASSWORD || undefined,
-            db: parseInt(process.env.REDIS_DB || '0'),
+            host,
+            port,
+            password,
+            db,
             // ==================== CONNECTION SETTINGS ====================
             enableReadyCheck: true,
             enableOfflineQueue: true,
@@ -116,8 +137,8 @@ class RedisConfigManager {
 
         const standaloneOptions: RedisOptions = {
             ...redisOptions,
-            host: process.env.REDIS_HOST || 'localhost',
-            port: parseInt(process.env.REDIS_PORT || '6379'),
+            host: redisOptions.host,
+            port: redisOptions.port,
         };
 
         logger.info(`⚙️ [REDIS CONFIG] ${clusterMode ? 'Cluster' : 'standalone'} configuration initialized`, {
@@ -206,6 +227,20 @@ class RedisConfigManager {
             await this.client.quit();
             this.client = null;
             logger.info('✅ [REDIS] Client disconnected gracefully');
+        }
+    }
+
+    /**
+     * Check Redis connection health
+     */
+    public async checkHealth(): Promise<{ status: string; latency?: number; connected: boolean; healthyConnections: number }> {
+        try {
+            const client = await this.getRedisClient();
+            const start = Date.now();
+            await client.ping();
+            return { status: 'healthy', latency: Date.now() - start, connected: true, healthyConnections: 1 };
+        } catch {
+            return { status: 'unhealthy', connected: false, healthyConnections: 0 };
         }
     }
 

@@ -20,9 +20,9 @@ import { LoggerUtil } from '@/shared/logger.util';
 const DOMAIN = 'notification';
 
 // TTL configs (seconds)
-const UNREAD_COUNT_TTL_SECONDS = parseInt(
-  process.env['NOTIFICATION_UNREAD_CACHE_TTL_SECONDS'] || '120',
-  10
+const UNREAD_COUNT_TTL_SECONDS = Math.min(
+  120,
+  parseInt(process.env['NOTIFICATION_UNREAD_CACHE_TTL_SECONDS'] || '120', 10)
 );
 const LIST_CACHE_TTL_SECONDS = parseInt(
   process.env['NOTIFICATION_LIST_CACHE_TTL_SECONDS'] || '60',

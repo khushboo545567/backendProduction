@@ -6,7 +6,11 @@ import { ErrorResponse, HttpStatus } from '@/shared/response.util';
 import { ConnectionRelation, PersonNode } from '../models/neo4j/index';
 import { UserId } from '../types/network.types';
 import { getNeo4jDriver } from '@/config/neo4j/neo4j';
-import cacheService from './shared/cacheService';
+import CacheUtil from '@/shared/cache.util';
+const cacheService = {
+  get: (key: string) => CacheUtil.get(key),
+  set: (key: string, value: string, ttl?: number) => CacheUtil.set(key, value, ttl),
+};
 import constants from '@/shared/constants.util';
 
 const ERROR_CODES = constants.ERROR_CODES;

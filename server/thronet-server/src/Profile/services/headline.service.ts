@@ -248,6 +248,20 @@ class HeadlineService {
     }
 
     /**
+     * Allowed fields that clients may modify on a headline.
+     * Protected fields (version, status, flags, metadata, type, headlineId) are computed exclusively by the service.
+     */
+    static readonly ALLOWED_UPDATE_FIELDS = new Set([
+        'title',
+        'message',
+        'priority',
+        'audience',
+        'scheduling',
+        'styling',
+        'actions',
+    ]);
+
+    /**
      * Update headline
      */
     static async updateHeadline(
@@ -256,39 +270,39 @@ class HeadlineService {
         updatedBy: string,
         updatedByName: string
     ): Promise<IHeadline> {
-        // Strip protected fields: type, headlineId, flags.*, and metadata.* cannot be modified by client
-        const {
-            type: _type,
-            headlineId: _id,
-            flags: _flags,
-            metadata: _meta,
-            _id: _mongoId,
-            createdAt: _created,
-            updatedAt: _updated,
-            ...safeUpdates
-        } = (updates || {}) as any;
+        // Enforce strict allowlist: version, status, flags, metadata, type are computed by service and ignored if passed
+        const safeUpdates: Record<string, any> = {};
+        for (const [key, value] of Object.entries(updates || {})) {
+            if (HeadlineService.ALLOWED_UPDATE_FIELDS.has(key)) {
+                safeUpdates[key] = value;
+            }
+        }
 
-        // Also prevent dot-notation attacks on nested flags.* and metadata.*
-        for (const key of Object.keys(safeUpdates)) {
-            if (
-                key === 'type' ||
-                key === 'headlineId' ||
-                key.startsWith('flags.') ||
-                key.startsWith('metadata.')
-            ) {
-                delete safeUpdates[key];
+        const setFields: Record<string, any> = {
+            ...safeUpdates,
+            'metadata.lastModifiedBy': updatedBy,
+            'metadata.lastModifiedByName': updatedByName,
+            updatedAt: new Date(),
+        };
+
+        // Service computes status from scheduling dates (clients cannot set status)
+        const now = new Date();
+        const sched = safeUpdates['scheduling'];
+        if (sched) {
+            if (sched.publishAt && new Date(sched.publishAt) > now) {
+                setFields['status'] = 'SCHEDULED';
+            } else if (sched.expiresAt && new Date(sched.expiresAt) < now) {
+                setFields['status'] = 'EXPIRED';
+            } else if (sched.publishAt && new Date(sched.publishAt) <= now) {
+                setFields['status'] = 'ACTIVE';
             }
         }
 
         const headline = await Headline.findOneAndUpdate(
             { headlineId, 'flags.isDeleted': false },
             {
-                $set: {
-                    ...safeUpdates,
-                    'metadata.lastModifiedBy': updatedBy,
-                    'metadata.lastModifiedByName': updatedByName,
-                    updatedAt: new Date(),
-                },
+                $set: setFields,
+                $inc: { 'metadata.version': 1 },
             },
             { new: true, runValidators: true }
         ).lean<IHeadline>().exec();

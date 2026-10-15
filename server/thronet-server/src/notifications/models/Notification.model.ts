@@ -134,5 +134,29 @@ NotificationSchema.post(NOTIF_MUTATION_METHODS as any, async function (this: any
     }
 });
 
+NotificationSchema.post('save', async function (doc: any) {
+    try {
+        if (doc?.recipientId) {
+            const { NotificationCacheRepository } = await import('@/shared/cache/notificationCache');
+            await NotificationCacheRepository.invalidateUser(String(doc.recipientId));
+        }
+    } catch {
+        // fail-safe
+    }
+});
+
+NotificationSchema.post('insertMany', async function (docs: any) {
+    try {
+        const arr = Array.isArray(docs) ? docs : [docs];
+        const recipientIds = [...new Set(arr.map((d: any) => d?.recipientId).filter(Boolean))];
+        if (recipientIds.length > 0) {
+            const { NotificationCacheRepository } = await import('@/shared/cache/notificationCache');
+            await NotificationCacheRepository.invalidateUser(recipientIds);
+        }
+    } catch {
+        // fail-safe
+    }
+});
+
 const Notification = mongoose.model<INotification, INotificationModel>('Notification-service', NotificationSchema);
 export default Notification;

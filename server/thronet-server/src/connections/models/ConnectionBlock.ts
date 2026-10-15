@@ -16,6 +16,25 @@ export enum BlockReason {
     OTHER = 'other',
 }
 
+export enum BlockType {
+    FULL = 'full',
+    PROFILE_ONLY = 'profile_only',
+    MESSAGING_ONLY = 'messaging_only',
+}
+
+export enum BlockSeverity {
+    LOW = 'low',
+    MEDIUM = 'medium',
+    HIGH = 'high',
+    CRITICAL = 'critical',
+}
+
+export enum BlockStatus {
+    ACTIVE = 'active',
+    INACTIVE = 'inactive',
+    EXPIRED = 'expired',
+}
+
 export interface IConnectionBlock extends Document {
     _id: Types.ObjectId;
     blockerId: string;
@@ -66,8 +85,23 @@ ConnectionBlockSchema.statics.isBlocked = function (blockerId: string, blockedId
 import { ConnectionCacheRepository } from '@/shared/cache/connectionCache';
 ConnectionBlockSchema.post('save', async function (doc: any) {
     try {
-        if (doc?.blockerId && doc?.blockedId && doc.isActive) {
-            await ConnectionCacheRepository.handleUserBlock(String(doc.blockerId), String(doc.blockedId));
+        if (doc?.blockerId && doc?.blockedId) {
+            if (doc.isActive) {
+                await ConnectionCacheRepository.handleUserBlock(String(doc.blockerId), String(doc.blockedId));
+            } else {
+                await ConnectionCacheRepository.handleUserUnblock(String(doc.blockerId), String(doc.blockedId));
+            }
+        }
+    } catch {
+        // fail-safe
+    }
+});
+
+ConnectionBlockSchema.post(['deleteOne', 'deleteMany', 'findOneAndDelete'] as any, async function (this: any) {
+    try {
+        const filter = this.getFilter() || {};
+        if (filter.blockerId && filter.blockedId) {
+            await ConnectionCacheRepository.handleUserUnblock(String(filter.blockerId), String(filter.blockedId));
         }
     } catch {
         // fail-safe

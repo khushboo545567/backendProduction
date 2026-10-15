@@ -206,10 +206,160 @@ export class ConnectionCacheRepository {
   }
 
   /**
-   * Handle user block: remove connection between blocker and blocked user.
+   * Handle user block: remove connection, clear blocks/pending/counts, bump list & profile versions.
    */
   static async handleUserBlock(blockerId: string, blockedId: string): Promise<void> {
     await this.removeConnection(blockerId, blockedId);
+    if (!isCacheEnabled(DOMAIN)) return;
+    try {
+      const redis = await getRedisClient();
+      const pipeline = redis.pipeline();
+      pipeline.del(buildKey(DOMAIN, `blocks:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `blocks:${blockedId}`));
+      pipeline.del(buildKey(DOMAIN, `count:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `count:${blockedId}`));
+      pipeline.del(buildKey(DOMAIN, `pending:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `pending:${blockedId}`));
+      pipeline.del(buildKey(DOMAIN, `pending_count:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `pending_count:${blockedId}`));
+      pipeline.incr(buildKey(DOMAIN, `v:${blockerId}`));
+      pipeline.incr(buildKey(DOMAIN, `v:${blockedId}`));
+      await pipeline.exec();
+
+      const { ProfileCacheRepository } = await import('./profileCache');
+      await ProfileCacheRepository.invalidateProfile([blockerId, blockedId]);
+    } catch (err: any) {
+      LoggerUtil.warn('ConnectionCache: failed to invalidate block cache', { error: err.message });
+    }
+  }
+
+  /**
+   * Handle user unblock: clear blocks cache, bump connection version and profile versions for BOTH users.
+   */
+  static async handleUserUnblock(blockerId: string, blockedId: string): Promise<void> {
+    if (!isCacheEnabled(DOMAIN)) return;
+    try {
+      const redis = await getRedisClient();
+      const pipeline = redis.pipeline();
+      pipeline.del(buildKey(DOMAIN, `blocks:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `blocks:${blockedId}`));
+      pipeline.del(buildKey(DOMAIN, `count:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `count:${blockedId}`));
+      pipeline.del(buildKey(DOMAIN, `pending:${blockerId}`));
+      pipeline.del(buildKey(DOMAIN, `pending:${blockedId}`));
+      pipeline.incr(buildKey(DOMAIN, `v:${blockerId}`));
+      pipeline.incr(buildKey(DOMAIN, `v:${blockedId}`));
+      await pipeline.exec();
+
+      // Invalidate profile version for BOTH users so viewer immediately sees profile
+      const { ProfileCacheRepository } = await import('./profileCache');
+      await ProfileCacheRepository.invalidateProfile([blockerId, blockedId]);
+    } catch (err: any) {
+      LoggerUtil.warn('ConnectionCache: failed to invalidate unblock cache', { error: err.message });
+    }
+  }
+
+  /**
+   * Handle connection request withdraw / cancel: clear pending caches and bump profile versions for BOTH users.
+   */
+  static async handleRequestCancelled(fromUserId: string, toUserId: string): Promise<void> {
+    if (!isCacheEnabled(DOMAIN)) return;
+    try {
+      const redis = await getRedisClient();
+      const pipeline = redis.pipeline();
+      pipeline.del(buildKey(DOMAIN, `pending:${fromUserId}`));
+      pipeline.del(buildKey(DOMAIN, `pending:${toUserId}`));
+      pipeline.del(buildKey(DOMAIN, `pending_count:${fromUserId}`));
+      pipeline.del(buildKey(DOMAIN, `pending_count:${toUserId}`));
+      pipeline.incr(buildKey(DOMAIN, `v:${fromUserId}`));
+      pipeline.incr(buildKey(DOMAIN, `v:${toUserId}`));
+      await pipeline.exec();
+
+      const { ProfileCacheRepository } = await import('./profileCache');
+      await ProfileCacheRepository.invalidateProfile([fromUserId, toUserId]);
+    } catch (err: any) {
+      LoggerUtil.warn('ConnectionCache: failed to invalidate request cancelled cache', { error: err.message });
+    }
+  }
+
+  /**
+   * Handle connection request reject / decline: clear pending caches and bump profile versions for BOTH users.
+   */
+  static async handleRequestRejected(fromUserId: string, toUserId: string): Promise<void> {
+    return this.handleRequestCancelled(fromUserId, toUserId);
+  }
+
+  /**
+   * Handle account deactivation: remove user from all partners' connection sets and clear all user connection caches.
+   */
+  static async handleAccountDeactivated(userId: string): Promise<void> {
+    try {
+      const activeConnections = await Connection.find({
+        $or: [{ fromUserId: userId }, { toUserId: userId }],
+        status: 'active',
+        isArchived: false,
+      })
+        .select('fromUserId toUserId')
+        .lean()
+        .exec();
+
+      const partnerIds = activeConnections
+        .map((c: any) => (String(c.fromUserId) === String(userId) ? String(c.toUserId) : String(c.fromUserId)))
+        .filter((id) => id && id !== String(userId));
+
+      // 1. Archive/deactivate connection records in MongoDB
+      await Connection.updateMany(
+        { $or: [{ fromUserId: userId }, { toUserId: userId }] },
+        { $set: { status: 'inactive', isArchived: true } }
+      );
+
+      if (isCacheEnabled(DOMAIN)) {
+        const redis = await getRedisClient();
+        const pipeline = redis.pipeline();
+
+        // 2. Remove deactivated user from each partner's Redis set, invalidate counts & bump versions
+        for (const partnerId of partnerIds) {
+          pipeline.srem(this.getSetKey(partnerId), userId);
+          pipeline.del(buildKey(DOMAIN, `count:${partnerId}`));
+          pipeline.incr(buildKey(DOMAIN, `v:${partnerId}`));
+        }
+
+        // 3. Clear all connection keys for deactivated user
+        pipeline.del(this.getSetKey(userId));
+        pipeline.del(buildKey(DOMAIN, `count:${userId}`));
+        pipeline.del(buildKey(DOMAIN, `pending:${userId}`));
+        pipeline.del(buildKey(DOMAIN, `pending_count:${userId}`));
+        pipeline.del(buildKey(DOMAIN, `blocks:${userId}`));
+        pipeline.incr(buildKey(DOMAIN, `v:${userId}`));
+
+        await pipeline.exec();
+
+        // 4. If partner set became empty, insert EMPTY_SENTINEL so key doesn't vanish
+        for (const partnerId of partnerIds) {
+          const key = this.getSetKey(partnerId);
+          const card = await redis.scard(key);
+          if (card === 0) {
+            await redis.sadd(key, EMPTY_SENTINEL);
+          }
+        }
+      }
+
+      // 5. Invalidate profile versions for all affected users + deactivated user
+      const { ProfileCacheRepository } = await import('./profileCache');
+      await ProfileCacheRepository.invalidateProfile([...partnerIds, userId]);
+    } catch (err: any) {
+      LoggerUtil.error('ConnectionCache: failed to handle account deactivation cache purge', {
+        userId,
+        error: err.message,
+      });
+    }
+  }
+
+  /**
+   * Handle account deletion: identical to deactivation purge.
+   */
+  static async handleAccountDeleted(userId: string): Promise<void> {
+    return this.handleAccountDeactivated(userId);
   }
 
   /**

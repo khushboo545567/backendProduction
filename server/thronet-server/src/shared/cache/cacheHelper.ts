@@ -278,16 +278,23 @@ export const CacheHelper = {
     let totalDeleted = 0;
 
     const scanPromise = (async () => {
-      let cursor = '0';
-      do {
-        const [nextCursor, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-        cursor = nextCursor;
+      const masters = typeof (client as any).nodes === 'function'
+        ? (client as any).nodes('master')
+        : [client];
 
-        if (keys && keys.length > 0) {
-          await client.del(...keys);
-          totalDeleted += keys.length;
-        }
-      } while (cursor !== '0');
+      for (const node of masters) {
+        let cursor = '0';
+        do {
+          const [nextCursor, keys] = await node.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+          cursor = nextCursor;
+
+          if (keys && keys.length > 0) {
+            // Delete individually or per-slot to avoid CROSSSLOT errors in cluster mode
+            await Promise.all(keys.map((k: string) => node.del(k)));
+            totalDeleted += keys.length;
+          }
+        } while (cursor !== '0');
+      }
 
       return totalDeleted;
     })();

@@ -30,6 +30,7 @@ export interface ICompanyReviewDocument extends Document {
   }>;
   isVerified: boolean;
   isPublished: boolean;
+  isAnonymous?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

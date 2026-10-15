@@ -164,6 +164,62 @@ async function runProfileCacheTests() {
     assert(unblockedResponse.isBlocked === false, 'Unblocked viewer allowed');
     assert(unblockedResponse.profile !== null, 'Unblocked viewer receives profile');
 
+    // ── Test 4b: Privacy Filtering: Connections-Only Field Stripping On Cache Hit ──
+    console.log('\n--- 4b. Privacy Filtering: Connections-Only Field Stripping On Cache Hit ---');
+    const userConnected = uuidv4();
+    const userNonConnected = uuidv4();
+
+    // Configure connection resolver: userConnected is connected to userA, userNonConnected is NOT
+    ProfileCacheRepository.setIsConnectionFn(async (viewerId: string, targetId: string) => {
+      return viewerId === userConnected && targetId === userA;
+    });
+
+    const profileWithRestrictedFields: PublicProfilePayload = {
+      userId: userA,
+      firstName: 'Alice',
+      lastName: 'Smith',
+      headline: { title: 'Lead Architect' },
+      experiences: [
+        { experienceId: 'exp-public', title: 'Public Lead', company: 'Acme', visibility: 'public' },
+        { experienceId: 'exp-conn', title: 'Stealth Founder', company: 'Secret Labs', visibility: 'connections_only' },
+      ],
+      skills: [
+        { skillId: 'sk-public', name: 'TypeScript', visibility: 'public' },
+        { skillId: 'sk-conn', name: 'Internal Kernel Architecture', visibility: 'connections_only' },
+      ],
+    };
+
+    // Populate public cache
+    await ProfileCacheRepository.setPublicProfile(userA, profileWithRestrictedFields);
+
+    // 1. Connected viewer reads profile (cache hit)
+    const connResponse = await ProfileCacheRepository.getProfileForViewer(
+      userConnected,
+      userA,
+      async () => profileWithRestrictedFields
+    );
+    assert(connResponse.profile !== null, 'Connected viewer receives profile');
+    assert(connResponse.profile?.experiences?.length === 2, 'Connected viewer sees all experiences including connections_only');
+    assert(connResponse.profile?.skills?.length === 2, 'Connected viewer sees connections_only skills');
+
+    // 2. Non-connected viewer reads profile (cache hit)
+    const nonConnResponse = await ProfileCacheRepository.getProfileForViewer(
+      userNonConnected,
+      userA,
+      async () => profileWithRestrictedFields
+    );
+    assert(nonConnResponse.profile !== null, 'Non-connected viewer receives profile');
+    assert(
+      nonConnResponse.profile?.experiences?.length === 1 &&
+      nonConnResponse.profile?.experiences?.[0].experienceId === 'exp-public',
+      'Non-connected viewer NEVER receives connections_only experience after cache hit'
+    );
+    assert(
+      nonConnResponse.profile?.skills?.length === 1 &&
+      nonConnResponse.profile?.skills?.[0].skillId === 'sk-public',
+      'Non-connected viewer NEVER receives connections_only skills after cache hit'
+    );
+
     // ── Test 5: Invalidation After Sub-model Writes ───────────────────
     console.log('\n--- 5. Invalidation on Sub-model Writes ---');
     // Ensure userA is cached

@@ -16,6 +16,10 @@ import http from 'http';
 import express, { Request, Response } from 'express';
 
 dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
+process.env['NODE_ENV'] = 'test';
+process.env['MONGODB_TEST_URI'] = process.env['TEST_MONGO_URI'] || 'mongodb://127.0.0.1:27017/thronet_test';
+process.env['MONGODB_URI'] = process.env['TEST_MONGO_URI'] || 'mongodb://127.0.0.1:27017/thronet_test';
+process.env['REDIS_HOST'] = '127.0.0.1';
 
 import User from '@/auth/models/User.model';
 import Session from '@/auth/models/Session.model';
@@ -38,6 +42,7 @@ async function runBehaviouralTests() {
   console.log(`✅ Connected to MongoDB`);
 
   const redis = getRedisClient();
+  await redis.ping();
   console.log('✅ Connected to Redis');
 
   // Setup express test server with authenticateJWT

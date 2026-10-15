@@ -72,17 +72,6 @@ class HeadlineEmitter extends EventEmitter {
     }
 
     /**
-     * Helper to emit headline:updated event
-     */
-    emitHeadlineUpdated(headline: any): boolean {
-        return this.emit('headline:updated', {
-            headlineId: headline?.headlineId || headline?._id?.toString() || '',
-            timestamp: new Date(),
-            headline,
-        });
-    }
-
-    /**
      * Register event listener
      */
     onHeadlineEvent(event: string, listener: (data: HeadlineEvent) => void): this {

@@ -596,15 +596,15 @@ export class SocketPresenceRepository {
  */
 export class SocketLiveRoomRepository {
   static getSocketsKey(roomId: string): string {
-    return buildKey(LIVEROOM_DOMAIN, `${roomId}:sockets`);
+    return buildKey(LIVEROOM_DOMAIN, `{${roomId}}:sockets`);
   }
 
   private static getParticipantsKey(roomId: string): string {
-    return buildKey(LIVEROOM_DOMAIN, `${roomId}:participants`);
+    return buildKey(LIVEROOM_DOMAIN, `{${roomId}}:participants`);
   }
 
   private static getSessionKey(roomId: string): string {
-    return buildKey(LIVEROOM_DOMAIN, `${roomId}:session`);
+    return buildKey(LIVEROOM_DOMAIN, `{${roomId}}:session`);
   }
 
   // Atomic Lua script: prunes stale sockets from ZSET/HASH BEFORE checking capacity and adding

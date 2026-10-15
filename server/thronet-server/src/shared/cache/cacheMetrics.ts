@@ -73,6 +73,13 @@ export const bullmqFailedGauge =
     },
   });
 
+export const redisUpGauge =
+  (register.getSingleMetric('redis_up') as promClient.Gauge<string>) ||
+  new promClient.Gauge({
+    name: 'redis_up',
+    help: 'Redis connectivity status (1 = healthy, 0 = degraded or down)',
+  });
+
 export const presenceOnlineGauge =
   (register.getSingleMetric('presence_online_users') as promClient.Gauge<string>) ||
   new promClient.Gauge({

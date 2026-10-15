@@ -203,6 +203,9 @@ export const emailQueue = {
     const payload = maybeData || nameOrData;
     return enqueueEmail(payload);
   },
+  process: (_concurrencyOrHandler: any, _maybeHandler?: any) => {
+    // BullMQ processing is handled in worker.ts
+  },
   close: closeEmailQueue,
 };
 

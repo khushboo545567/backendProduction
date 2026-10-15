@@ -24,6 +24,8 @@ import { User } from './auth/models';
 import { LoggerUtil, requestLogger } from './shared/logger.util';
 import NotificationService from './auth/services/notification.service';
 import { prometheusRouter } from './shared/observability/metrics/exporters/prometheus.exporter';
+import { getRedisHealth } from './shared/cache/redisConnection';
+import { redisUpGauge } from './shared/cache/cacheMetrics';
 
 interface CustomError extends Error {
     status?: number;
@@ -162,29 +164,49 @@ app.use('/api/v1/auth', authLimiter);
 app.use(passport.initialize());
 
 // ==================== HEALTH CHECK ====================
-// Liveness probe
-app.get('/api/v1/health', (_req: Request, res: Response) => {
+// Liveness probe — ALWAYS returns 200 while the Node.js process is running and serving requests
+app.get('/api/v1/health', async (_req: Request, res: Response) => {
+    const redisHealth = await getRedisHealth();
+    try {
+        redisUpGauge.set(redisHealth.status === 'healthy' ? 1 : 0);
+    } catch {}
+
+    const isDegraded = redisHealth.status !== 'healthy';
+    // Liveness must ALWAYS be 200 to avoid cascading container kill/drain loops
     res.status(200).json({
-        status: 'ok',
+        status: isDegraded ? 'degraded' : 'ok',
         timestamp: new Date().toISOString(),
         environment: process.env['NODE_ENV'],
         version: process.env['APP_VERSION'] || '1.0.0',
+        dependencies: {
+            redis: redisHealth.status,
+            redisLatencyMs: redisHealth.latencyMs,
+        },
     });
 });
 
-// Readiness probe — MongoDB connected hai ya nahi
-app.get('/api/v1/health/ready', (_req: Request, res: Response) => {
+// Readiness probe — Checks MongoDB connectivity; does NOT fail on Redis alone
+app.get('/api/v1/health/ready', async (_req: Request, res: Response) => {
     const mongoState = mongoose.connection.readyState; // 1 = connected
-    const isReady = mongoState === 1;
+    const redisHealth = await getRedisHealth();
+    try {
+        redisUpGauge.set(redisHealth.status === 'healthy' ? 1 : 0);
+    } catch {}
 
-    res.status(isReady ? 200 : 503).json({
-        status: isReady ? 'ok' : 'degraded',
+    // Ready to serve requests if primary DB is connected (app fails-open to DB without Redis)
+    const isDbReady = mongoState === 1;
+    const isFullyHealthy = isDbReady && redisHealth.status === 'healthy';
+
+    res.status(isDbReady ? 200 : 503).json({
+        status: isFullyHealthy ? 'ok' : isDbReady ? 'degraded' : 'down',
         timestamp: new Date().toISOString(),
         dependencies: {
             mongodb: mongoState === 1 ? 'connected'
                 : mongoState === 2 ? 'connecting'
                 : mongoState === 3 ? 'disconnecting'
                 : 'disconnected',
+            redis: redisHealth.status,
+            redisLatencyMs: redisHealth.latencyMs,
         },
     });
 });

@@ -21,7 +21,7 @@ import {
     UserForVerification,
     DeviceData,
 } from '../interfaces/auth.interfaces';
-import { hashTokenForBlacklist } from '@/shared/utils/tokenBlacklist.util';
+import TokenBlacklistUtil, { hashTokenForBlacklist } from '@/shared/utils/tokenBlacklist.util';
 
 const MAX_ACTIVE_DEVICES = Number(process.env['MAX_ACTIVE_DEVICES']) || 3;
 const VALID_DEVICE_TYPES = ['desktop', 'mobile', 'tablet', 'unknown'];
@@ -486,14 +486,10 @@ export class AuthCacheRepository {
     }
 
     static async isBlacklisted(type: 'access' | 'refresh', token: string): Promise<boolean> {
-        const hash = hashTokenForBlacklist(token);
-        const hashedExists = await CacheUtil.exists(`blacklist:${type}:${hash}`);
-        if (hashedExists) return true;
-
-        if (process.env['BLACKLIST_LEGACY_RAW_KEYS_ENABLED'] !== 'false') {
-            return CacheUtil.exists(`blacklist:${type}:${token}`);
+        if (type === 'access') {
+            return TokenBlacklistUtil.isAccessTokenBlacklisted(token);
         }
-        return false;
+        return TokenBlacklistUtil.isRefreshTokenBlacklisted(token);
     }
 
     static async getCachedProfile(userId: string): Promise<any | null> {

@@ -29,16 +29,51 @@ let isShuttingDown = false;
 // ==================== CONFIGURATION ====================
 export const getRedisConfig = () => {
   const isCluster = process.env['REDIS_CLUSTER_MODE'] === 'true';
+
+  let host = '127.0.0.1';
+  let port = 6379;
+  let password: string | undefined = undefined;
+  let db = 0;
+
+  // 1. Support standard REDIS_URL (e.g. redis://:password@host:port/0 or rediss:// for TLS)
+  const rawUrl = process.env['REDIS_URL'];
+  if (rawUrl && !rawUrl.includes('${')) {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.hostname) host = parsed.hostname;
+      if (parsed.port) {
+        const p = parseInt(parsed.port, 10);
+        if (!isNaN(p) && p > 0) port = p;
+      }
+      if (parsed.password) password = decodeURIComponent(parsed.password);
+      if (parsed.pathname && parsed.pathname.length > 1) {
+        const dbFromUrl = parseInt(parsed.pathname.slice(1), 10);
+        if (!isNaN(dbFromUrl) && dbFromUrl >= 0) db = dbFromUrl;
+      }
+    } catch {
+      // ignore parse errors and fallback
+    }
+  }
+
+  // 2. Allow granular env overrides if explicitly defined
   const rawHost = process.env['REDIS_HOST'];
-  const host = rawHost && !rawHost.includes('${') ? rawHost : '127.0.0.1';
+  if (rawHost && !rawHost.includes('${')) host = rawHost;
+
   const rawPort = process.env['REDIS_PORT'];
-  const parsedPort = rawPort ? parseInt(rawPort, 10) : 6379;
-  const port = !isNaN(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 6379;
+  if (rawPort) {
+    const parsedPort = parseInt(rawPort, 10);
+    if (!isNaN(parsedPort) && parsedPort > 0 && parsedPort < 65536) port = parsedPort;
+  }
+
   const rawPassword = process.env['REDIS_PASSWORD'];
-  const password = rawPassword && !rawPassword.includes('${') ? rawPassword : undefined;
+  if (rawPassword && !rawPassword.includes('${')) password = rawPassword;
+
   const rawDb = process.env['REDIS_DB'];
-  const parsedDb = rawDb ? parseInt(rawDb, 10) : 0;
-  const db = !isNaN(parsedDb) && parsedDb >= 0 ? parsedDb : 0;
+  if (rawDb) {
+    const parsedDb = parseInt(rawDb, 10);
+    if (!isNaN(parsedDb) && parsedDb >= 0) db = parsedDb;
+  }
+
   const rawClusterNodes = process.env['REDIS_CLUSTER_NODES'] || '';
 
   const clusterNodes = rawClusterNodes
@@ -110,6 +145,7 @@ function createInstance(options: {
   let client: Redis | Cluster;
 
   if (config.isCluster) {
+    LoggerUtil.warn('[REDIS_CLUSTER_WARNING] Redis Cluster mode active. Ensure all multi-key operations (pipelines, Lua scripts) use hash tags {...} or operate per-node. For standard production deployments, Redis Standalone with Sentinel / Read Replicas is recommended.');
     const clusterOptions: ClusterOptions = {
       clusterRetryStrategy: (times) => defaultRetryStrategy(times) ?? 2000,
       enableReadyCheck: true,
@@ -208,10 +244,17 @@ export const initRedis = async (): Promise<boolean> => {
   }
 };
 
+let healthOverride: RedisConnectionHealth | null = null;
+
+export const setRedisHealthOverride = (override: RedisConnectionHealth | null): void => {
+  healthOverride = override;
+};
+
 /**
  * Health check with round-trip latency probe
  */
 export const getRedisHealth = async (): Promise<RedisConnectionHealth> => {
+  if (healthOverride !== null) return healthOverride;
   const client = getRedisClient();
   const config = getRedisConfig();
   const startTime = Date.now();

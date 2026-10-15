@@ -44,7 +44,7 @@ export interface QueueRedisConfig {
  * Resolves dedicated instance from REDIS_QUEUE_URL or dedicated host/port.
  */
 export function getQueueConnectionConfig(): QueueRedisConfig {
-  const queueUrl = process.env['REDIS_QUEUE_URL'];
+  const queueUrl = process.env['REDIS_QUEUE_URL'] || process.env['REDIS_URL'];
 
   if (queueUrl) {
     try {

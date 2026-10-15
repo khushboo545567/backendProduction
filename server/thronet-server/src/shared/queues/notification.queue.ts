@@ -83,6 +83,9 @@ export const notificationQueue = {
     const payload = maybeData || nameOrData;
     return enqueueNotification(payload);
   },
+  process: (_concurrencyOrHandler: any, _maybeHandler?: any) => {
+    // BullMQ processing is handled in worker.ts
+  },
   close: closeNotificationQueue,
 };
 

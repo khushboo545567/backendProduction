@@ -22,8 +22,8 @@ import { handleChatEvents } from '@/StudyGroup/socket/chatHandler';
 import { liveRoomHandler } from '@/StudyGroup/socket/liveRoomHandler';
 import { handlePresenceEvents } from '@/StudyGroup/socket/presenceHandler';
 import { setupStudyGroupSessionHandlers } from '@/StudyGroup/socket/socket';
-// upar baaki imports ke saath:import { AuthenticatedSocket } from './types';
 export type { AuthenticatedSocket } from './types';
+export { getIO, emitToUser, setIO } from './emitter';
 import { setIO } from './emitter';
 import { setupSocketAdapter, SocketPresenceRepository } from '@/shared/cache/socketCache';
 
