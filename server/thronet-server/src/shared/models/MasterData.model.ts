@@ -5,6 +5,7 @@
  */
 
 import mongoose, { Schema, Document, Model } from 'mongoose';
+import { LoggerUtil } from '@/shared/logger.util';
 
 export type MasterDataType = 'skills' | 'industries' | 'degrees' | 'categories' | 'tags';
 
@@ -87,7 +88,9 @@ masterDataSchema.post('save', async function (doc) {
     try {
       const { MasterDataCacheRepository } = await import('@/shared/cache/masterCache');
       await MasterDataCacheRepository.invalidateMasterData(doc.type);
-    } catch {}
+    } catch (err: any) {
+      LoggerUtil.warn('MasterData post-save cache invalidation failed', { error: err.message, type: doc.type });
+    }
   }
 });
 
@@ -103,7 +106,9 @@ masterDataSchema.post(
       } else {
         await MasterDataCacheRepository.invalidateAll();
       }
-    } catch {}
+    } catch (err: any) {
+      LoggerUtil.warn('MasterData mutation cache invalidation failed', { error: err.message });
+    }
   }
 );
 
@@ -118,14 +123,18 @@ masterDataSchema.post('insertMany', async function (docs: any) {
     } else {
       await MasterDataCacheRepository.invalidateAll();
     }
-  } catch {}
+  } catch (err: any) {
+    LoggerUtil.warn('MasterData insertMany cache invalidation failed', { error: err.message });
+  }
 });
 
 masterDataSchema.post('bulkWrite' as any, async function () {
   try {
     const { MasterDataCacheRepository } = await import('@/shared/cache/masterCache');
     await MasterDataCacheRepository.invalidateAll();
-  } catch {}
+  } catch (err: any) {
+    LoggerUtil.warn('MasterData bulkWrite cache invalidation failed', { error: err.message });
+  }
 });
 
 const MasterData = mongoose.model<IMasterDataDoc>('MasterData', masterDataSchema);
