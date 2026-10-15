@@ -200,12 +200,25 @@ TimeSlotSchema.methods.book = async function (sessionId: string, bookedBy: strin
     throw new Error('Time slot is not available for booking');
   }
 
-  this.status = 'booked';
-  this.sessionId = sessionId;
-  this.booking.bookedAt = new Date();
-  this.booking.bookedBy = bookedBy;
+  const updated = await (this.constructor as any).findOneAndUpdate(
+    { _id: this._id, status: 'available' },
+    {
+      $set: {
+        status: 'booked',
+        sessionId,
+        'booking.bookedAt': new Date(),
+        'booking.bookedBy': bookedBy,
+      },
+    },
+    { new: true }
+  );
 
-  return await this.save();
+  if (!updated) {
+    throw new Error('Time slot is not available for booking');
+  }
+
+  Object.assign(this, updated.toObject());
+  return this;
 };
 
 TimeSlotSchema.methods.release = async function () {
