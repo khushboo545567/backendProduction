@@ -136,7 +136,6 @@ class PasswordService {
             // Step 3: Fetch user
             const user = await User.findOne({ userId }).select('+passwordHash email firstName').lean().exec();
             if (!user) throw new Error('User not found');
-
             // Step 4: Password history
             const isRecentPassword = await PasswordHistory.isPasswordRecentlyUsed(userId, newPassword);
             if (isRecentPassword) throw new Error('Cannot reuse any of your last 5 passwords');

@@ -1504,6 +1504,10 @@ class AuthService {
             await DeviceRepository.deactivateAllForUser(userId);
             await AuthCacheRepository.invalidateUserCaches(userId);
             await AuthCacheRepository.del(`verify:user:${userId}`);
+            try {
+                const { ConnectionCacheRepository } = await import('@/shared/cache/connectionCache');
+                await ConnectionCacheRepository.handleAccountDeactivated(userId);
+            } catch {}
 
             setImmediate(() => {
                 AuditProducer.sendAuditEvent({
@@ -1567,6 +1571,10 @@ class AuthService {
 
             await AuthCacheRepository.invalidateUserCaches(userId);
             await AuthCacheRepository.del(`verify:user:${userId}`);
+            try {
+                const { ConnectionCacheRepository } = await import('@/shared/cache/connectionCache');
+                await ConnectionCacheRepository.handleAccountDeleted(userId);
+            } catch {}
 
             await AuditProducer.sendAuditEvent({
                 eventId: uuidv4(),

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon",
     "build": "node --max-old-space-size=12288 ./node_modules/typescript/bin/tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
-    "start": "npx tsx server.ts"
+    "start": "npx tsx server.ts",
+    "test:redis": "NODE_ENV=test npx tsx src/shared/cache/__tests__/run-all-redis-tests.ts"
   },
   "nodemonConfig": {
     "watch": [
@@ -46,6 +47,7 @@
     "@opentelemetry/sdk-trace-node": "^2.7.1",
     "@opentelemetry/semantic-conventions": "^1.40.0",
     "@sendgrid/mail": "^8.1.6",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@types/socket.io": "^3.0.1",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
@@ -55,7 +57,6 @@
     "cloudinary": "^2.8.0",
     "compression": "^1.8.1",
     "compromise": "^14.14.5",
-    "connect-mongo": "^6.0.0",
     "connect-redis": "^9.0.0",
     "connect-timeout": "^1.9.1",
     "cookie-parser": "^1.4.7",
@@ -66,7 +67,6 @@
     "express": "^5.2.1",
     "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^8.6.1",
-    "express-session": "^1.19.0",
     "express-validator": "^7.3.2",
     "franc-min": "^6.2.0",
     "geoip-lite": "^1.4.10",
@@ -105,7 +105,6 @@
     "rate-limiter-flexible": "^9.0.1",
     "razorpay": "^2.9.6",
     "recharts": "^3.10.1",
-    "redis": "^5.10.0",
     "sanitize-html": "^2.17.0",
     "sharp": "^0.34.5",
     "slugify": "^1.6.6",
@@ -128,14 +127,12 @@
     "@types/axios": "^0.9.36",
     "@types/bcrypt": "^6.0.0",
     "@types/compression": "^1.8.1",
-    "@types/connect-mongo": "^3.1.2",
     "@types/connect-timeout": "^1.9.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/crypto-js": "^4.2.2",
     "@types/csurf": "^1.11.5",
     "@types/express": "^5.0.6",
-    "@types/express-session": "^1.19.0",
     "@types/geoip-lite": "^1.4.4",
     "@types/hpp": "^0.2.7",
     "@types/js-yaml": "^4.0.9",
@@ -160,6 +157,7 @@
     "@types/zxcvbn": "^4.4.5",
     "cross-env": "^7.0.3",
     "playwright": "^1.63.0",
+    "socket.io-client": "^4.8.4",
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.16"
   }

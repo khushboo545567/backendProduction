@@ -90,6 +90,12 @@ async function initializeApp(): Promise<void> {
     logger.info("STEP 2: Starting Redis initialization...");
 
     try {
+      // 1. Initialize primary ioredis connection pool
+      const { initRedis } = await import("./src/shared/cache/redisConnection");
+      const ioredisConnected = await initRedis();
+      logger.info("IOREDIS CONNECTION INITIALIZED", { connected: ioredisConnected });
+
+      // 2. Initialize CacheUtil legacy manager
       const cacheResult = await CacheUtil.init();
 
       logger.info("CACHE INIT FINISHED", {
@@ -97,8 +103,22 @@ async function initializeApp(): Promise<void> {
         status: CacheUtil.status,
       });
 
-      if (cacheResult) {
+      if (cacheResult || ioredisConnected) {
         logger.info("Redis cache initialized successfully");
+
+        // Item I: Warm up / rebuild leaderboards on startup from MongoDB truth (non-blocking)
+        import("./src/shared/cache/studyCache").then(({ LeaderboardCacheRepository }) => {
+          LeaderboardCacheRepository.rebuildAllLeaderboards().catch((err: any) => {
+            logger.warn("Initial leaderboard cache rebuild failed (non-critical)", { error: err.message });
+          });
+        }).catch(() => {});
+
+        // Item M: Warm up master/reference data cache without blocking startup (non-blocking)
+        import("./src/shared/cache/masterCache").then(({ MasterDataCacheRepository }) => {
+          MasterDataCacheRepository.warmUp().catch((err: any) => {
+            logger.warn("Initial master data cache warm-up failed (non-critical)", { error: err.message });
+          });
+        }).catch(() => {});
       } else {
         logger.warn(
           "Redis cache initialization returned false. Using in-memory fallback.",
