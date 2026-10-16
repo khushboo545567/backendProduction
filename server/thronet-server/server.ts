@@ -2,6 +2,7 @@
  * /server/thronet-server/server.ts
  * Main Entry Point — HTTP server bootstrap
  */
+import "dotenv/config";
 import dotenv from "dotenv";
 import path from "path";
 
@@ -9,11 +10,9 @@ import path from "path";
 // ENVIRONMENT
 // ============================================================
 
-if (process.env["NODE_ENV"] !== "production") {
-  dotenv.config({
-    path: path.join(__dirname, "../../.env"),
-  });
-}
+// Always ensure both local server .env and root .env are loaded
+dotenv.config({ path: path.resolve(__dirname, ".env") });
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 // ============================================================
 // IMPORTS

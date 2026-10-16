@@ -9,7 +9,10 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import ResponseUtil from '@/shared/response.util';
+import NotificationService from '../services/notification.service';
 
 import ValidatorUtil from '@/shared/utils/validator.util';
 import LoggerUtil from '@/shared/logger.util';
@@ -73,6 +76,7 @@ interface RegisterBody {
     highestEducation?: string;
     preferredRole?: string;
     cgpa?: string;
+    verificationToken?: string;
     deviceType?: string;
     deviceName?: string;
     os?: string;
@@ -225,6 +229,191 @@ const saveRefreshTokenHash = async (
 
 class AuthController {
 
+    // ==================== PRE-REGISTRATION OTP ====================
+
+    /**
+     * POST /api/v1/auth/register/send-otp
+     * Sends a 6-digit OTP to the email before registration.
+     * Does NOT save anything in MongoDB.
+     */
+    static async sendRegistrationOTP(req: Request, res: Response): Promise<void> {
+        const startTime = Date.now();
+        const correlationId = (req as any).correlationId || uuidv4();
+        const ipAddress = req.ip || (req as any).connection?.remoteAddress || '0.0.0.0';
+
+        try {
+            const { email, firstName } = req.body;
+            if (!email) {
+                ResponseUtil.validationError(res, ['Email is required'], 'Validation failed');
+                return;
+            }
+
+            const normalizedEmail = String(email).trim().toLowerCase();
+
+            // 1. Check if email is already registered in MongoDB
+            const existingUser = await User.findOne({ email: normalizedEmail }).select('userId').lean().exec();
+            if (existingUser) {
+                ResponseUtil.conflict(res, 'User already exists with this email', ['Email is already registered']);
+                return;
+            }
+
+            // 2. Per-email rate limit: max 5 requests per 15 minutes
+            const emailRateKey = `reg_otp_rate:${normalizedEmail}`;
+            const emailCount = await CacheUtil.get(emailRateKey);
+            if (emailCount && parseInt(String(emailCount), 10) >= 5) {
+                ResponseUtil.tooManyRequests(res, 'Too many verification code requests for this email. Please try again in 15 minutes.', { retryAfter: 900 });
+                return;
+            }
+
+            // 3. Generate 6-digit OTP
+            const otp = crypto.randomInt(100000, 999999).toString();
+            const salt = process.env.OTP_SALT || 'default-otp-salt-change-in-production';
+            const otpHash = crypto.createHash('sha256').update(otp + salt).digest('hex');
+
+            // 4. Save to Redis with 10 minutes TTL
+            const otpKey = `registration_otp:${normalizedEmail}`;
+            await CacheUtil.set(
+                otpKey,
+                JSON.stringify({
+                    otpHash,
+                    email: normalizedEmail,
+                    attempts: 0,
+                    maxAttempts: 5,
+                    createdAt: Date.now(),
+                }),
+                600 // 10 minutes
+            );
+
+            // Increment rate limiter
+            await CacheUtil.incr(emailRateKey, 900);
+
+            // 5. Send Email via NotificationService
+            await NotificationService.sendEmail({
+                to: normalizedEmail,
+                subject: 'Verify Your Email - OTP Code',
+                template: 'email-otp',
+                data: {
+                    otp,
+                    expiryMinutes: 10,
+                    userName: firstName || normalizedEmail.split('@')[0],
+                },
+            });
+
+            LoggerUtil.info('Registration OTP sent successfully', {
+                email: normalizedEmail,
+                ipAddress,
+                correlationId,
+                duration: Date.now() - startTime,
+            });
+
+            ResponseUtil.success(
+                res,
+                { email: normalizedEmail, expiresIn: 600 },
+                'Verification code sent to your email',
+                200
+            );
+        } catch (error: any) {
+            LoggerUtil.error('Failed to send registration OTP', {
+                error: error.message,
+                email: req.body?.email,
+                ipAddress,
+                correlationId,
+            });
+            ResponseUtil.internalError(res, error.message || 'Failed to send verification code. Please try again.', error);
+        }
+    }
+
+    /**
+     * POST /api/v1/auth/register/verify-otp
+     * Verifies the 6-digit registration OTP.
+     * Returns a short-lived signed verificationToken (15m).
+     */
+    static async verifyRegistrationOTP(req: Request, res: Response): Promise<void> {
+        const startTime = Date.now();
+        const correlationId = (req as any).correlationId || uuidv4();
+        const ipAddress = req.ip || (req as any).connection?.remoteAddress || '0.0.0.0';
+
+        try {
+            const { email, otp } = req.body;
+            if (!email || !otp) {
+                ResponseUtil.validationError(res, ['Email and OTP are required'], 'Validation failed');
+                return;
+            }
+
+            const normalizedEmail = String(email).trim().toLowerCase();
+            const normalizedOtp = String(otp).trim();
+
+            if (!/^\d{6}$/.test(normalizedOtp)) {
+                ResponseUtil.validationError(res, ['OTP must be a 6-digit number'], 'Invalid OTP format');
+                return;
+            }
+
+            const otpKey = `registration_otp:${normalizedEmail}`;
+            const cachedData = await CacheUtil.get(otpKey);
+
+            if (!cachedData) {
+                ResponseUtil.badRequest(res, 'Verification code expired or not found. Please request a new code.');
+                return;
+            }
+
+            const record = typeof cachedData === 'string' ? JSON.parse(cachedData) : cachedData;
+
+            if (record.attempts >= (record.maxAttempts || 5)) {
+                await CacheUtil.del(otpKey);
+                ResponseUtil.tooManyRequests(res, 'Maximum verification attempts exceeded. Please request a new code.');
+                return;
+            }
+
+            const salt = process.env.OTP_SALT || 'default-otp-salt-change-in-production';
+            const providedHash = crypto.createHash('sha256').update(normalizedOtp + salt).digest('hex');
+
+            if (providedHash !== record.otpHash) {
+                record.attempts = (record.attempts || 0) + 1;
+                await CacheUtil.set(otpKey, JSON.stringify(record), 600);
+                const remaining = (record.maxAttempts || 5) - record.attempts;
+                ResponseUtil.badRequest(res, `Invalid verification code. ${remaining} attempts remaining.`);
+                return;
+            }
+
+            // OTP verified! Delete from Redis to prevent replay
+            await CacheUtil.del(otpKey);
+
+            // Generate short-lived verificationToken
+            const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'dev-only-access-secret-change-me-0123456789';
+            const verificationToken = jwt.sign(
+                { email: normalizedEmail, purpose: 'registration_verification' },
+                secret,
+                { expiresIn: '15m' }
+            );
+
+            LoggerUtil.info('Registration OTP verified successfully', {
+                email: normalizedEmail,
+                ipAddress,
+                correlationId,
+                duration: Date.now() - startTime,
+            });
+
+            ResponseUtil.success(
+                res,
+                {
+                    email: normalizedEmail,
+                    verificationToken,
+                    expiresIn: 900,
+                },
+                'Email verified successfully',
+                200
+            );
+        } catch (error: any) {
+            LoggerUtil.error('Failed to verify registration OTP', {
+                error: error.message,
+                email: req.body?.email,
+                ipAddress,
+                correlationId,
+            });
+            ResponseUtil.internalError(res, error.message || 'Failed to verify verification code.', error);
+        }
+    }
+
     // ==================== USER REGISTRATION ====================
 
     /**
@@ -255,10 +444,11 @@ class AuthController {
                 highestEducation,
                 preferredRole,
                 cgpa,
+                verificationToken,
             } = req.body;
 
             const ipAddress = req.ip || (req as any).connection?.remoteAddress || '0.0.0.0';
-            const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
+            const userAgent = (req.headers?.['user-agent'] as string) || 'Unknown';
 
             const deviceData: DeviceData = {
                 deviceType: req.body.deviceType || 'desktop',
@@ -310,6 +500,49 @@ class AuthController {
 
             const data = validation.data!;
             const normalizedEmail = data.email.trim().toLowerCase();
+
+            // Validate verificationToken (ensures email was verified before registration)
+            if (!verificationToken) {
+                LoggerUtil.warn('Registration failed - missing verificationToken', {
+                    email: normalizedEmail,
+                    ipAddress,
+                    correlationId,
+                });
+                ResponseUtil.badRequest(
+                    res,
+                    'Verification token is required. Please verify your email before registering.'
+                );
+                return;
+            }
+
+            try {
+                const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'dev-only-access-secret-change-me-0123456789';
+                const decoded = jwt.verify(verificationToken, secret) as any;
+                if (!decoded || decoded.purpose !== 'registration_verification' || decoded.email !== normalizedEmail) {
+                    LoggerUtil.warn('Registration failed - invalid verificationToken payload', {
+                        email: normalizedEmail,
+                        tokenEmail: decoded?.email,
+                        purpose: decoded?.purpose,
+                        ipAddress,
+                    });
+                    ResponseUtil.unauthorized(
+                        res,
+                        'Invalid verification token for this email. Please verify your email again.'
+                    );
+                    return;
+                }
+            } catch (jwtErr: any) {
+                LoggerUtil.warn('Registration failed - expired or invalid verificationToken', {
+                    email: normalizedEmail,
+                    error: jwtErr.message,
+                    ipAddress,
+                });
+                ResponseUtil.unauthorized(
+                    res,
+                    'Verification token has expired or is invalid. Please verify your email again.'
+                );
+                return;
+            }
 
             // Step 2: Existing user check
             const existingUser = await User.findOne({ email: normalizedEmail });
@@ -364,6 +597,7 @@ class AuthController {
                     highestEducation: data.highestEducation,
                     preferredRole: data.preferredRole,
                     cgpa: data.cgpa,
+                    emailVerified: true,
                 },
                 deviceData
             );
@@ -460,6 +694,7 @@ class AuthController {
                     firstName: data.firstName,
                     lastName: data.lastName,
                     role: result.role || 'user',
+                    emailVerified: true,
                 },
                 tokens: buildTokensResponse(accessToken, refreshToken),
             }, 'Registration successful');
