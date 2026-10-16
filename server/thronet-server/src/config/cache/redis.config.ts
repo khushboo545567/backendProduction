@@ -90,7 +90,7 @@ class RedisConfigManager {
             // ==================== CONNECTION SETTINGS ====================
             enableReadyCheck: true,
             enableOfflineQueue: true,
-            lazyConnect: true,
+            lazyConnect: false,
 
             // Timeouts
             connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT || process.env.REDIS_CONNECT_TIMEOUT_MS || '60000'),

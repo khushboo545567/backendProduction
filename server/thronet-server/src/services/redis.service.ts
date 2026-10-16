@@ -243,8 +243,15 @@ class RedisService {
                 }
             });
 
-            // Wait for connection to be ready
-            await this.waitForConnection();
+            // If client is in 'wait' or 'close' status, explicitly trigger connect
+            if ((this.client as any).status === 'wait' || (this.client as any).status === 'close') {
+                await this.client.connect().catch((err: any) => {
+                    logger.warn('Redis client initial connect returned error', { error: err.message });
+                });
+            }
+
+            // Wait for connection to be ready (timeout 15s)
+            await this.waitForConnection(15000);
 
             // Test connection with PING
             await this.client.ping();
