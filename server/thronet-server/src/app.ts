@@ -244,13 +244,6 @@ app.use(((err: CustomError, req: Request, res: Response, _next: NextFunction) =>
         });
     }
 
-    logger.error('Unhandled error', {
-        error: err.message,
-        stack: err.stack,
-        path: req.path,
-        method: req.method,
-    });
-
     let statusCode = err.statusCode || err.status || 500;
     let message = err.message;
 
@@ -262,6 +255,24 @@ app.use(((err: CustomError, req: Request, res: Response, _next: NextFunction) =>
     } else if (err.name === 'ZodError') {
         statusCode = 400;
         message = (err as any).errors?.map((e: any) => `${e.path?.join('.')}: ${e.message}`).join('; ') || 'Validation failed';
+    }
+
+    // Expected (4xx) errors, jaise MENTOR_NOT_FOUND, normal flow hain:
+    // stack trace ke bina sirf warn log. Genuine 5xx errors stack ke saath error log hote hain.
+    if (statusCode < 500) {
+        logger.warn('Request failed', {
+            status: statusCode,
+            error: message,
+            path: req.path,
+            method: req.method,
+        });
+    } else {
+        logger.error('Unhandled error', {
+            error: err.message,
+            stack: err.stack,
+            path: req.path,
+            method: req.method,
+        });
     }
 
     // Sirf genuine 500 errors ka message production me chhupao.
@@ -277,5 +288,4 @@ app.use(((err: CustomError, req: Request, res: Response, _next: NextFunction) =>
                 : message || 'Internal server error'),
     });
 }) as express.ErrorRequestHandler);
-
 export { app, NotificationService };
