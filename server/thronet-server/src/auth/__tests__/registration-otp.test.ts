@@ -273,6 +273,15 @@ async function runRegistrationOTPTests(): Promise<void> {
 
         console.log('  [PASS] User created with emailVerified: true and emailVerifiedAt timestamp');
 
+        // -------------------------------------------------------------
+        // Test 8: Token Replay Prevention (Consumed Token Rejection)
+        // -------------------------------------------------------------
+        console.log('\n--- Test 8: Consumed token replay is rejected ---');
+        const res8 = createMockResponse();
+        await AuthController.register(req7, res8);
+        assert.strictEqual(res8.statusCode, 401, `Expected 401 Unauthorized for consumed token replay, got ${res8.statusCode}`);
+        console.log('  [PASS] Replay attack blocked: consumed verificationToken strictly rejected');
+
         // Cleanup
         await User.deleteOne({ email: testEmail });
         await User.deleteOne({ email: existingEmail });

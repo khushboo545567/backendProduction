@@ -367,7 +367,11 @@ class AuthController {
             const salt = process.env.OTP_SALT || 'default-otp-salt-change-in-production';
             const providedHash = crypto.createHash('sha256').update(normalizedOtp + salt).digest('hex');
 
-            if (providedHash !== record.otpHash) {
+            const isMatch =
+                providedHash.length === record.otpHash.length &&
+                crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(record.otpHash));
+
+            if (!isMatch) {
                 record.attempts = (record.attempts || 0) + 1;
                 await CacheUtil.set(otpKey, JSON.stringify(record), 600);
                 const remaining = (record.maxAttempts || 5) - record.attempts;
@@ -531,6 +535,20 @@ class AuthController {
                     );
                     return;
                 }
+                const tokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
+                const isConsumed = await CacheUtil.get(`consumed_reg_token:${tokenHash}`);
+                if (isConsumed) {
+                    LoggerUtil.warn('Registration failed - verificationToken already consumed', {
+                        email: normalizedEmail,
+                        ipAddress,
+                        correlationId,
+                    });
+                    ResponseUtil.unauthorized(
+                        res,
+                        'Verification token has already been used. Please verify your email again.'
+                    );
+                    return;
+                }
             } catch (jwtErr: any) {
                 LoggerUtil.warn('Registration failed - expired or invalid verificationToken', {
                     email: normalizedEmail,
@@ -621,6 +639,14 @@ class AuthController {
             const refreshToken = User.generateRefreshToken(payload);
 
             await saveRefreshTokenHash(result.sessionId, refreshToken, correlationId);
+
+            // Mark verification token as consumed to prevent replay attacks (15m TTL)
+            try {
+                const tokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
+                await CacheUtil.set(`consumed_reg_token:${tokenHash}`, '1', 900);
+            } catch (consumedErr: any) {
+                LoggerUtil.warn('Failed to mark verification token consumed (non-critical)', { error: consumedErr?.message });
+            }
 
             // Step 5: Cache session and user data
             try {
