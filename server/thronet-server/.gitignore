@@ -28,3 +28,4 @@ dump.rdb
 tsc_*.txt
 !scripts/benchmark.ts
 !scripts/setup-bench-env.ts
+*.bak
