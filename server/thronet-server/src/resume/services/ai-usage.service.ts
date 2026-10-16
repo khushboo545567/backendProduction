@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import { AIUsage } from "../models/ai-usage.model";
 
 type AIFeature =
@@ -22,7 +21,8 @@ export const trackAIUsage = async (
   tokensUsed = 0,
 ) => {
   await AIUsage.create({
-    userId: new mongoose.Types.ObjectId(userId),
+    // Throne8 userId is a UUID string (the schema field is a String); never cast to ObjectId
+    userId,
     feature,
     tokensUsed,
   });

@@ -40,11 +40,37 @@ export const getMyBookings = async (userId: string) => {
 };
 
 export const getAllBookings = async () => {
-  return await BookingSession.find()
+  const bookings: any[] = await BookingSession.find()
     .sort({ createdAt: -1 })
-    .populate("userId", "fullName email")
     .populate("resumeId", "title")
     .lean();
+
+  // booking.userId holds the Throne8 userId (UUID string). populate() would match it against
+  // the user's Mongo _id and throw a CastError, so look the users up by userId instead and
+  // keep the { fullName, email } shape the admin page reads.
+  const userIds = [...new Set(bookings.map((b) => b.userId).filter(Boolean))];
+  const users: any[] = userIds.length
+    ? await User.find({ userId: { $in: userIds } })
+        .select("userId email firstName lastName")
+        .lean()
+    : [];
+  const byUserId = new Map(users.map((u) => [u.userId, u]));
+
+  return bookings.map((booking) => {
+    const user = byUserId.get(booking.userId);
+    if (!user) return booking;
+
+    return {
+      ...booking,
+      userId: {
+        userId: user.userId,
+        email: user.email,
+        fullName:
+          [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+          user.email,
+      },
+    };
+  });
 };
 
 export const confirmBooking = async (
@@ -129,7 +155,8 @@ export const completeBooking = async (
     throw new ApiError(400, "Only confirmed bookings can be completed");
   }
 
-  const admin = await User.findById(adminUserId);
+  // adminUserId is the Throne8 userId (UUID string), not a Mongo _id
+  const admin = await User.findOne({ userId: adminUserId });
   if (!admin) {
     throw new ApiError(404, "Admin user not found");
   }

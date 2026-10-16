@@ -1,5 +1,3 @@
-import mongoose from "mongoose";
-
 import { AIUsage } from "../../models/ai-usage.model";
 
 /**
@@ -33,7 +31,7 @@ export const getCoverLetterAiCredits = async (
   userId: string,
 ): Promise<CoverLetterAiCredits> => {
   const used = await AIUsage.countDocuments({
-    userId: new mongoose.Types.ObjectId(userId),
+    userId, // Throne8 userId is a UUID string, not an ObjectId
     feature: { $in: COVER_LETTER_AI_FEATURES },
   });
 

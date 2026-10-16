@@ -163,16 +163,29 @@ export async function deleteUser(
 
  
 
+// Only these fields may leave the server (never passwordHash, 2FA secret, tokens...).
+// `.lean()` skips the User schema's toJSON sanitizer, so the projection has to be explicit.
+const ADMIN_USER_FIELDS =
+  "userId email firstName lastName role status createdAt updatedAt";
+
 export async function getUserDetails(
-  userId: string
+  id: string
 ) {
-  const user = await User.findById(userId)
-    .select("-password")
+  // The admin UI passes the Mongo _id; also accept the Throne8 userId (UUID).
+  const query = mongoose.isValidObjectId(id)
+    ? { _id: id }
+    : { userId: id };
+
+  const user: any = await User.findOne(query)
+    .select(ADMIN_USER_FIELDS)
     .lean();
 
   if (!user) {
     throw new Error("User not found");
   }
+
+  // Resume data is keyed by the Throne8 userId (UUID string), not by the Mongo _id.
+  const ownerId: string = user.userId;
 
   const [
     resumes,
@@ -180,20 +193,25 @@ export async function getUserDetails(
     atsAnalyses,
   ] = await Promise.all([
     Resume.countDocuments({
-  userId: new mongoose.Types.ObjectId(userId),
-}),
+      userId: ownerId,
+    }),
 
     AIUsage.countDocuments({
-      userId,
+      userId: ownerId,
     }),
 
     ResumeAnalysis.countDocuments({
-      userId,
+      userId: ownerId,
     }),
   ]);
 
   return {
-    user,
+    user: {
+      ...user,
+      fullName:
+        [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+        user.email,
+    },
     stats: {
       resumes,
       aiRequests,
