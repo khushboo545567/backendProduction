@@ -141,7 +141,6 @@ const TimeSlotSchema = new Schema<TimeSlotDocument>(
 TimeSlotSchema.index({ mentorId: 1, date: 1, startTime: 1 }, { unique: true });
 TimeSlotSchema.index({ mentorId: 1, status: 1, date: 1 });
 TimeSlotSchema.index({ date: 1, status: 1 });
-TimeSlotSchema.index({ sessionId: 1 }, { sparse: true });
 TimeSlotSchema.index({ 'booking.expiresAt': 1 }, { sparse: true });
 
 // Virtual: Full datetime
