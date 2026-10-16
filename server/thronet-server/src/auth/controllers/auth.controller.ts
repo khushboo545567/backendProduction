@@ -270,7 +270,19 @@ class AuthController {
             const salt = process.env.OTP_SALT || 'default-otp-salt-change-in-production';
             const otpHash = crypto.createHash('sha256').update(otp + salt).digest('hex');
 
-            // 4. Save to Redis with 10 minutes TTL
+            // 4. Send Email via NotificationService
+            await NotificationService.sendEmail({
+                to: normalizedEmail,
+                subject: 'Verify Your Email - OTP Code',
+                template: 'email-otp',
+                data: {
+                    otp,
+                    expiryMinutes: 10,
+                    userName: firstName || normalizedEmail.split('@')[0],
+                },
+            });
+
+            // 5. Save to Redis with 10 minutes TTL after email dispatched successfully
             const otpKey = `registration_otp:${normalizedEmail}`;
             await CacheUtil.set(
                 otpKey,
@@ -284,20 +296,8 @@ class AuthController {
                 600 // 10 minutes
             );
 
-            // Increment rate limiter
+            // Increment rate limiter only upon successful dispatch
             await CacheUtil.incr(emailRateKey, 900);
-
-            // 5. Send Email via NotificationService
-            await NotificationService.sendEmail({
-                to: normalizedEmail,
-                subject: 'Verify Your Email - OTP Code',
-                template: 'email-otp',
-                data: {
-                    otp,
-                    expiryMinutes: 10,
-                    userName: firstName || normalizedEmail.split('@')[0],
-                },
-            });
 
             LoggerUtil.info('Registration OTP sent successfully', {
                 email: normalizedEmail,
