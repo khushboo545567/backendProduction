@@ -35,61 +35,88 @@ import { SocketLiveRoomRepository, RoomSessionState } from '@/shared/cache/socke
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MAX_ROOM_SIZE = 16; // WebRTC mesh: 16 peers = 120 connections - hard limit
 
+const NOT_STARTED_REASON = 'Session has not been started yet (or it has already ended)';
+
 // Re-export RoomSession for backward compatibility
 export type RoomSession = RoomSessionState;
 
+interface MembershipResult {
+  ok: boolean;
+  reason?: string;
+}
+
 // ─── Helper: verify mentor/mentee membership on a mentorship session room ─────
-async function isMentorshipSessionMember(userId: string, roomId: string): Promise<boolean> {
+// roomId === booking._id (string)
+async function isMentorshipSessionMember(userId: string, roomId: string): Promise<MembershipResult> {
   try {
+    if (!mongoose.isValidObjectId(roomId)) return { ok: false };
+
     const session = await SessionMentor.findOne({ 'bookings._id': roomId }).lean();
-    if (!session) return false;
+    if (!session) return { ok: false };
 
     const booking = (session.bookings || []).find((b: any) => b._id.toString() === roomId);
-    if (!booking) return false;
+    if (!booking) return { ok: false };
+
+    // Membership: mentee of this booking, or the mentor of the session
+    let isMember = false;
+    const menteeId = booking.menteeId || booking.bookedBy;
+    if (menteeId && userId === menteeId.toString()) {
+      isMember = true;
+    } else {
+      const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
+      isMember = !!mentor && mentor.userId.toString() === userId;
+    }
+    if (!isMember) return { ok: false };
 
     // Only allow while the specific booking is actually in progress
-    if ((booking.status as string) !== 'in_progress') return false;
+    if ((booking.status as string) !== 'in_progress') {
+      return { ok: false, reason: NOT_STARTED_REASON };
+    }
 
-    const menteeId = booking.menteeId || booking.bookedBy;
-    if (menteeId && userId === menteeId.toString()) return true;
-
-    const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
-    return !!mentor && mentor.userId.toString() === userId;
+    return { ok: true };
   } catch (error: any) {
     LoggerUtil.warn(`isMentorshipSessionMember check failed: ${error.message}`);
-    return false;
+    return { ok: false };
   }
 }
 
 // ─── Helper: verify mentor/mentee membership on a Senior Mentor 1:1 session room ─────
-async function isSeniorOneToOneSessionMember(userId: string, roomId: string): Promise<boolean> {
+async function isSeniorOneToOneSessionMember(userId: string, roomId: string): Promise<MembershipResult> {
   try {
+    if (!mongoose.isValidObjectId(roomId)) return { ok: false };
+
     const session = (await SeniorSession.findOne({ 'bookings._id': roomId }).lean()) as any;
-    if (!session) return false;
+    if (!session) return { ok: false };
 
     // Strictly one-to-one sessions only
     const sessionTypeStr = session.sessionType as string | undefined;
     if (sessionTypeStr && sessionTypeStr !== 'one_to_one' && sessionTypeStr !== '1_on_1') {
-      return false;
+      return { ok: false };
     }
 
     const booking = (session.bookings || []).find((b: any) => b._id.toString() === roomId);
-    if (!booking) return false;
+    if (!booking) return { ok: false };
 
-    if ((booking.status as string) !== 'in_progress') return false;
-
+    let isMember = false;
     const menteeId = (booking.menteeId || booking.bookedBy)?.toString();
-    if (menteeId && userId === menteeId) return true;
+    if (menteeId && userId === menteeId) {
+      isMember = true;
+    } else if (session.mentorId && session.mentorId.toString() === userId) {
+      isMember = true;
+    } else {
+      const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
+      isMember = !!mentor && mentor.userId?.toString() === userId;
+    }
+    if (!isMember) return { ok: false };
 
-    if (session.mentorId && session.mentorId.toString() === userId) return true;
+    if ((booking.status as string) !== 'in_progress') {
+      return { ok: false, reason: NOT_STARTED_REASON };
+    }
 
-    const mentor = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false }).lean();
-    if (mentor && mentor.userId?.toString() === userId) return true;
-
-    return false;
+    return { ok: true };
   } catch (error: any) {
     LoggerUtil.warn(`isSeniorOneToOneSessionMember check failed: ${error.message}`);
-    return false;
+    return { ok: false };
   }
 }
 
@@ -106,26 +133,41 @@ async function getRoomAccess(
     return { allowed: false, maxCapacity: 0, errorReason: 'Missing user ID or room ID' };
   }
 
+  // Best "why was I rejected" message collected while we try each room type.
+  let denyReason: string | undefined;
+
   // 1. StudyGroup room
+  //
+  // ⚠️ FIX: mentorship 1:1 roomId is a booking._id, which is ALSO a valid ObjectId.
+  // Earlier, any ObjectId roomId that wasn't a LiveRoom returned "Live room not found"
+  // immediately, so mentorship rooms never reached the mentorship checks below.
+  // Now a missing LiveRoom just means "this is not a study-group room" → fall through.
   try {
-    let targetGroupId = roomId;
+    let studyGroupId: any = null;
+
     if (mongoose.isValidObjectId(roomId)) {
       const liveRoom = await LiveRoom.findById(roomId).lean();
-      if (!liveRoom) {
-        return { allowed: false, maxCapacity: 0, errorReason: 'Live room not found' };
+      if (liveRoom) {
+        if (!liveRoom.isActive) {
+          return { allowed: false, maxCapacity: 0, errorReason: 'This live room has ended' };
+        }
+        studyGroupId = liveRoom.group;
       }
-      if (!liveRoom.isActive) {
-        return { allowed: false, maxCapacity: 0, errorReason: 'This live room has ended' };
-      }
-      targetGroupId = liveRoom.group;
+      // liveRoom === null → not a study-group live room, try mentorship checks
+    } else {
+      // Non-ObjectId roomId: treated as a groupId directly (legacy behaviour)
+      studyGroupId = roomId;
     }
 
-    const member = await GroupMember.findOne({
-      userId: userId,
-      groupId: targetGroupId,
-      status: 'active',
-    }).lean();
-    if (member) return { allowed: true, maxCapacity: MAX_ROOM_SIZE };
+    if (studyGroupId) {
+      const member = await GroupMember.findOne({
+        userId: userId,
+        groupId: studyGroupId,
+        status: 'active',
+      }).lean();
+      if (member) return { allowed: true, maxCapacity: MAX_ROOM_SIZE };
+      denyReason = 'You are not a member of this group';
+    }
   } catch (error: any) {
     LoggerUtil.warn(`StudyGroup check failed: ${error.message}`);
   }
@@ -133,7 +175,8 @@ async function getRoomAccess(
   // 2. Mentorship 1:1 room
   try {
     const mentorship1on1 = await isMentorshipSessionMember(userId, roomId);
-    if (mentorship1on1) return { allowed: true, maxCapacity: 2 };
+    if (mentorship1on1.ok) return { allowed: true, maxCapacity: 2 };
+    if (mentorship1on1.reason) denyReason = mentorship1on1.reason;
   } catch (error: any) {
     LoggerUtil.warn(`1:1 Mentorship check failed: ${error.message}`);
   }
@@ -142,7 +185,9 @@ async function getRoomAccess(
   try {
     const session = await GroupSession.findOne({ sessionId: roomId }).lean();
     if (session) {
-      if ((session as any).status !== 'in_progress') return { allowed: false, maxCapacity: 0 };
+      if ((session as any).status !== 'in_progress') {
+        return { allowed: false, maxCapacity: 0, errorReason: NOT_STARTED_REASON };
+      }
 
       let isAllowed = false;
       const participant = ((session as any).participants || []).find(
@@ -167,13 +212,19 @@ async function getRoomAccess(
 
   // 4. Senior Mentor 1:1 room
   try {
-    const senior1on1Allowed = await isSeniorOneToOneSessionMember(userId, roomId);
-    if (senior1on1Allowed) return { allowed: true, maxCapacity: 2 };
+    const senior1on1 = await isSeniorOneToOneSessionMember(userId, roomId);
+    if (senior1on1.ok) return { allowed: true, maxCapacity: 2 };
+    if (senior1on1.reason) denyReason = senior1on1.reason;
   } catch (error: any) {
     LoggerUtil.warn(`Senior Mentor 1:1 check failed: ${error.message}`);
   }
 
-  return { allowed: false, maxCapacity: 0 };
+  LoggerUtil.warn(`Room access denied: user ${userId} → room ${roomId} (${denyReason || 'no match'})`);
+  return {
+    allowed: false,
+    maxCapacity: 0,
+    errorReason: denyReason || 'You are not allowed to join this room',
+  };
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -243,6 +294,10 @@ export const liveRoomHandler = (io: Server, socket: AuthenticatedSocket): void =
       });
     } catch (error: any) {
       LoggerUtil.error('Error joining live room', { error: error.message, userId });
+      socket.emit('error', {
+        event: 'join-live-room',
+        message: 'Could not join the room. Please try again.',
+      });
     }
   });
 
