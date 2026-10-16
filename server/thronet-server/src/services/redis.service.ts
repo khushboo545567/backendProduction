@@ -1,4 +1,4 @@
-﻿// services/redis.service.ts
+// services/redis.service.ts
 import Redis, { Cluster } from 'ioredis';
 import { redisConfig } from '@/config/cache/redis.config';
 import { logger } from '@/shared/logger.util';
@@ -147,6 +147,29 @@ class RedisService {
             await this.connectionPromise;
         } finally {
             this.connectionPromise = null;
+        }
+    }
+
+    /**
+     * Ensure connected lazily if called before startup finishes
+     */
+    async ensureConnected(): Promise<boolean> {
+        if (this.connected && this.client) {
+            return true;
+        }
+        if (this.isConnecting) {
+            if (this.connectionPromise) {
+                try {
+                    await this.connectionPromise;
+                } catch {}
+            }
+            return this.connected;
+        }
+        try {
+            await this.connect();
+            return this.connected;
+        } catch {
+            return false;
         }
     }
 
@@ -302,6 +325,10 @@ class RedisService {
         this.metrics.totalOperations++;
 
         try {
+            if (!this.connected) {
+                await this.ensureConnected();
+            }
+
             if (!this.client || !this.connected) {
                 logger.warn('⚠️ [REDIS GET] Client not connected', { key });
                 this.metrics.cacheMisses++;
@@ -368,6 +395,10 @@ class RedisService {
         this.metrics.totalOperations++;
 
         try {
+            if (!this.connected) {
+                await this.ensureConnected();
+            }
+
             if (!this.client || !this.connected) {
                 logger.warn('⚠️ [REDIS SET] Client not connected', { key });
                 return;
@@ -425,6 +456,10 @@ class RedisService {
         this.metrics.totalOperations++;
 
         try {
+            if (!this.connected) {
+                await this.ensureConnected();
+            }
+
             if (!this.client || !this.connected) {
                 logger.warn('⚠️ [REDIS DEL] Client not connected', { key });
                 return;

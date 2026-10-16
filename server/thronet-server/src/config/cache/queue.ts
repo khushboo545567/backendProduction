@@ -7,26 +7,33 @@ const parseRedisUrl = (url?: string) => {
     return {
       host: parsed.hostname || undefined,
       port: parsed.port ? parseInt(parsed.port, 10) : undefined,
+      username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
       password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+      tls: parsed.protocol === 'rediss:' ? {} : undefined,
     };
   } catch {
     return {};
   }
 };
-const parsedQueueUrl = parseRedisUrl(process.env['REDIS_QUEUE_URL'] || process.env['REDIS_URL']);
-
 export const queueConfig = {
   // Bull Queue (Redis-based)
   bull: {
-    redis: {
-      host: process.env['BULL_REDIS_HOST'] || process.env['REDIS_HOST'] || parsedQueueUrl.host || 'localhost',
-      port: parseInt(process.env['BULL_REDIS_PORT'] || process.env['REDIS_PORT'] || String(parsedQueueUrl.port || '6379'), 10),
-      password: process.env['BULL_REDIS_PASSWORD'] || process.env['REDIS_PASSWORD'] || parsedQueueUrl.password || undefined,
-      db: 1, // Separate database for queue
-      keyPrefix: 'bull:',
-      maxRetriesPerRequest: null,  // MUST be null for Bull
-      enableReadyCheck: false,     // MUST be false for Bull
-      enableOfflineQueue: true,
+    get redis() {
+      const parsedQueueUrl = parseRedisUrl(process.env['REDIS_QUEUE_URL'] || process.env['REDIS_URL']);
+      const queueRedisFamily = process.env['REDIS_FAMILY'] !== undefined ? parseInt(process.env['REDIS_FAMILY'], 10) : 0;
+      return {
+        host: process.env['BULL_REDIS_HOST'] || process.env['REDIS_HOST'] || parsedQueueUrl.host || 'localhost',
+        port: parseInt(process.env['BULL_REDIS_PORT'] || process.env['REDIS_PORT'] || String(parsedQueueUrl.port || '6379'), 10),
+        username: process.env['BULL_REDIS_USERNAME'] || process.env['REDIS_USERNAME'] || process.env['REDIS_USER'] || parsedQueueUrl.username || undefined,
+        password: process.env['BULL_REDIS_PASSWORD'] || process.env['REDIS_PASSWORD'] || parsedQueueUrl.password || undefined,
+        family: queueRedisFamily,
+        ...(parsedQueueUrl.tls || process.env['REDIS_TLS'] === 'true' ? { tls: {} } : {}),
+        db: 1, // Separate database for queue
+        keyPrefix: 'bull:',
+        maxRetriesPerRequest: null,  // MUST be null for Bull
+        enableReadyCheck: false,     // MUST be false for Bull
+        enableOfflineQueue: true,
+      };
     },
 
     // Default job options

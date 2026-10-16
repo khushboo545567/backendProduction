@@ -95,7 +95,13 @@ async function initializeApp(): Promise<void> {
       const ioredisConnected = await initRedis();
       logger.info("IOREDIS CONNECTION INITIALIZED", { connected: ioredisConnected });
 
-      // 2. Initialize CacheUtil legacy manager
+      // 2. Initialize redisService instance (used by Feeds, Posts, and Analytics)
+      const { connectRedis } = await import("./src/services/redis.service");
+      await connectRedis().catch((err: any) => {
+        logger.warn("redisService connection failed", { error: err.message });
+      });
+
+      // 3. Initialize CacheUtil legacy manager
       const cacheResult = await CacheUtil.init();
 
       logger.info("CACHE INIT FINISHED", {
