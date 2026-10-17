@@ -22,6 +22,7 @@ import { User } from './auth/models';
 
 // Config
 import { LoggerUtil, requestLogger } from './shared/logger.util';
+import { createCookieAuthBridge } from './shared/middlewares/cookieAuth.middleware';
 import NotificationService from './auth/services/notification.service';
 import { prometheusRouter } from './shared/observability/metrics/exporters/prometheus.exporter';
 import { getRedisHealth } from './shared/cache/redisConnection';
@@ -52,11 +53,13 @@ const PRODUCTION_ORIGINS = [
     'https://throne8.com',
     'https://www.throne8.com',
     'https://throne8-client-main.vercel.app',
+    'https://resume.throne8.com',
 ];
 
 const DEV_ORIGINS = [
     'http://localhost:3000',
     'http://localhost:3001',
+    'http://localhost:5173',
 ];
 
 // Trailing slash hata do ("https://throne8.com/" != "https://throne8.com")
@@ -84,16 +87,21 @@ const allowVercelPreviews = process.env['ALLOW_VERCEL_PREVIEWS']
 
 logger.info('CORS allowed origins', { allowedOrigins, allowVercelPreviews });
 
+// Single source of truth for "is this browser origin allowed?"
+// (used by CORS below and by the cookie CSRF guard)
+const isOriginAllowed = (origin: string): boolean => {
+    const cleanOrigin = normalizeOrigin(origin);
+    const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(cleanOrigin);
+    const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(cleanOrigin);
+    return allowedOrigins.includes('*') || allowedOrigins.includes(cleanOrigin) || isVercel || isLocalhost;
+};
+
 app.use(cors({
     origin: (origin, callback) => {
         // Server-to-server calls (no origin) allow karo
         if (!origin) return callback(null, true);
 
-        const cleanOrigin = normalizeOrigin(origin);
-        const isVercel = allowVercelPreviews && /\.vercel\.app$/.test(cleanOrigin);
-        const isLocalhost = !isProduction && /^http:\/\/localhost:\d+$/.test(cleanOrigin);
-
-        if (allowedOrigins.includes('*') || allowedOrigins.includes(cleanOrigin) || isVercel || isLocalhost) {
+        if (isOriginAllowed(origin)) {
             return callback(null, origin);
         }
 
@@ -116,6 +124,12 @@ app.use(cors({
 
 // 1. Cookie parser and request logger
 app.use(cookieParser());
+
+// Cookie session support: copy the access cookie into the Authorization header
+// (explicit header wins). On state-changing requests the cookies are only honoured
+// when X-Requested-With + an allowed Origin prove the call came from our frontend.
+app.use(createCookieAuthBridge(isOriginAllowed));
+
 app.use(requestLogger);
 
 // 2. Body parsers

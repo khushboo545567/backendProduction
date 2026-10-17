@@ -15,6 +15,7 @@ import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import rateLimitMiddleware from '@/shared/middlewares/rateLimit.middleware';
 import LoggerUtil from '@/shared/logger.util';
 import ResponseUtil from '@/shared/response.util';
+import { setAuthCookies, shouldExposeTokensInBody } from '../../shared/utils/authCookies.util';
 import { User, Session } from '@/shared/models/index.models';
 import passport from '@/config/oauth/passport.config';
 import { csrfProtection } from '@/config/security/csrf.config';
@@ -876,8 +877,11 @@ router.get(
 
             // Note: tokens query string mein jaate hain (frontend /auth/callback page yahin se padhta hai)
             const redirectUrl = new URL(`${process.env.FRONTEND_URL}/auth/callback`);
-            redirectUrl.searchParams.set('accessToken', accessToken);
-            redirectUrl.searchParams.set('refreshToken', refreshToken);
+            setAuthCookies(res, { accessToken, refreshToken });
+            if (shouldExposeTokensInBody(req)) {
+                redirectUrl.searchParams.set('accessToken', accessToken);
+                redirectUrl.searchParams.set('refreshToken', refreshToken);
+            }
             redirectUrl.searchParams.set('userId', user.userId);
             redirectUrl.searchParams.set('email', user.email);
             redirectUrl.searchParams.set('role', user.role || 'user');
@@ -915,8 +919,11 @@ router.get(
             const { accessToken, refreshToken } = await issueOAuthTokens(req, user);
 
             const redirectUrl = new URL(`${process.env.FRONTEND_URL}/auth/callback`);
-            redirectUrl.searchParams.set('accessToken', accessToken);
-            redirectUrl.searchParams.set('refreshToken', refreshToken);
+            setAuthCookies(res, { accessToken, refreshToken });
+            if (shouldExposeTokensInBody(req)) {
+                redirectUrl.searchParams.set('accessToken', accessToken);
+                redirectUrl.searchParams.set('refreshToken', refreshToken);
+            }
             redirectUrl.searchParams.set('userId', user.userId);
             redirectUrl.searchParams.set('email', user.email);
             redirectUrl.searchParams.set('role', user.role || 'user');
@@ -1018,6 +1025,7 @@ router.delete(
  */
 router.post(
     '/logout',
+    AuthController.logoutWithRefreshCookie as any, // handles "access cookie already expired"
     AuthMiddleware.authenticate as any,
     validateLogout,
     AuthController.logout as any

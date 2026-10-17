@@ -8,7 +8,14 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
+import {
+    REFRESH_COOKIE,
+    setAuthCookies,
+    clearAuthCookies,
+    getRefreshTokenFromRequest,
+    tokensForResponse,
+} from '@/shared/utils/authCookies.util';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import ResponseUtil from '@/shared/response.util';
@@ -713,6 +720,11 @@ class AuthController {
                 correlationId,
             });
 
+            setAuthCookies(res, {
+                accessToken,
+                refreshToken,
+            });
+
             ResponseUtil.created(res, {
                 user: {
                     userId: result.userId,
@@ -722,7 +734,7 @@ class AuthController {
                     role: result.role || 'user',
                     emailVerified: true,
                 },
-                tokens: buildTokensResponse(accessToken, refreshToken),
+                tokens: tokensForResponse(req, buildTokensResponse(accessToken, refreshToken)),
             }, 'Registration successful');
             return;
 
@@ -914,13 +926,17 @@ class AuthController {
                 correlationId,
             });
 
+            setAuthCookies(res, { accessToken, refreshToken });
             ResponseUtil.success(res, {
                 user: {
                     userId: result.userId,
                     email: result.email,
                     role: result.role || 'user',
                 },
-                tokens: buildTokensResponse(accessToken, refreshToken),
+                tokens: tokensForResponse(
+                    req,
+                    buildTokensResponse(accessToken, refreshToken)
+                ),
             }, 'Welcome To Throne8', 200);
             return;
 
@@ -996,6 +1012,40 @@ class AuthController {
         }
     }
 
+    // ==================== LOGOUT WITH REFRESH COOKIE ====================
+
+    static async logoutWithRefreshCookie(
+        req: Request,
+        res: Response,
+        next: NextFunction
+    ): Promise<void> {
+        if (req.headers.authorization) return next();
+
+        const refreshToken = (req as any).cookies?.[REFRESH_COOKIE] as string | undefined;
+        if (!refreshToken) return next();
+
+        const correlationId = (req as any).correlationId || uuidv4();
+        try {
+            const decoded: any = User.verifyToken(refreshToken, 'refresh');
+            await AuthService.logout(
+                decoded.userId,
+                decoded.sessionId ? String(decoded.sessionId) : '',
+                decoded.deviceId || '',
+                '',
+                req.ip || 'unknown',
+                correlationId
+            );
+        } catch (error: any) {
+            LoggerUtil.warn('Logout via refresh cookie: could not revoke session', {
+                error: error.message,
+                correlationId,
+            });
+        }
+
+        clearAuthCookies(res);
+        ResponseUtil.success(res, {}, 'Logged out successfully');
+    }
+
     // ==================== REFRESH TOKEN (DB ROTATION) ====================
 
     /**
@@ -1007,9 +1057,10 @@ class AuthController {
         const correlationId = (req as any).correlationId || uuidv4();
 
         try {
-            const { refreshToken } = req.body || {};
+            const refreshToken = getRefreshTokenFromRequest(req);
 
             if (!refreshToken || typeof refreshToken !== 'string') {
+                clearAuthCookies(res);
                 ResponseUtil.badRequest(res, 'Refresh token is required');
                 return;
             }
@@ -1019,6 +1070,7 @@ class AuthController {
             try {
                 decoded = User.verifyToken(refreshToken, 'refresh');
             } catch (error: any) {
+                clearAuthCookies(res);
                 LoggerUtil.warn('Invalid refresh token', { error: error.message, correlationId });
                 ResponseUtil.unauthorized(res, 'Invalid or expired refresh token');
                 return;
@@ -1149,9 +1201,14 @@ class AuthController {
                 correlationId,
             });
 
+            setAuthCookies(res, {
+                accessToken: newAccessToken,
+                refreshToken: newRefreshToken,
+            });
+
             ResponseUtil.success(
                 res,
-                { tokens: buildTokensResponse(newAccessToken, newRefreshToken) },
+                { tokens: tokensForResponse(req, buildTokensResponse(newAccessToken, newRefreshToken)) },
                 'Token refreshed successfully',
                 200
             );
@@ -1736,18 +1793,7 @@ class AuthController {
                 ipAddress,
                 correlationId
             );
-
-            res.clearCookie('accessToken', {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
-            });
-
-            res.clearCookie('refreshToken', {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
-            });
+            clearAuthCookies(res);
 
             LoggerUtil.info('Logout successful', { userId, sessionId, correlationId });
 
@@ -1821,18 +1867,7 @@ class AuthController {
                 ipAddress,
                 correlationId
             );
-
-            res.clearCookie('accessToken', {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
-            });
-
-            res.clearCookie('refreshToken', {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
-            });
+            clearAuthCookies(res);
 
             LoggerUtil.info('Logout all devices successful', {
                 userId,

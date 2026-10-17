@@ -329,6 +329,7 @@ ResumeSchema.statics.getResumeStats = async function (userId: string) {
   };
 };
 
-export default mongoose.model<ResumeDocument , ResumeModel>('Resume', ResumeSchema);
+export default (mongoose.models['Resume'] as ResumeModel) ||
+  mongoose.model<ResumeDocument, ResumeModel>('Resume', ResumeSchema);
 
 
