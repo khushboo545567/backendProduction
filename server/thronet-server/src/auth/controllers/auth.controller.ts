@@ -723,7 +723,6 @@ class AuthController {
             setAuthCookies(res, {
                 accessToken,
                 refreshToken,
-                userId: result.userId,
             });
 
             ResponseUtil.created(res, {
@@ -1205,7 +1204,6 @@ class AuthController {
             setAuthCookies(res, {
                 accessToken: newAccessToken,
                 refreshToken: newRefreshToken,
-                userId: user.userId,
             });
 
             ResponseUtil.success(

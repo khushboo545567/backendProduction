@@ -13,11 +13,18 @@ export { User };
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   email: string;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'super_admin' | 'moderator';
   status: 'active' | 'suspended';
-  // throne8 uses passwordHash; resume controllers never check password directly
+  fullName?: string;
+  password?: string;
+  passwordHash?: string;
 }
 
-export const UserRoles = { USER: 'user', ADMIN: 'admin' } as const;
+export const UserRoles = {
+  USER: 'user',
+  ADMIN: 'admin',
+  SUPER_ADMIN: 'super_admin',
+  MODERATOR: 'moderator',
+} as const;
 export const UserStatus = { ACTIVE: 'active', SUSPENDED: 'suspended' } as const;
 export type UserRole = typeof UserRoles[keyof typeof UserRoles];
