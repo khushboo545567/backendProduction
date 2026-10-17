@@ -34,6 +34,7 @@ export interface QueueRedisConfig {
   port: number;
   password?: string;
   username?: string;
+  family?: number;
   tls?: Record<string, any>;
   maxRetriesPerRequest: null;
   enableOfflineQueue: boolean;
@@ -45,6 +46,7 @@ export interface QueueRedisConfig {
  */
 export function getQueueConnectionConfig(): QueueRedisConfig {
   const queueUrl = process.env['REDIS_QUEUE_URL'] || process.env['REDIS_URL'];
+  const family = process.env['REDIS_FAMILY'] !== undefined ? parseInt(process.env['REDIS_FAMILY'], 10) : 0;
 
   if (queueUrl) {
     try {
@@ -55,6 +57,7 @@ export function getQueueConnectionConfig(): QueueRedisConfig {
         port: parseInt(parsed.port || '6379', 10),
         password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
         username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+        family,
         tls: isTls ? {} : undefined,
         maxRetriesPerRequest: null, // Strictly required by BullMQ
         enableOfflineQueue: true,
@@ -71,13 +74,16 @@ export function getQueueConnectionConfig(): QueueRedisConfig {
   const parsedPort = rawPort ? parseInt(rawPort, 10) : 6379;
   const port = !isNaN(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 6379;
   const password = process.env['REDIS_QUEUE_PASSWORD'] || process.env['REDIS_PASSWORD'] || undefined;
-  const username = process.env['REDIS_QUEUE_USERNAME'] || process.env['REDIS_USERNAME'] || undefined;
+  const username = process.env['REDIS_QUEUE_USERNAME'] || process.env['REDIS_USERNAME'] || process.env['REDIS_USER'] || undefined;
+  const tls = process.env['REDIS_TLS'] === 'true' ? {} : undefined;
 
   return {
     host,
     port,
     password,
     username,
+    family,
+    tls,
     maxRetriesPerRequest: null, // Strictly required by BullMQ
     enableOfflineQueue: true,
   };

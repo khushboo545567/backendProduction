@@ -6,20 +6,21 @@
   "scripts": {
     "dev": "nodemon",
     "build": "node --max-old-space-size=12288 ./node_modules/typescript/bin/tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
-    "start": "npx tsx server.ts",
+    "start": "npx tsx -r dotenv/config server.ts",
     "test:redis": "NODE_ENV=test npx tsx src/shared/cache/__tests__/run-all-redis-tests.ts"
   },
   "nodemonConfig": {
     "watch": [
       "src",
-      "server.ts"
+      "server.ts",
+      ".env"
     ],
-    "ext": "ts,js,json",
+    "ext": "ts,js,json,env",
     "ignore": [
       "src/**/*.spec.ts",
       "node_modules"
     ],
-    "exec": "npx tsx server.ts",
+    "exec": "npx tsx -r dotenv/config server.ts",
     "legacyWatch": true,
     "delay": 1000
   },

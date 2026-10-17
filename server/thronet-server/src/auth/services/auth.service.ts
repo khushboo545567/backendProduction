@@ -181,6 +181,8 @@ class AuthService {
                 firstName: profileData.firstName,
                 lastName: profileData.lastName,
                 location: profileData.location,
+                emailVerified: profileData.emailVerified ?? false,
+                emailVerifiedAt: profileData.emailVerified ? new Date() : undefined,
                 metadata: {
                     registrationIp: deviceData.ipAddress,
                     registrationDevice: deviceData.deviceName,
@@ -232,11 +234,9 @@ class AuthService {
             await user.save();
             createdUserId = user.userId;
 
-            // Generate username
-            const username =
-                email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '_') +
-                '_' +
-                Date.now().toString().slice(-6);
+            // Generate username (bounded to <= 30 chars for UserProfile schema)
+            const cleanPrefix = email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '_').slice(0, 20);
+            const username = `${cleanPrefix}_${Date.now().toString().slice(-6)}`;
 
             const displayName =
                 profileData.displayName ||

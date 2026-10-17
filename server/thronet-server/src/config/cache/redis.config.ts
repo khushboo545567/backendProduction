@@ -52,15 +52,19 @@ class RedisConfigManager {
 
         let host = process.env.REDIS_HOST || 'localhost';
         let port = parseInt(process.env.REDIS_PORT || '6379');
+        let username = process.env.REDIS_USERNAME || process.env.REDIS_USER || undefined;
         let password = process.env.REDIS_PASSWORD || undefined;
         let db = parseInt(process.env.REDIS_DB || '0');
+        let tls: Record<string, any> | undefined = undefined;
 
         const rawUrl = process.env.REDIS_URL;
         if (rawUrl && !rawUrl.includes('${')) {
             try {
                 const parsed = new URL(rawUrl);
+                if (parsed.protocol === 'rediss:') tls = {};
                 if (parsed.hostname) host = parsed.hostname;
                 if (parsed.port) port = parseInt(parsed.port, 10);
+                if (parsed.username) username = decodeURIComponent(parsed.username);
                 if (parsed.password) password = decodeURIComponent(parsed.password);
                 if (parsed.pathname && parsed.pathname.length > 1) {
                     const parsedDb = parseInt(parsed.pathname.slice(1), 10);
@@ -69,19 +73,28 @@ class RedisConfigManager {
             } catch {}
         }
 
+        if (process.env.REDIS_TLS === 'true') {
+            tls = {};
+        }
+
+        const family = process.env.REDIS_FAMILY !== undefined ? parseInt(process.env.REDIS_FAMILY, 10) : 0;
+
         const redisOptions: RedisOptions = {
             host,
             port,
+            ...(username ? { username } : {}),
             password,
             db,
+            family,
+            ...(tls ? { tls } : {}),
             // ==================== CONNECTION SETTINGS ====================
             enableReadyCheck: true,
             enableOfflineQueue: true,
             lazyConnect: false,
 
             // Timeouts
-            connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT || '60000'),
-            commandTimeout: parseInt(process.env.REDIS_COMMAND_TIMEOUT || '10000'),
+            connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT || process.env.REDIS_CONNECT_TIMEOUT_MS || '60000'),
+            commandTimeout: parseInt(process.env.REDIS_COMMAND_TIMEOUT || process.env.REDIS_COMMAND_TIMEOUT_MS || '30000'),
             keepAlive: 30000,
 
             maxRetriesPerRequest: parseInt(process.env.REDIS_MAX_RETRIES || '3'),
@@ -108,7 +121,7 @@ class RedisConfigManager {
             },
 
             // Network settings
-            family: 4,
+            // family: 4, // Commented out to support both IPv4 (local) and IPv6 (Railway internal network)
             noDelay: true,
             enableAutoPipelining: true,
 

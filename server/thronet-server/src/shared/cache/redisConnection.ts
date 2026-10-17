@@ -32,19 +32,25 @@ export const getRedisConfig = () => {
 
   let host = '127.0.0.1';
   let port = 6379;
+  let username: string | undefined = process.env['REDIS_USERNAME'] || process.env['REDIS_USER'] || undefined;
   let password: string | undefined = undefined;
   let db = 0;
+  let tls: Record<string, any> | undefined = undefined;
 
   // 1. Support standard REDIS_URL (e.g. redis://:password@host:port/0 or rediss:// for TLS)
   const rawUrl = process.env['REDIS_URL'];
   if (rawUrl && !rawUrl.includes('${')) {
     try {
       const parsed = new URL(rawUrl);
+      if (parsed.protocol === 'rediss:') {
+        tls = {};
+      }
       if (parsed.hostname) host = parsed.hostname;
       if (parsed.port) {
         const p = parseInt(parsed.port, 10);
         if (!isNaN(p) && p > 0) port = p;
       }
+      if (parsed.username) username = decodeURIComponent(parsed.username);
       if (parsed.password) password = decodeURIComponent(parsed.password);
       if (parsed.pathname && parsed.pathname.length > 1) {
         const dbFromUrl = parseInt(parsed.pathname.slice(1), 10);
@@ -65,6 +71,9 @@ export const getRedisConfig = () => {
     if (!isNaN(parsedPort) && parsedPort > 0 && parsedPort < 65536) port = parsedPort;
   }
 
+  const rawUsername = process.env['REDIS_USERNAME'] || process.env['REDIS_USER'];
+  if (rawUsername && !rawUsername.includes('${')) username = rawUsername;
+
   const rawPassword = process.env['REDIS_PASSWORD'];
   if (rawPassword && !rawPassword.includes('${')) password = rawPassword;
 
@@ -72,6 +81,10 @@ export const getRedisConfig = () => {
   if (rawDb) {
     const parsedDb = parseInt(rawDb, 10);
     if (!isNaN(parsedDb) && parsedDb >= 0) db = parsedDb;
+  }
+
+  if (process.env['REDIS_TLS'] === 'true') {
+    tls = {};
   }
 
   const rawClusterNodes = process.env['REDIS_CLUSTER_NODES'] || '';
@@ -87,15 +100,32 @@ export const getRedisConfig = () => {
       })
     : [{ host, port }];
 
+  const commandTimeoutMs = parseInt(
+    process.env['REDIS_COMMAND_TIMEOUT_MS'] || process.env['REDIS_COMMAND_TIMEOUT'] || '30000',
+    10
+  ) || 30000;
+
+  const connectTimeoutMs = parseInt(
+    process.env['REDIS_CONNECT_TIMEOUT_MS'] || process.env['REDIS_CONNECTION_TIMEOUT'] || '60000',
+    10
+  ) || 60000;
+
+  // family: 0 enables dual-stack (IPv4 and IPv6) DNS lookup in ioredis.
+  // Crucial for Railway private networking (redis.railway.internal) which resolves to IPv6.
+  const family = process.env['REDIS_FAMILY'] !== undefined ? parseInt(process.env['REDIS_FAMILY'], 10) : 0;
+
   return {
     isCluster,
     host,
     port,
+    username,
     password,
     db,
+    tls,
+    family,
     clusterNodes,
-    commandTimeoutMs: parseInt(process.env['REDIS_COMMAND_TIMEOUT_MS'] || '2000', 10) || 2000,
-    connectTimeoutMs: parseInt(process.env['REDIS_CONNECT_TIMEOUT_MS'] || '10000', 10) || 10000,
+    commandTimeoutMs,
+    connectTimeoutMs,
   };
 };
 
@@ -104,7 +134,13 @@ export const getRedisConfig = () => {
  */
 const defaultRetryStrategy = (times: number): number | void => {
   if (isShuttingDown) return undefined;
-  const delay = Math.min(times * 100, 3000);
+  const maxRetries = parseInt(process.env['REDIS_MAX_RETRIES'] || '10', 10);
+  if (times > maxRetries) {
+    LoggerUtil.error(`Redis max retry attempts reached (${times}/${maxRetries})`);
+    return undefined;
+  }
+  const retryDelay = parseInt(process.env['REDIS_RETRY_DELAY'] || '3000', 10);
+  const delay = Math.min(times * 200, retryDelay);
   const jitter = Math.floor(Math.random() * 200);
   LoggerUtil.warn(`Redis connection retry attempt ${times}, waiting ${delay + jitter}ms`);
   return delay + jitter;
@@ -124,8 +160,11 @@ function createInstance(options: {
   const redisOptions: RedisOptions = {
     host: config.host,
     port: config.port,
-    password: config.password,
+    ...(config.username ? { username: config.username } : {}),
+    ...(config.password ? { password: config.password } : {}),
     db: config.db,
+    family: config.family,
+    ...(config.tls ? { tls: config.tls } : {}),
     connectTimeout: config.connectTimeoutMs,
     commandTimeout: config.commandTimeoutMs,
     maxRetriesPerRequest: options.maxRetriesPerRequest !== undefined ? options.maxRetriesPerRequest : 3,
@@ -151,7 +190,10 @@ function createInstance(options: {
       enableReadyCheck: true,
       scaleReads: 'slave',
       redisOptions: {
+        ...(config.username ? { username: config.username } : {}),
         password: config.password,
+        family: config.family,
+        ...(config.tls ? { tls: config.tls } : {}),
         connectTimeout: config.connectTimeoutMs,
         commandTimeout: config.commandTimeoutMs,
       },

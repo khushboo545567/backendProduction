@@ -25,10 +25,37 @@ export class JobAnalyticsService {
   };
 
   constructor() {
+    let host = process.env.REDIS_HOST || 'localhost';
+    let port = parseInt(process.env.REDIS_PORT || '6379');
+    let username = process.env.REDIS_USERNAME || process.env.REDIS_USER || undefined;
+    let password = process.env.REDIS_PASSWORD || undefined;
+    let tls: Record<string, any> | undefined = undefined;
+
+    const rawUrl = process.env.REDIS_URL;
+    if (rawUrl && !rawUrl.includes('${')) {
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol === 'rediss:') tls = {};
+        if (parsed.hostname) host = parsed.hostname;
+        if (parsed.port) port = parseInt(parsed.port, 10);
+        if (parsed.username) username = decodeURIComponent(parsed.username);
+        if (parsed.password) password = decodeURIComponent(parsed.password);
+      } catch {}
+    }
+
+    if (process.env.REDIS_TLS === 'true') {
+      tls = {};
+    }
+
+    const family = process.env.REDIS_FAMILY !== undefined ? parseInt(process.env.REDIS_FAMILY, 10) : 0;
+
     this.redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      password: process.env.REDIS_PASSWORD,
+      host,
+      port,
+      ...(username ? { username } : {}),
+      password,
+      family,
+      ...(tls ? { tls } : {}),
       db: 1, // analytics DB
       retryStrategy: (times) => Math.min(times * 100, 2000),
       maxRetriesPerRequest: 5,
