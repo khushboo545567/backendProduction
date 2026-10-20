@@ -24,7 +24,16 @@ const parseFormDataFields = (req: Request, res: Response, next: NextFunction): v
   next();
 };
 
-// All routes require authentication
+/**
+ * @route   GET /api/v1/mentorship/sessions/public
+ * @desc    Marketplace listing: 1-to-1 services (bookings/mentee data hidden)
+ * @query   page=1, limit=20
+ * @access  Public (no login needed; sensitive fields are stripped in controller)
+ * NOTE: authenticate middleware se pehle aur /:id se pehle hona zaroori hai.
+ */
+router.get('/public', publicServicesController.getPublicServices);
+
+// All routes below require authentication
 router.use(AuthMiddleware.authenticate as any);
 
 // ============================================================
@@ -43,15 +52,6 @@ router.post(
   validateJoi(sessionValidator.createSession),
   sessionController.createSession
 );
-
-/**
- * @route   GET /api/v1/mentorship/sessions/public
- * @desc    Marketplace listing: 1-to-1 services (bookings/mentee data hidden)
- * @query   page=1, limit=20
- * @access  Private (any logged-in user)
- * NOTE: /:id se pehle hona zaroori hai, warna "public" ko id samajh lega.
- */
-router.get('/public', publicServicesController.getPublicServices);
 
 /**
  * @route   GET /api/v1/mentorship/sessions/mentor/:mentorId
