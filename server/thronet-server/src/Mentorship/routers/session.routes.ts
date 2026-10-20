@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { sessionController } from '../controllers';
+import publicServicesController from '../controllers/publicServices.controller';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { validateJoi } from '@/shared/middlewares/validation.middleware';
 import sessionValidator from '../validations/session.validator';
@@ -44,6 +45,15 @@ router.post(
 );
 
 /**
+ * @route   GET /api/v1/mentorship/sessions/public
+ * @desc    Marketplace listing: 1-to-1 services (bookings/mentee data hidden)
+ * @query   page=1, limit=20
+ * @access  Private (any logged-in user)
+ * NOTE: /:id se pehle hona zaroori hai, warna "public" ko id samajh lega.
+ */
+router.get('/public', publicServicesController.getPublicServices);
+
+/**
  * @route   GET /api/v1/mentorship/sessions/mentor/:mentorId
  * @desc    Mentor ke saare assigned sessions (user ke profile page ke liye)
  * @access  Public
@@ -58,6 +68,8 @@ router.get(
  * @desc    DB me stored saare sessions lo (all users ke)
  * @query   page=1, limit=10
  * @access  Private
+ * WARNING: ye bookings (mentee ids) bhi return karta hai. Public listing ke
+ * liye /public use karo.
  */
 router.get('/get-all-db', sessionController.getAllSessionsFromDB);
 
@@ -74,14 +86,12 @@ router.get('/get-all', sessionController.getAllSessions);
  * @desc    Current user ke upcoming sessions lo (mentor ya mentee dono ke liye)
  * @query   role=mentee|mentor, limit=10
  * @access  Private
- * ✅ FIX: controller function already existed, route was never registered —
- * this was causing 404s on the mentor dashboard and mentee "My Sessions" page.
  */
 router.get('/upcoming', sessionController.getUpcomingSessions);
 
 /**
  * @route   POST /api/v1/sessions/book
- * @desc    Full booking — slot select + availability mark + session create
+ * @desc    Full booking - slot select + availability mark + session create
  * @body    mentorId, sessionType, scheduledAt, slotTime, timezone, title, pricing, paymentMethod, availabilityId
  * @access  Private (Mentee)
  */
@@ -89,7 +99,7 @@ router.post('/book', validateJoi(sessionValidator.bookSession), sessionControlle
 
 /**
  * @route   GET /api/v1/sessions/stats
- * @desc    Mentee ka session progress — completed, left, total
+ * @desc    Mentee ka session progress - completed, left, total
  * @access  Private
  */
 router.get('/stats', sessionController.getSessionStats);
@@ -100,20 +110,14 @@ router.get('/stats', sessionController.getSessionStats);
  * @access  Private
  */
 router.get('/past', sessionController.getPastSessions);
-// ✅ FIX: removed duplicate `router.get('/past', ...)` registration that
-// existed further down this file — Express would've only ever used this
-// first one, but the duplicate was dead code worth cleaning up.
 
 router.get('/:id/progress', sessionController.getSessionProgress);
 
 /**
  * @route   GET /api/v1/sessions/:id
- * @desc    Get a single session by sessionId — mentor ya mentee dono use karte hain
+ * @desc    Get a single session by sessionId - mentor ya mentee dono use karte hain
  *          (Join Session flow ke liye zaroori: room/meeting details yahin se aate hain)
  * @access  Private
- * ✅ FIX: controller function `getSessionById` already tha, par route kabhi
- * register hi nahi hua tha — isliye frontend "Join Session" pe session details
- * fetch nahi kar pa raha tha (404 aa raha hoga abhi).
  */
 router.get('/:id', sessionController.getSessionById);
 
@@ -143,7 +147,6 @@ router.post(
 );
 
 /**
- * 🆕 PHASE 10: Get refund estimate
  * @route   GET /api/v1/sessions/:id/refund-estimate
  * @desc    Get refund estimate before cancellation
  * @access  Private
@@ -151,9 +154,9 @@ router.post(
 router.get('/:id/refund-estimate', sessionController.getRefundEstimate);
 
 /**
- * ✅ NEW: Get receipt data for a completed booking
  * @route   GET /api/v1/sessions/:id/receipt
- * @query   bookingId (optional — falls back to first completed booking)
+ * @desc    Get receipt data for a completed booking
+ * @query   bookingId (optional - falls back to first completed booking)
  * @access  Private
  */
 router.get('/:id/receipt', sessionController.getSessionReceipt);
@@ -179,7 +182,6 @@ router.put(
 router.delete('/:id', sessionController.deleteSession);
 
 /**
- * 🆕 PHASE 10: Cancel session
  * @route   POST /api/v1/sessions/:id/cancel
  * @desc    Cancel a session with refund
  * @access  Private
@@ -191,7 +193,6 @@ router.post(
 );
 
 /**
- * 🆕 PHASE 10: Reschedule session
  * @route   POST /api/v1/sessions/:id/reschedule
  * @desc    Reschedule a session to new date/time
  * @access  Private
