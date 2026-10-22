@@ -6,7 +6,7 @@ import { Mentor, SessionMentor, SeniorSession } from '../models';
 import availabilityService from './availability.service';
 import { computeEndTime, toMinutes, toTimeString } from '@/Mentorship/utils/slotSplitter';
 import { logger } from '@/shared/logger.util';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '@/shared/errors/app.error';
 import { TrustScoreEvents } from '../events/trustScore.events';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { emitToUser } from '@/socket/emitter';
@@ -308,7 +308,7 @@ class MentorshipSessionService {
               );
             }
 
-            
+
 
       const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
       const [rawStart, rawEnd] = String(input.slotTime).split(' - ').map((t: string) => t.trim());
@@ -323,7 +323,23 @@ class MentorshipSessionService {
         throw new BadRequestError('Invalid slot time');
       }
 
-      const bookedRange = await availabilityService.bookRange(
+            // ✅ FIX: duplicate check BEFORE touching availability, active statuses only
+            const ACTIVE_BOOKING_STATUSES = ['pending', 'confirmed', 'rescheduled', 'in_progress'];
+            const requestedTime = new Date(input.scheduledAt).getTime();
+            const duplicateBooking = (session.bookings || []).find(
+              (b: any) =>
+                b.menteeId === input.menteeId &&
+                b.scheduledAt &&
+                new Date(b.scheduledAt).getTime() === requestedTime &&
+                ACTIVE_BOOKING_STATUSES.includes(b.status)
+            );
+            if (duplicateBooking) {
+              throw new ConflictError(
+                'You already have an active booking for this session at this date and time. Please check "My Sessions" or choose a different slot.'
+              );
+            }
+      
+            const bookedRange = await availabilityService.bookRange(
         input.availabilityId,
         input.mentorId,
         slotStart,
@@ -346,7 +362,7 @@ class MentorshipSessionService {
               $elemMatch: {
                 menteeId: input.menteeId,
                 scheduledAt: new Date(input.scheduledAt),
-                status: { $nin: ['cancelled', 'no_show'] },
+                status: { $in: ['pending', 'confirmed', 'rescheduled', 'in_progress'] },
               },
             },
           },
@@ -385,7 +401,17 @@ class MentorshipSessionService {
 
       if (!updatedSession) {
         await availabilityService.releaseRange(input.availabilityId, slotStart, slotEnd);
-        throw new BadRequestError('You have already booked this session for this date and time.');
+
+        const latest: any = await SessionMentor.findOne({ sessionId: session.sessionId }).lean();
+        if (
+          !latest ||
+          [BookingStatus.CANCELLED, BookingStatus.NO_SHOW, BookingStatus.REFUNDED].includes(latest.status)
+        ) {
+          throw new BadRequestError('Session is not available for booking');
+        }
+        throw new ConflictError(
+          'You already have an active booking for this session at this date and time.'
+        );
       }
 
       session = updatedSession;
