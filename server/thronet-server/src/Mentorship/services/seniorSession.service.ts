@@ -20,6 +20,7 @@ import { DateTime } from 'luxon';
 import { User } from '@/shared/models/index.models';
 import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus';
 import { Mentor, MentorshipAnalytics, MentorshipReview } from '../models';
+import { attachHosts } from '../utils/seniorHost';
 
 // If your project uses different error imports,
 // replace the above imports with your existing error classes.
@@ -204,9 +205,13 @@ class SeniorSessionService {
 
   /**
    * Get all active one-to-one sessions for discovery.
+   * Har session ke saath `host` object (name, profilePic, role) attach hota hai.
    */
-  async getDiscoverySessions(mentorId?: string): Promise<ISeniorSession[]> {
-    return this.repository.findAllActiveOneToOneSessions(mentorId) as unknown as ISeniorSession[];
+  async getDiscoverySessions(mentorId?: string): Promise<any[]> {
+    const sessions = (await this.repository.findAllActiveOneToOneSessions(
+      mentorId
+    )) as unknown as ISeniorSession[];
+    return attachHosts(sessions as any[]);
   }
 
   /**
@@ -283,6 +288,8 @@ class SeniorSessionService {
    * Ownership is checked through:
    *
    * sessionId + mentorId
+   *
+   * Response mein `host` object (name, profilePic, role) bhi attach hota hai.
    */
   async getSessionById(
     userId: string,
@@ -299,7 +306,8 @@ class SeniorSessionService {
       );
     }
 
-    return session as unknown as ISeniorSession;
+    const [sessionWithHost] = await attachHosts([session as any]);
+    return sessionWithHost as unknown as ISeniorSession;
   }
 
   /**
