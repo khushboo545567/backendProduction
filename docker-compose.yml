@@ -245,7 +245,6 @@ services:
       - ./server/thronet-server/src:/app/src:ro
       - ./server/thronet-server/server.ts:/app/server.ts:ro
       - server_logs:/app/logs
-      - /app/node_modules
  
     command: ["npx", "tsx", "server.ts"]
   
