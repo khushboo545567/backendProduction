@@ -290,6 +290,26 @@ class MentorshipSessionService {
         throw new BadRequestError('Session does not belong to this mentor');
       }
 
+
+            // ✅ NEW (optional): ek mentee ka ek mentor ke saath max active bookings
+            const MAX_ACTIVE_PER_MENTOR = 3;
+            const activeCount = await SessionMentor.countDocuments({
+              mentorId: input.mentorId,
+              bookings: {
+                $elemMatch: {
+                  menteeId: input.menteeId,
+                  status: { $in: ['pending', 'confirmed', 'rescheduled', 'in_progress'] },
+                },
+              },
+            });
+            if (activeCount >= MAX_ACTIVE_PER_MENTOR) {
+              throw new BadRequestError(
+                `You can have at most ${MAX_ACTIVE_PER_MENTOR} active bookings with this mentor.`
+              );
+            }
+
+            
+
       const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
       const [rawStart, rawEnd] = String(input.slotTime).split(' - ').map((t: string) => t.trim());
       if (!rawStart || !timeRegex.test(rawStart)) {
@@ -318,8 +338,17 @@ class MentorshipSessionService {
         {
           sessionId: session.sessionId,
           status: { $nin: [BookingStatus.CANCELLED, BookingStatus.NO_SHOW, BookingStatus.REFUNDED] },
+                    // ✅ FIX: duplicate sirf tab maano jab same mentee ki same date/time
+          // par pehle se active booking ho. Pehle yeh sirf menteeId + status
+          // dekhta tha, isliye ek service dobara kabhi book nahi hoti thi.
           bookings: {
-            $not: { $elemMatch: { menteeId: input.menteeId, status: { $ne: 'cancelled' } } },
+            $not: {
+              $elemMatch: {
+                menteeId: input.menteeId,
+                scheduledAt: new Date(input.scheduledAt),
+                status: { $nin: ['cancelled', 'no_show'] },
+              },
+            },
           },
         },
         {
@@ -1003,6 +1032,8 @@ class MentorshipSessionService {
           data: {
             title: 'Session Completed',
             message: `Your session "${session.title}" is complete. Please leave a review!`,
+            sessionId: session.sessionId,
+            actionUrl: `/mentorship/user-dashboard/${menteeIdToNotify}?tab=reviews`,
           },
         }).catch((e) => logger.error('Notification failed (completeSession):', e));
       }

@@ -34,14 +34,24 @@ class ReviewService {
         throw new Error('Session not found');
       }
 
-      if (session.status !== BookingStatus.COMPLETED) {
+         // root status nahi, mentee ki apni booking ka status dekho
+      // (group/multi-booking me root tab tak COMPLETED nahi hota jab tak sab bookings final na hon)
+      const myBooking: any = (session.bookings || []).find(        
+        (b: any) => (b.menteeId || b.bookedBy) === input.menteeId
+      );
+      const effectiveStatus = myBooking?.status ?? session.status;
+      if (effectiveStatus !== BookingStatus.COMPLETED) {
         throw new Error('Can only review completed sessions');
       }
 
       // Check if review already exists
       // const existingReview = await MentorshipReview.findOne({ sessionId: input.sessionId });
 
-      const existingReview = await reviewRepository.findBySessionId(input.sessionId);
+      const existingReview = await MentorshipReview.findOne({
+        sessionId: input.sessionId,
+        menteeId: input.menteeId,
+        isDeleted: false,
+      });
       if (existingReview) {
         throw new Error('You have already reviewed this session.');
       }
@@ -56,10 +66,12 @@ class ReviewService {
       const isOwner =
         session.menteeId === input.menteeId ||
         (session.bookings || []).some((b: any) => b.menteeId === input.menteeId);
-
-      if (!isOwner) {
-        throw new Error('You can only review your own sessions');
-      }
+        if (!isOwner) {
+          throw new Error('You can only review your own sessions');
+        }
+  
+        // client ka bheja mentorId ignore karo, session ka asli mentor use karo
+        input.mentorId = session.mentorId;
 
       // Create review
       const review = await MentorshipReview.create({

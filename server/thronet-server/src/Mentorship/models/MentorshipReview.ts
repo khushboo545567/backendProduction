@@ -64,7 +64,6 @@ reviewId: {
       type: String,
       ref: 'Session',
       required: [true, 'Session ID is required'],
-      unique: true,
       index: true,
     },
     mentorId: {
@@ -180,6 +179,11 @@ toObject: { virtuals: true },
 MentorshipReviewSchema.index({ mentorId: 1, isPublic: 1, isDeleted: 1 });
 MentorshipReviewSchema.index({ mentorId: 1, rating: -1 });
 MentorshipReviewSchema.index({ createdAt: -1 });
+// ek mentee = ek session par ek review (soft-deleted reviews ignore, taaki delete ke baad dobara review de sake)
+MentorshipReviewSchema.index(
+  { sessionId: 1, menteeId: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);
 // Model mein add karo
 MentorshipReviewSchema.index({ mentorId: 1, tags: 1 });
 MentorshipReviewSchema.index({ mentorId: 1, createdAt: -1 });
