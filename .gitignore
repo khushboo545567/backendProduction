@@ -40,4 +40,5 @@ Thumbs.db
 railway_utf8.env
 railway.env
 
-nginx/nginx.local.confserver/thronet-server/railway_vars.json
+nginx/nginx.local.conf
+server/thronet-server/railway_vars.json
