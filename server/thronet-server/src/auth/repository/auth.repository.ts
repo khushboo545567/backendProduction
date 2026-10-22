@@ -253,6 +253,21 @@ export class LoginAttemptRepository {
             });
         }
     }
+
+    static async clearFailedAttemptsForUser(userId: string, beforeDate?: Date): Promise<void> {
+        try {
+            const query: any = { userId, status: 'failed' };
+            if (beforeDate) {
+                query.attemptedAt = { $lte: beforeDate };
+            }
+            await LoginAttempt.deleteMany(query);
+        } catch (err: any) {
+            logger.error('Failed to clear failed attempts for user (non-critical)', {
+                error: err.message,
+                userId,
+            });
+        }
+    }
 }
 
 // ==================== SESSION QUERIES ====================

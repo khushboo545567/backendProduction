@@ -1,4 +1,4 @@
-﻿import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 import validator from 'validator';
 import { LoggerUtil } from '@/shared/logger.util';
 import userEmitter from '@/shared/events/emitters/user.emitter';
@@ -135,10 +135,10 @@ LoginAttemptSchema.statics.recordAttempt = async function (
         });
 
         let isBlocked = false;
-        if (recentAttempts >= 3 && status === 'failed') {
+        if (recentAttempts >= 5 && status === 'failed') {
             isBlocked = true;
             if (userId) {
-                await User.lockAccount(userId, 'too_many_attempts');
+                await User.lockAccount(userId, 'too_many_attempts', 15 * 60 * 1000);
                 userEmitter.emit('account:locked', { userId, reason: 'too_many_attempts', ipAddress });
             }
         }

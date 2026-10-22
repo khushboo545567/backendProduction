@@ -974,10 +974,11 @@ class AuthController {
                 lower.includes('failed attempts') ||
                 lower.includes('too many attempts')
             ) {
+                const retryAfter = typeof error.retryAfter === 'number' ? error.retryAfter : 900;
                 ResponseUtil.tooManyRequests(
                     res,
-                    'Too many failed login attempts. Please try again in 15 minutes.',
-                    { retryAfter: 900 }
+                    error.message || 'Too many failed login attempts. Please try again in 15 minutes.',
+                    { retryAfter }
                 );
                 return;
             }

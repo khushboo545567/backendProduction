@@ -410,15 +410,41 @@ class AuthService {
                 throw new Error('Account is disabled. Contact support.');
             }
 
-            if (user.lockUntil && user.lockUntil > new Date()) {
-                await LoginAttemptRepository.recordSafe(userId, ipAddress, 'login', 'blocked', {
-                    userAgent: deviceData.userAgent,
-                    failureReason: 'account_temporarily_locked',
-                    metadata: { reason: 'lock_until_active' },
-                });
-                throw new Error(
-                    'Too many attempts. Account temporarily locked, please try again in 15 minutes.'
-                );
+            if (user.lockUntil) {
+                const now = new Date();
+                if (user.lockUntil > now) {
+                    const remainingMs = user.lockUntil.getTime() - now.getTime();
+                    const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+                    const remainingMinutes = Math.max(1, Math.ceil(remainingSeconds / 60));
+
+                    await LoginAttemptRepository.recordSafe(userId, ipAddress, 'login', 'blocked', {
+                        userAgent: deviceData.userAgent,
+                        failureReason: 'account_temporarily_locked',
+                        metadata: { reason: 'lock_until_active', remainingSeconds },
+                    });
+
+                    const err: any = new Error(
+                        `Too many failed login attempts. Please try again in ${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}.`
+                    );
+                    err.retryAfter = remainingSeconds;
+                    throw err;
+                } else {
+                    // Lock has expired: clean up expired lock and past failed attempts that caused it
+                    User.updateOne(
+                        { userId: user.userId },
+                        {
+                            $unset: { lockUntil: 1, accountLockedReason: 1 },
+                            $set: { loginAttempts: 0 },
+                        }
+                    ).catch((err: any) =>
+                        logger.error('Expired lock cleanup failed (non-critical)', { error: err.message, userId })
+                    );
+                    user.lockUntil = undefined;
+                    user.accountLockedReason = undefined;
+
+                    // Clean up failed attempts that caused this lock so user gets fresh attempts
+                    LoginAttemptRepository.clearFailedAttemptsForUser(user.userId, now);
+                }
             }
 
             if (
@@ -432,7 +458,8 @@ class AuthService {
             // Step 3: Rate limit check (sirf failed attempts count hote hain)
             const recentAttempts = await LoginAttemptRepository.countRecentByUserAndIp(
                 user.userId,
-                ipAddress
+                ipAddress,
+                LOCK_DURATION_MS
             );
 
             if (recentAttempts >= MAX_FAILED_ATTEMPTS) {
@@ -457,9 +484,13 @@ class AuthService {
                         userId,
                     });
                 }
-                throw new Error(
-                    'Too many attempts. Account temporarily locked, please try again in 15 minutes.'
+                const remainingSeconds = Math.ceil(LOCK_DURATION_MS / 1000);
+                const remainingMinutes = Math.ceil(remainingSeconds / 60);
+                const err: any = new Error(
+                    `Too many failed login attempts. Please try again in ${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}.`
                 );
+                err.retryAfter = remainingSeconds;
+                throw err;
             }
 
             // Step 4: Password verification

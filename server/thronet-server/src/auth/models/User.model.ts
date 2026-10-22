@@ -1111,12 +1111,18 @@ UserSchema.statics.verifyToken = function (
 UserSchema.statics.lockAccount = async function (
   userId: string,
   reason: string = "admin_action",
-  durationMs: number = 24 * 60 * 60 * 1000,
+  durationMs?: number,
 ): Promise<IUser> {
   try {
     const user = await this.findOne({ userId });
     if (!user) throw new Error("User not found");
-    user.lockUntil = new Date(Date.now() + durationMs);
+    const defaultDuration =
+      reason === "too_many_attempts"
+        ? 15 * 60 * 1000
+        : 24 * 60 * 60 * 1000;
+    const finalDuration =
+      typeof durationMs === "number" ? durationMs : defaultDuration;
+    user.lockUntil = new Date(Date.now() + finalDuration);
     user.accountLockedReason = reason as any;
     await user.save();
     userEmitter.emit("user:locked", { userId, reason, timestamp: new Date() });
