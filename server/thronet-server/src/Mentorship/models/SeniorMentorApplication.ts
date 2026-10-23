@@ -7,6 +7,8 @@ import {
   ApplicationStatus,
   ISeniorMentorApplication,
   MentorshipHelpArea,
+  MIN_HELP_AREAS,
+  MAX_HELP_AREAS,
 } from '@/Mentorship/interface/seniorMentorApplication.types';
 
 export interface SeniorMentorApplicationDocument
@@ -165,10 +167,10 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
     helpAreas: {
       type: [String],
       enum: Object.values(MentorshipHelpArea),
-      required: [true, 'At least one mentorship help area is required'],
+      required: [true, `Please select between ${MIN_HELP_AREAS} and ${MAX_HELP_AREAS} help areas`],
       validate: {
-        validator: (v: string[]) => v.length > 0 && v.length <= 7,
-        message: 'Select 1-7 help areas',
+        validator: (v: string[]) => Array.isArray(v) && v.length >= MIN_HELP_AREAS && v.length <= MAX_HELP_AREAS,
+        message: `Select between ${MIN_HELP_AREAS} and ${MAX_HELP_AREAS} help areas`,
       },
     },
 

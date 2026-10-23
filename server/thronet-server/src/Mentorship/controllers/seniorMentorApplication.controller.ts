@@ -38,9 +38,14 @@ class SeniorMentorApplicationController {
       const proofDocumentFile = files?.['proofDocument']?.[0];
 
       if (!profilePhotoFile || !resumeFile || !proofDocumentFile) {
+        const missing: { field: string; message: string }[] = [];
+        if (!profilePhotoFile) missing.push({ field: 'profilePhoto', message: 'Profile photo is required' });
+        if (!resumeFile) missing.push({ field: 'resume', message: 'Resume is required' });
+        if (!proofDocumentFile) missing.push({ field: 'proofDocument', message: 'Proof of experience/achievement is required' });
         ResponseHandler.badRequest(
           res,
-          'Profile photo, resume, and proof of experience/achievement are all required'
+          'Profile photo, resume, and proof of experience/achievement are all required',
+          missing
         );
         return;
       }
@@ -87,7 +92,11 @@ class SeniorMentorApplicationController {
         application
       );
     } catch (error: any) {
-      logger.error('Error submitting senior mentor application:', error);
+      logger.error('Error submitting senior mentor application:', {
+        userId: req.user?.id,
+        message: error.message,
+        stack: error.stack,
+      });
       next(error);
     }
   }

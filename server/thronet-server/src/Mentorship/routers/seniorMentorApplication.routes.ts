@@ -94,6 +94,18 @@ router.put(
 );
 
 /**
+ * @route   PATCH /api/v1/mentorship/senior-mentor-applications/me
+ * @desc    Patch the current user's own application
+ * @access  Private
+ */
+router.patch(
+  '/me',
+  AuthMiddleware.authenticate as any,
+  validate(SeniorMentorApplicationValidator.update()),
+  seniorMentorApplicationController.updateMyApplication as any
+);
+
+/**
  * @route   DELETE /api/v1/mentorship/senior-mentor-applications/me
  * @desc    Withdraw the current user's own application
  * @access  Private

@@ -13,6 +13,7 @@ import { BadRequestError, ConflictError, NotFoundError, ForbiddenError } from '@
 import seniorNotificationService from './seniorNotification.service';
 import SeniorMentorApplication from '../models/SeniorMentorApplication';
 import SeniorSession from '../models/SeniorSession';
+import { Mentor } from '../models';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
 
 
@@ -379,8 +380,9 @@ class SeniorMentorApplicationService {
   }
 
   /**
-   * Owner-only update. Applications can only be edited while pending,
-   * under review, or rejected — a verified application is locked.
+   * Owner-only update. Verified mentors can safely update their profile
+   * information (role, company, education, bio, skills, etc.).
+   * Protected fields (status, verification, userId, dates, documents) are strictly blocked.
    */
   async update(
     seniorMentorId: string,
@@ -394,19 +396,76 @@ class SeniorMentorApplicationService {
     if (application.userId !== userId) {
       throw new ForbiddenError('You can only edit your own application');
     }
-    if (application.verificationStatus === ApplicationStatus.VERIFIED) {
-      throw new BadRequestError('A verified application cannot be edited');
-    }
 
-    const cleanUpdates: Record<string, any> = { ...updates };
-    (Object.keys(cleanUpdates) as (keyof UpdateSeniorMentorApplicationInput)[]).forEach((key) => {
-      if (cleanUpdates[key] === undefined) delete cleanUpdates[key];
-    });
+    // Whitelist only editable-safe fields
+    const allowedKeys: (keyof UpdateSeniorMentorApplicationInput)[] = [
+      'fullName',
+      'currentRole',
+      'currentCompany',
+      'yearsOfExperience',
+      'experienceLevel',
+      'college',
+      'degree',
+      'fieldOfStudy',
+      'graduationYear',
+      'primaryExpertise',
+      'otherSkills',
+      'technologies',
+      'achievements',
+      'certifications',
+      'helpAreas',
+      'shortBio',
+      'motivation',
+      'adviceToJuniorSelf',
+      'linkedinUrl',
+      'githubUrl',
+      'portfolioUrl',
+    ];
+
+    const cleanUpdates: Record<string, any> = {};
+    for (const key of allowedKeys) {
+      if (updates[key] !== undefined) {
+        if (typeof updates[key] === 'string') {
+          cleanUpdates[key] = (updates[key] as string).trim();
+        } else if (Array.isArray(updates[key])) {
+          // Deduplicate and trim string items in array
+          cleanUpdates[key] = Array.from(
+            new Set((updates[key] as any[]).map((item) => (typeof item === 'string' ? item.trim() : item)).filter(Boolean))
+          );
+        } else {
+          cleanUpdates[key] = updates[key];
+        }
+      }
+    }
 
     const updated = await seniorMentorApplicationRepository.updateBySeniorMentorId(
       seniorMentorId,
       cleanUpdates
     );
+
+    // Sync to Mentor model if one exists for this user
+    try {
+      const mentorUpdates: Record<string, any> = {};
+      if (cleanUpdates.fullName) mentorUpdates.name = cleanUpdates.fullName;
+      if (cleanUpdates.currentRole) {
+        mentorUpdates['experience.currentRole'] = cleanUpdates.currentRole;
+        mentorUpdates.title = cleanUpdates.currentRole;
+      }
+      if (cleanUpdates.currentCompany) {
+        mentorUpdates['experience.company'] = cleanUpdates.currentCompany;
+      }
+      if (cleanUpdates.yearsOfExperience !== undefined) {
+        mentorUpdates['experience.yearsOfExperience'] = cleanUpdates.yearsOfExperience;
+      }
+      if (cleanUpdates.primaryExpertise) {
+        mentorUpdates.domain = cleanUpdates.primaryExpertise;
+      }
+      if (Object.keys(mentorUpdates).length > 0) {
+        await Mentor.updateOne({ userId }, { $set: mentorUpdates });
+      }
+    } catch (err: any) {
+      logger.warn(`Could not sync Senior Mentor update to Mentor model: ${err?.message}`);
+    }
 
     logger.info(`✏️ Senior Mentor application updated: ${seniorMentorId}`);
     return updated;

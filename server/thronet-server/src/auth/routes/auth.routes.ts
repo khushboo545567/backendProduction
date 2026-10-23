@@ -330,10 +330,13 @@ const registerSchema = Joi.object({
     degree: Joi.when('userType', {
         is: 'student',
         then: Joi.string()
-            .valid(...Constants.ONBOARDING.STUDENT.VALID_DEGREES)
+            .trim()
+            .min(2)
+            .max(60)
             .required()
             .messages({
-                'any.only': 'Please select a valid degree',
+                'string.min': 'Degree must be at least 2 characters',
+                'string.max': 'Degree cannot exceed 60 characters',
                 'any.required': 'Degree is required for students',
             }),
         otherwise: Joi.forbidden()
@@ -345,10 +348,13 @@ const registerSchema = Joi.object({
     fieldOfStudy: Joi.when('userType', {
         is: 'student',
         then: Joi.string()
-            .valid(...Constants.ONBOARDING.STUDENT.VALID_FIELDS)
+            .trim()
+            .min(2)
+            .max(60)
             .required()
             .messages({
-                'any.only': 'Please select a valid field of study',
+                'string.min': 'Field of study must be at least 2 characters',
+                'string.max': 'Field of study cannot exceed 60 characters',
                 'any.required': 'Field of study is required for students',
             }),
         otherwise: Joi.forbidden()

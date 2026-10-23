@@ -2,7 +2,7 @@
 import { body, param, query } from 'express-validator';
 import { Domain } from '@/shared/constants/domains';
 import { ExperienceLevel } from '../interface/mentor.types';
-import { ApplicationStatus, MentorshipHelpArea } from '../interface/seniorMentorApplication.types';
+import { ApplicationStatus, MentorshipHelpArea, MIN_HELP_AREAS, MAX_HELP_AREAS } from '../interface/seniorMentorApplication.types';
 
 class SeniorMentorApplicationValidator {
   private static isValidUUID(value: string): boolean {
@@ -127,9 +127,12 @@ class SeniorMentorApplicationValidator {
         .withMessage('Cannot list more than 15 certifications'),
 
       body('helpAreas')
-        .isArray({ min: 1, max: 7 })
-        .withMessage('Select 1-7 mentorship help areas')
+        .isArray({ min: MIN_HELP_AREAS, max: MAX_HELP_AREAS })
+        .withMessage(`Select between ${MIN_HELP_AREAS} and ${MAX_HELP_AREAS} help areas`)
         .custom((areas: string[]) => {
+          if (!Array.isArray(areas) || areas.length < MIN_HELP_AREAS || areas.length > MAX_HELP_AREAS) {
+            throw new Error(`Select between ${MIN_HELP_AREAS} and ${MAX_HELP_AREAS} help areas`);
+          }
           const valid = Object.values(MentorshipHelpArea);
           const invalid = areas.filter((a) => !valid.includes(a as MentorshipHelpArea));
           if (invalid.length > 0) {
@@ -181,7 +184,7 @@ class SeniorMentorApplicationValidator {
         .matches(/^https?:\/\/(www\.)?github\.com\/.+/i)
         .withMessage('Invalid GitHub URL'),
       body('portfolioUrl').optional({ checkFalsy: true }).trim().isURL(),
-      body('yearsOfExperience').optional().isFloat({ min: 0, max: 50 }),
+      body('yearsOfExperience').optional().isFloat({ min: 0, max: 60 }),
       body('experienceLevel').optional().isIn(Object.values(ExperienceLevel)),
       body('primaryExpertise').optional().isIn(Object.values(Domain)),
       body('otherSkills').optional().isArray({ max: 20 }),
@@ -190,8 +193,12 @@ class SeniorMentorApplicationValidator {
       body('certifications').optional().isArray({ max: 15 }),
       body('helpAreas')
         .optional()
-        .isArray({ min: 1, max: 7 })
+        .isArray({ min: MIN_HELP_AREAS, max: MAX_HELP_AREAS })
+        .withMessage(`Select between ${MIN_HELP_AREAS} and ${MAX_HELP_AREAS} help areas`)
         .custom((areas: string[]) => {
+          if (areas.length < MIN_HELP_AREAS || areas.length > MAX_HELP_AREAS) {
+            throw new Error(`Select between ${MIN_HELP_AREAS} and ${MAX_HELP_AREAS} help areas`);
+          }
           const valid = Object.values(MentorshipHelpArea);
           const invalid = areas.filter((a) => !valid.includes(a as MentorshipHelpArea));
           if (invalid.length > 0) {

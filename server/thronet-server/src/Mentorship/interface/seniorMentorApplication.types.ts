@@ -29,6 +29,9 @@ export enum MentorshipHelpArea {
   CAREER_GUIDANCE = 'career_guidance',
 }
 
+export const MIN_HELP_AREAS = 3;
+export const MAX_HELP_AREAS = 7;
+
 export interface ISeniorMentorApplication extends TimeStamps, SoftDelete {
   _id: string;
   seniorMentorId: string;

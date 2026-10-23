@@ -5,14 +5,15 @@ export const createSeniorSessionValidator = [
     .trim()
     .notEmpty()
     .withMessage('Title is required')
-    .isLength({ min: 3, max: 200 })
-    .withMessage('Title must be between 3 and 200 characters'),
+    .isLength({ min: 10, max: 200 })
+    .withMessage('Title must be between 10 and 200 characters'),
 
   body('description')
-    .optional()
     .trim()
-    .isLength({ max: 1000 })
-    .withMessage('Description cannot exceed 1000 characters'),
+    .notEmpty()
+    .withMessage('Description is required')
+    .isLength({ min: 20, max: 1000 })
+    .withMessage('Description must be between 20 and 1000 characters'),
 
   body('sessionType')
     .notEmpty()
@@ -77,14 +78,14 @@ export const updateSeniorSessionValidator = [
   body('title')
     .optional()
     .trim()
-    .isLength({ min: 3, max: 200 })
-    .withMessage('Title must be between 3 and 200 characters'),
+    .isLength({ min: 10, max: 200 })
+    .withMessage('Title must be between 10 and 200 characters'),
 
   body('description')
     .optional()
     .trim()
-    .isLength({ max: 1000 })
-    .withMessage('Description cannot exceed 1000 characters'),
+    .isLength({ min: 20, max: 1000 })
+    .withMessage('Description must be between 20 and 1000 characters'),
 
   body('sessionType')
     .optional()
