@@ -475,7 +475,7 @@ GroupSessionSchema.methods.removeParticipant = async function (
     }
   }
 
-  return await this.save();
+  return await this.save({ validateModifiedOnly: true });
 };
 
 GroupSessionSchema.methods.markAttendance = async function (
@@ -613,7 +613,7 @@ GroupSessionSchema.methods.rejectParticipant = async function (
   participant.requestStatus = 'rejected';
   participant.respondedAt = new Date();
 
-  return await this.save();
+  return await this.save({ validateModifiedOnly: true });
 };
 
 GroupSessionSchema.methods.startSession = async function (
@@ -686,7 +686,7 @@ GroupSessionSchema.methods.cancelSession = async function (
     reason,
     refundsProcessed: false,
   };
-  return await this.save();
+  return await this.save({ validateModifiedOnly: true });
 };
 
 GroupSessionSchema.methods.addFeedback = async function (
