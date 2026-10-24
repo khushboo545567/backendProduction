@@ -662,4 +662,248 @@ describe('Password Reset OTP Verification Flow', () => {
             }
         });
     });
+
+    describe('PasswordController.verifyPasswordResetOTP tests', () => {
+        function createMockResponse(path = '/api/v1/verify/password/reset/verify-otp') {
+            const headers: Record<string, string> = {};
+            const res: any = {
+                statusCode: 200,
+                responseData: null,
+                req: { path, method: 'POST', ip: '127.0.0.1' },
+                setHeader(name: string, value: string) {
+                    headers[name] = value;
+                    return this;
+                },
+                status(code: number) {
+                    this.statusCode = code;
+                    return this;
+                },
+                json(data: any) {
+                    this.responseData = data;
+                    return this;
+                },
+            };
+            return res;
+        }
+
+        it('should return HTTP 200 with resetToken for a valid OTP', async () => {
+            const req: any = {
+                body: { email: 'user@example.com', otp: '123456' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerifyOTP = PasswordService.verifyPasswordResetOTP;
+            PasswordService.verifyPasswordResetOTP = async () => ({
+                success: true,
+                message: 'OTP verified successfully',
+                resetToken: 'a'.repeat(64),
+                expiresIn: 900,
+            });
+
+            try {
+                await PasswordController.verifyPasswordResetOTP(req, res);
+                assert.equal(res.statusCode, 200);
+                assert.equal(res.responseData.status, 'success');
+                assert.equal(res.responseData.data.resetToken, 'a'.repeat(64));
+            } finally {
+                PasswordService.verifyPasswordResetOTP = origVerifyOTP;
+            }
+        });
+
+        it('should return HTTP 401 when random 6-digit OTP is entered', async () => {
+            const req: any = {
+                body: { email: 'user@example.com', otp: '411111' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerifyOTP = PasswordService.verifyPasswordResetOTP;
+            PasswordService.verifyPasswordResetOTP = async () => {
+                throw new Error('Invalid OTP');
+            };
+
+            try {
+                await PasswordController.verifyPasswordResetOTP(req, res);
+                assert.equal(res.statusCode, 401);
+                assert.equal(res.responseData.status, 'error');
+                assert.ok(res.responseData.message.includes('Invalid OTP'));
+            } finally {
+                PasswordService.verifyPasswordResetOTP = origVerifyOTP;
+            }
+        });
+
+        it('should return HTTP 400 when expired OTP is entered', async () => {
+            const req: any = {
+                body: { email: 'user@example.com', otp: '123456' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerifyOTP = PasswordService.verifyPasswordResetOTP;
+            PasswordService.verifyPasswordResetOTP = async () => {
+                throw new Error('OTP expired');
+            };
+
+            try {
+                await PasswordController.verifyPasswordResetOTP(req, res);
+                assert.equal(res.statusCode, 400);
+                assert.equal(res.responseData.status, 'error');
+                assert.ok(res.responseData.message.includes('expired'));
+            } finally {
+                PasswordService.verifyPasswordResetOTP = origVerifyOTP;
+            }
+        });
+
+        it('should return HTTP 400 when previously used OTP is entered', async () => {
+            const req: any = {
+                body: { email: 'user@example.com', otp: '123456' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerifyOTP = PasswordService.verifyPasswordResetOTP;
+            PasswordService.verifyPasswordResetOTP = async () => {
+                throw new Error('OTP already verified');
+            };
+
+            try {
+                await PasswordController.verifyPasswordResetOTP(req, res);
+                assert.equal(res.statusCode, 400);
+                assert.equal(res.responseData.status, 'error');
+                assert.ok(res.responseData.message.includes('already been verified'));
+            } finally {
+                PasswordService.verifyPasswordResetOTP = origVerifyOTP;
+            }
+        });
+
+        it('should return HTTP 429 when max attempts exceeded', async () => {
+            const req: any = {
+                body: { email: 'user@example.com', otp: '123456' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerifyOTP = PasswordService.verifyPasswordResetOTP;
+            PasswordService.verifyPasswordResetOTP = async () => {
+                throw new Error('Maximum verification attempts exceeded');
+            };
+
+            try {
+                await PasswordController.verifyPasswordResetOTP(req, res);
+                assert.equal(res.statusCode, 429);
+                assert.ok(res.responseData.message.includes('Maximum verification attempts'));
+            } finally {
+                PasswordService.verifyPasswordResetOTP = origVerifyOTP;
+            }
+        });
+
+        it('should reject empty or malformed OTP with validation error (HTTP 400)', async () => {
+            const req: any = {
+                body: { email: 'user@example.com', otp: '' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            await PasswordController.verifyPasswordResetOTP(req, res);
+            assert.equal(res.statusCode, 400);
+            assert.equal(res.responseData.status, 'error');
+            assert.ok(res.responseData.errors.length > 0);
+        });
+    });
+
+    describe('Secure Password Reset with resetToken authorization', () => {
+        function createMockResponse() {
+            const headers: Record<string, string> = {};
+            const res: any = {
+                statusCode: 200,
+                responseData: null,
+                req: { path: '/api/v1/verify/password/reset/verify', method: 'POST', ip: '127.0.0.1' },
+                setHeader(name: string, value: string) {
+                    headers[name] = value;
+                    return this;
+                },
+                status(code: number) {
+                    this.statusCode = code;
+                    return this;
+                },
+                json(data: any) {
+                    this.responseData = data;
+                    return this;
+                },
+            };
+            return res;
+        }
+
+        it('should successfully reset password when valid resetToken is provided', async () => {
+            const validToken = 'c'.repeat(64);
+            const req: any = {
+                body: { resetToken: validToken, newPassword: 'StrongPassword!#2026' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerify = PasswordService.verifyPasswordReset;
+            PasswordService.verifyPasswordReset = async () => ({
+                success: true,
+                message: 'Password reset successfully.',
+                userId: 'user-xyz',
+                email: 'test@example.com',
+                resetAt: new Date(),
+            });
+
+            try {
+                await PasswordController.verifyPasswordReset(req, res);
+                assert.equal(res.statusCode, 200);
+                assert.equal(res.responseData.status, 'success');
+            } finally {
+                PasswordService.verifyPasswordReset = origVerify;
+            }
+        });
+
+        it('should reject password reset when resetToken is invalid or expired', async () => {
+            const expiredToken = 'd'.repeat(64);
+            const req: any = {
+                body: { resetToken: expiredToken, newPassword: 'StrongPassword!#2026' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            const origVerify = PasswordService.verifyPasswordReset;
+            PasswordService.verifyPasswordReset = async () => {
+                throw new Error('Invalid or expired password reset session. Please request a new OTP.');
+            };
+
+            try {
+                await PasswordController.verifyPasswordReset(req, res);
+                assert.equal(res.statusCode, 400);
+                assert.equal(res.responseData.status, 'error');
+                assert.ok(res.responseData.message.includes('expired password reset session'));
+            } finally {
+                PasswordService.verifyPasswordReset = origVerify;
+            }
+        });
+
+        it('should reject password reset when no authorization (neither resetToken nor resetCode) is provided', async () => {
+            const req: any = {
+                body: { newPassword: 'StrongPassword!#2026' },
+                headers: {},
+                ip: '127.0.0.1',
+            };
+            const res = createMockResponse();
+
+            await PasswordController.verifyPasswordReset(req, res);
+            assert.equal(res.statusCode, 400);
+            assert.equal(res.responseData.status, 'error');
+            assert.ok(res.responseData.errors.length > 0);
+        });
+    });
 });

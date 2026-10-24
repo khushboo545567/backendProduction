@@ -148,23 +148,80 @@ class PasswordController {
         }
     }
 
+    static async verifyPasswordResetOTP(req: Request, res: Response): Promise<Response> {
+        const startTime = Date.now();
+        const correlationId = (req as any).correlationId || uuidv4();
+
+        try {
+            const { email, otp, resetCode } = req.body;
+            const submittedOtp = otp || resetCode;
+            const ipAddress = req.ip || '0.0.0.0';
+
+            const validation = await ValidatorUtil.validatePasswordResetOTP({ email, otp: submittedOtp });
+            if (!validation.isValid) return ResponseUtil.validationError(res, validation.errors, 'Validation failed');
+
+            const result = await PasswordService.verifyPasswordResetOTP(
+                validation.data.email,
+                validation.data.otp || validation.data.resetCode,
+                ipAddress
+            );
+
+            LoggerUtil.performance('verify_password_reset_otp', Date.now() - startTime, { email: validation.data.email, correlationId });
+            return ResponseUtil.success(res, result, 'OTP verified successfully', 200);
+
+        } catch (error: unknown) {
+            const msg = (error as Error).message;
+
+            try {
+                await AuditProducer.sendAuditEvent({
+                    eventId: uuidv4(), userId: null,
+                    action: 'PASSWORD_RESET_OTP_VERIFY_FAILED', ipAddress: req.ip || '0.0.0.0',
+                    status: Constants.AUDIT_STATUS.ERROR as 'ERROR', severity: Constants.AUDIT_SEVERITIES.MEDIUM as 'MEDIUM',
+                    timestamp: new Date().toISOString(), metadata: { email: req.body?.email, error: msg, correlationId },
+                });
+            } catch (auditErr: unknown) {
+                LoggerUtil.error('Failed to send audit event for password reset OTP verify failure (non-critical)', { error: (auditErr as Error).message, correlationId });
+            }
+
+            if (msg.includes('No pending OTP') || msg.includes('revoked') || msg.includes('expired')) {
+                return ResponseUtil.badRequest(res, msg);
+            }
+            if (msg.includes('Invalid OTP') || msg.includes('Invalid or expired')) {
+                return ResponseUtil.unauthorized(res, 'Invalid OTP. Please enter the correct code sent to your email.');
+            }
+            if (msg.includes('Maximum verification attempts') || msg.includes('Too many')) {
+                return ResponseUtil.tooManyRequests(res, msg, { retryAfter: 900 });
+            }
+            if (msg.includes('already verified')) {
+                return ResponseUtil.badRequest(res, 'OTP has already been verified.');
+            }
+
+            return ResponseUtil.internalError(res, process.env.NODE_ENV === 'production' ? 'Failed to verify OTP. Please try again.' : msg, error as Error);
+        }
+    }
+
     static async verifyPasswordReset(req: Request, res: Response): Promise<Response> {
         const startTime = Date.now();
         const correlationId = (req as any).correlationId || uuidv4();
 
         try {
-            const { email, resetCode, newPassword } = req.body;
+            const { email, resetCode, resetToken, newPassword } = req.body;
             const ipAddress = req.ip || '0.0.0.0';
             const userAgent = req.headers['user-agent'] || 'Unknown';
 
-            const validation = await ValidatorUtil.validatePasswordReset({ email, resetCode, newPassword });
+            const validation = await ValidatorUtil.validatePasswordReset({ email, resetCode, resetToken, newPassword });
             if (!validation.isValid) return ResponseUtil.validationError(res, validation.errors, 'Validation failed');
 
             const result = await PasswordService.verifyPasswordReset(
-                validation.data.email, validation.data.resetCode, validation.data.newPassword, ipAddress, userAgent
+                validation.data.email,
+                validation.data.resetCode,
+                validation.data.newPassword,
+                ipAddress,
+                userAgent,
+                validation.data.resetToken
             );
 
-            LoggerUtil.performance('verify_password_reset', Date.now() - startTime, { email: validation.data.email, correlationId });
+            LoggerUtil.performance('verify_password_reset', Date.now() - startTime, { email: validation.data.email || 'token-based', correlationId });
             return ResponseUtil.success(res, result, 'Password reset successful. You can now login with your new password.', 200);
 
         } catch (error: unknown) {
@@ -175,7 +232,7 @@ class PasswordController {
                     eventId: uuidv4(), userId: null,
                     action: 'PASSWORD_RESET_FAILED', ipAddress: req.ip || '0.0.0.0',
                     status: Constants.AUDIT_STATUS.ERROR as 'ERROR', severity: Constants.AUDIT_SEVERITIES.HIGH as 'HIGH',
-                    timestamp: new Date().toISOString(), metadata: { email: req.body.email, error: msg, correlationId },
+                    timestamp: new Date().toISOString(), metadata: { email: req.body?.email, error: msg, correlationId },
                 });
             } catch (auditErr: unknown) {
                 LoggerUtil.error('Failed to send audit event for password reset failure (non-critical)', { error: (auditErr as Error).message, correlationId });
@@ -187,7 +244,7 @@ class PasswordController {
             if (msg.includes('password strength') || msg.includes('too weak') || msg.includes('choose a stronger password') || msg.includes('similar to a commonly used') || msg.includes('common password')) {
                 return ResponseUtil.badRequest(res, msg || 'Password is too weak. Please choose a stronger password.', [msg]);
             }
-            if (msg.includes('No pending OTP') || msg.includes('revoked') || msg.includes('expired')) {
+            if (msg.includes('No pending OTP') || msg.includes('revoked') || msg.includes('expired') || msg.includes('reset session')) {
                 return ResponseUtil.badRequest(res, msg);
             }
             if (msg.includes('Invalid OTP') || msg.includes('Invalid or expired')) {

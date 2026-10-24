@@ -359,11 +359,31 @@ class ValidatorUtil {
 
     static async validatePasswordReset(data: any): Promise<ValidationResult> {
         const schema = Joi.object({
-            email: this.schemas.email,
-            resetCode: Joi.string().length(6).pattern(/^\d{6}$/).required()
-                .messages({ 'string.length': 'Reset code must be 6 digits', 'string.pattern.base': 'Reset code must be 6 digits' }),
+            resetToken: Joi.string().min(32).max(128).optional(),
+            email: this.schemas.email.when('resetToken', {
+                is: Joi.exist(),
+                then: Joi.optional(),
+                otherwise: Joi.required(),
+            }),
+            resetCode: Joi.string().length(6).pattern(/^\d{6}$/).when('resetToken', {
+                is: Joi.exist(),
+                then: Joi.optional(),
+                otherwise: Joi.required(),
+            }).messages({ 'string.length': 'Reset code must be 6 digits', 'string.pattern.base': 'Reset code must be 6 digits' }),
             newPassword: this.schemas.password,
         });
+
+        return this.validate(data, schema);
+    }
+
+    static async validatePasswordResetOTP(data: any): Promise<ValidationResult> {
+        const schema = Joi.object({
+            email: this.schemas.email.required(),
+            otp: Joi.string().length(6).pattern(/^\d{6}$/).optional()
+                .messages({ 'string.length': 'OTP must be 6 digits', 'string.pattern.base': 'OTP must be 6 digits' }),
+            resetCode: Joi.string().length(6).pattern(/^\d{6}$/).optional()
+                .messages({ 'string.length': 'Reset code must be 6 digits', 'string.pattern.base': 'Reset code must be 6 digits' }),
+        }).or('otp', 'resetCode').messages({ 'object.missing': 'OTP is required' });
 
         return this.validate(data, schema);
     }
