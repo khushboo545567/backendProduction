@@ -43,6 +43,11 @@ router.post(
     PasswordController.requestPasswordReset as any
 );
 router.post(
+    '/reset/verify-otp',
+    // passwordResetLimiter,
+    PasswordController.verifyPasswordResetOTP as any
+);
+router.post(
     '/reset/verify',
     // passwordResetLimiter,
     PasswordController.verifyPasswordReset as any

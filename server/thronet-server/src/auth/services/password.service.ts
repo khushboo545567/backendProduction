@@ -280,16 +280,140 @@ class PasswordService {
         }
     }
 
-    static async verifyPasswordReset(email: string, resetCode: string, newPassword: string, ipAddress: string, userAgent: string) {
+    static async verifyPasswordResetOTP(email: string, otp: string, ipAddress: string = '0.0.0.0') {
         const correlationId = uuidv4();
         try {
-            const normalizedEmail = email.toLowerCase().trim();
-            // Step 1: Find user
-            const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash userId email firstName').lean().exec();
-            if (!user) throw new Error('Invalid or expired reset code');
+            const normalizedEmail = (email || '').toLowerCase().trim();
+
+            const user = await User.findOne({ email: normalizedEmail }).select('userId email firstName').lean().exec();
+            if (!user) {
+                throw new Error('Invalid OTP');
+            }
+
+            const otpVerification = await OTPVerification.verifyOTPByType(
+                (user as any).userId,
+                otp,
+                'password_reset',
+                normalizedEmail
+            );
+
+            if (!(otpVerification as any)?.success) {
+                throw new Error('Invalid OTP');
+            }
+
+            // Cryptographically secure 64-char hex reset authorization token
+            const resetToken = crypto.randomBytes(32).toString('hex');
+            const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+            const tokenPayload = {
+                userId: (user as any).userId,
+                email: normalizedEmail,
+                otpId: (otpVerification as any).otpId,
+                verifiedAt: new Date().toISOString(),
+                ipAddress,
+            };
+
+            // Store in cache for 15 minutes (900 seconds)
+            await CacheUtil.set(`password_reset:token:${hashedToken}`, JSON.stringify(tokenPayload), 900);
+
+            try {
+                await AuditProducer.sendAuditEvent({
+                    eventId: uuidv4(),
+                    userId: (user as any).userId,
+                    action: 'PASSWORD_RESET_OTP_VERIFIED',
+                    ipAddress,
+                    status: Constants.AUDIT_STATUS.SUCCESS as 'SUCCESS',
+                    severity: Constants.AUDIT_SEVERITIES.LOW as 'LOW',
+                    timestamp: new Date().toISOString(),
+                    metadata: {
+                        email: normalizedEmail,
+                        otpId: (otpVerification as any).otpId,
+                        correlationId,
+                    },
+                });
+            } catch (auditErr: unknown) {
+                LoggerUtil.error('Failed to send audit event for password reset OTP verification (non-critical)', {
+                    error: (auditErr as Error).message,
+                    correlationId,
+                });
+            }
+
+            return {
+                success: true,
+                message: 'OTP verified successfully',
+                resetToken,
+                expiresIn: 900,
+            };
+        } catch (error: unknown) {
+            LoggerUtil.error('Verify password reset OTP failed', {
+                error: (error as Error).message,
+                email,
+                correlationId,
+            });
+            throw error;
+        }
+    }
+
+    static async verifyPasswordReset(
+        emailOrOptions: string | { email?: string; resetCode?: string; resetToken?: string; newPassword: string },
+        resetCodeOrPassword?: string,
+        newPasswordParam?: string,
+        ipAddressParam?: string,
+        userAgentParam?: string,
+        resetTokenParam?: string
+    ) {
+        const correlationId = uuidv4();
+        try {
+            let email: string = '';
+            let resetCode: string = '';
+            let resetToken: string = '';
+            let newPassword: string = '';
+            let ipAddress: string = ipAddressParam || '0.0.0.0';
+            let userAgent: string = userAgentParam || 'Unknown';
+
+            if (typeof emailOrOptions === 'object' && emailOrOptions !== null) {
+                email = emailOrOptions.email || '';
+                resetCode = emailOrOptions.resetCode || '';
+                resetToken = emailOrOptions.resetToken || '';
+                newPassword = emailOrOptions.newPassword || '';
+            } else {
+                email = emailOrOptions || '';
+                resetCode = resetCodeOrPassword || '';
+                newPassword = newPasswordParam || '';
+                resetToken = resetTokenParam || '';
+            }
+
+            let userId: string;
+            let normalizedEmail: string;
+            let user: any;
+            let cacheTokenKey: string | null = null;
+
+            // Step 1: Validate authorization source
+            if (resetToken) {
+                const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+                cacheTokenKey = `password_reset:token:${hashedToken}`;
+                const rawSession = await CacheUtil.get(cacheTokenKey);
+                if (!rawSession) {
+                    throw new Error('Invalid or expired password reset session. Please request a new OTP.');
+                }
+
+                const sessionData = typeof rawSession === 'string' ? JSON.parse(rawSession) : rawSession;
+                userId = sessionData.userId;
+                normalizedEmail = (sessionData.email || '').toLowerCase().trim();
+
+                user = await User.findOne({ userId }).select('+passwordHash userId email firstName').lean().exec();
+                if (!user) throw new Error('Invalid or expired reset code');
+            } else {
+                if (!email) throw new Error('Email is required');
+                if (!resetCode) throw new Error('Reset code is required');
+                normalizedEmail = email.toLowerCase().trim();
+                user = await User.findOne({ email: normalizedEmail }).select('+passwordHash userId email firstName').lean().exec();
+                if (!user) throw new Error('Invalid or expired reset code');
+                userId = (user as any).userId;
+            }
 
             // Step 2: Password strength
-            const passwordStrength = zxcvbn(newPassword, [normalizedEmail, (user as any).userId]);
+            const passwordStrength = zxcvbn(newPassword, [normalizedEmail, userId]);
             if (passwordStrength.score < 3) {
                 const feedbackMsg = [passwordStrength.feedback.warning, ...passwordStrength.feedback.suggestions]
                     .filter(Boolean).join(' ').trim();
@@ -297,16 +421,22 @@ class PasswordService {
             }
 
             // Step 3: Password history
-            const isRecentPassword = await PasswordHistory.isPasswordRecentlyUsed((user as any).userId, newPassword);
+            const isRecentPassword = await PasswordHistory.isPasswordRecentlyUsed(userId, newPassword);
             if (isRecentPassword) throw new Error('Cannot reuse any of your last 5 passwords');
 
-            // Step 4: Verify reset code
-            const otpVerification = await OTPVerification.verifyOTPByType((user as any).userId, resetCode, 'password_reset', normalizedEmail);
-            if (!(otpVerification as any)?.success) throw new Error('Invalid or expired reset code');
+            // Step 4: Verify / consume authorization
+            if (resetToken && cacheTokenKey) {
+                // Invalidate the reset token immediately to prevent reuse
+                await CacheUtil.del(cacheTokenKey);
+            } else {
+                // Verify reset code via OTP model
+                const otpVerification = await OTPVerification.verifyOTPByType(userId, resetCode, 'password_reset', normalizedEmail);
+                if (!(otpVerification as any)?.success) throw new Error('Invalid or expired reset code');
+            }
 
             // Step 5: Save to history
             if ((user as any).passwordHash) {
-                await PasswordHistory.addPasswordToHistory((user as any).userId, (user as any).passwordHash, {
+                await PasswordHistory.addPasswordToHistory(userId, (user as any).passwordHash, {
                     changedBy: 'reset', ipAddress, userAgent, reason: 'password_reset',
                 });
             }
@@ -317,7 +447,7 @@ class PasswordService {
 
             // Step 7: Update user
             const updatedUser = await User.findOneAndUpdate(
-                { userId: (user as any).userId },
+                { userId },
                 { $set: { passwordHash: newPasswordHash, passwordChangedAt: new Date(), loginAttempts: 0, hasLocalPassword: true }, $unset: { lockUntil: 1, accountLockedReason: 1 } },
                 { new: true, runValidators: false }
             ).select('userId email firstName').exec();
@@ -329,8 +459,8 @@ class PasswordService {
             let tokensRevoked = 0;
             try {
                 const [sessions, tokens] = await Promise.all([
-                    Session.revokeAllUserSessions((user as any).userId, 'password_reset'),
-                    RefreshToken.revokeAllUserTokens((user as any).userId, 'password_reset', 'system'),
+                    Session.revokeAllUserSessions(userId, 'password_reset'),
+                    RefreshToken.revokeAllUserTokens(userId, 'password_reset', 'system'),
                 ]);
                 sessionsRevoked = sessions || 0;
                 tokensRevoked = tokens?.revokedCount || 0;
@@ -352,7 +482,7 @@ class PasswordService {
             // Step 10: Audit (non-critical)
             try {
                 await AuditProducer.sendAuditEvent({
-                    eventId: uuidv4(), userId: (user as any).userId, action: Constants.AUDIT_ACTIONS.PASSWORD_RESET_COMPLETED, ipAddress,
+                    eventId: uuidv4(), userId, action: Constants.AUDIT_ACTIONS.PASSWORD_RESET_COMPLETED, ipAddress,
                     status: Constants.AUDIT_STATUS.SUCCESS as 'SUCCESS', severity: Constants.AUDIT_SEVERITIES.HIGH as 'HIGH',
                     timestamp: new Date().toISOString(),
                     metadata: { email: (updatedUser as any).email, passwordStrength: passwordStrength.score, sessionsRevoked, tokensRevoked, correlationId },
@@ -366,7 +496,7 @@ class PasswordService {
                 userId: (updatedUser as any).userId, email: (updatedUser as any).email, resetAt: new Date(),
             };
         } catch (error: unknown) {
-            LoggerUtil.error('Verify password reset failed', { error: (error as Error).message, email, correlationId });
+            LoggerUtil.error('Verify password reset failed', { error: (error as Error).message, correlationId });
             throw error;
         }
     }
