@@ -136,13 +136,17 @@ class SessionValidator {
       .optional()
       .default(false),
 
-    followUpNotes: Joi.string()
+      followUpNotes: Joi.string()
       .max(2000)
       .optional()
       .allow('')
       .messages({
         'string.max': 'Follow-up notes cannot exceed 2000 characters',
       }),
+
+    // ✅ FIX: bookingId allowed karo, warna Joi isko strip kar deta hai
+    // aur completeSession() ko "bookingId is required" error milta hai.
+    bookingId: Joi.string().optional(),
   });
 
   /**

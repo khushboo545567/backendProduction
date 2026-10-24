@@ -1071,9 +1071,80 @@ class MentorshipSessionService {
     }
   }
 
-  /**
-   * Cancel session
+    /**
+   * Cron: jo bookings mentor ne start kiye (in_progress) par End nahi kiye, unhe
+   * scheduled time + grace ke baad auto-complete karo. DB updates completeSession()
+   * jaise hi hain, bas mentor auth check aur notifications ke bina.
    */
+    async autoCompleteOverdueBookings(graceMinutes = 15): Promise<number> {
+      const now = new Date();
+      let closed = 0;
+  
+      const sessions = await SessionMentor.find({
+        bookings: { $elemMatch: { status: BookingStatus.IN_PROGRESS } },
+      });
+  
+      for (const session of sessions) {
+        const durationMinutes = Math.max(Number(session.duration) || 60, 15);
+  
+        for (const booking of (session.bookings || []) as any[]) {
+          if (booking.status !== BookingStatus.IN_PROGRESS) continue;
+  
+          const startMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
+          if (Number.isNaN(startMs)) continue;
+          if (now.getTime() <= startMs + (durationMinutes + graceMinutes) * 60000) continue;
+  
+          try {
+            const result = await SessionMentor.updateOne(
+              {
+                sessionId: session.sessionId,
+                bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.IN_PROGRESS } },
+              },
+              {
+                $set: {
+                  'bookings.$.status': BookingStatus.COMPLETED,
+                  'bookings.$.completion': {
+                    completedAt: now,
+                    actualDuration: durationMinutes,
+                    wasSuccessful: true,
+                    followUpRequired: false,
+                  },
+                },
+              }
+            );
+            if (result.modifiedCount === 0) continue; // mentor ne beech me khud End kar diya
+  
+            const updated = await SessionMentor.findOne({ sessionId: session.sessionId });
+            const allFinal = (updated?.bookings || []).every((b: any) =>
+              [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW].includes(b.status)
+            );
+            if (updated && allFinal && updated.status !== BookingStatus.COMPLETED) {
+              updated.status = BookingStatus.COMPLETED;
+              updated.endedAt = now;
+              await updated.save();
+            }
+  
+            TrustScoreEvents.emit('SessionCompleted', {
+              mentorId: session.mentorId,
+              sessionId: session.sessionId,
+              bookingId: booking._id,
+              timestamp: now,
+            });
+            closed++;
+          } catch (err: any) {
+            logger.error(`Auto-complete failed for ${session.sessionId}/${booking._id}: ${err.message}`);
+          }
+        }
+      }
+  
+      return closed;
+    }
+  
+    /**
+     * Cancel session
+     */
+
+    
   async cancelSession(
     sessionId: string,
     userId: string,

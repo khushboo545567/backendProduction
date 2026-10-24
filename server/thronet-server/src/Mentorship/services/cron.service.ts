@@ -3,6 +3,7 @@ import { Coupon, Notification, Package, SessionMentor, Waitlist } from "../model
 import { logger } from "@/shared/logger.util";
 import cron, { ScheduledTask } from "node-cron";
 import emailService from "./email.service";
+import mentorshipSessionService from "./mentorshipSession.service";
 
 class CronService {
   private jobs: Map<string, ScheduledTask> = new Map();
@@ -76,7 +77,7 @@ class CronService {
           const duration = Date.now() - startTime;
           logger.info(`✅ Cron job ${name} completed in ${duration}ms`);
         } catch(error : any) {
-          logger.error(`❌ Cron job ${name} failed:$ {error}`);
+          logger.error(`❌ Cron job ${name} failed:${error}`);
         }
       });
 
@@ -232,24 +233,11 @@ class CronService {
    * Update session status
    */
   private async updateSessionStatus(): Promise<void> {
-    logger.info('updateSessionStatus disabled — sessions complete only via completeSession()');
-    return;
-    
-    const now = new Date();
-
-    // Mark past sessions as completed
-    const result = await SessionMentor.updateMany(
-      {
-        scheduledAt: { $lt: now },
-        status: 'confirmed',
-      },
-      {
-        $set: { status: 'completed' },
-      }
-    );
-
-    if (result.modifiedCount > 0) {
-      logger.info(`Updated ${result.modifiedCount} sessions to completed`);
+    // Sirf wahi bookings close hoti hain jo mentor ne start ki thi par End nahi ki.
+    // Confirmed-par-kabhi-start-nahi-hui sessions ko ye touch nahi karta.
+    const closed = await mentorshipSessionService.autoCompleteOverdueBookings();
+    if (closed > 0) {
+      logger.info(`Auto-completed ${closed} overdue in-progress bookings`);
     }
   }
 
