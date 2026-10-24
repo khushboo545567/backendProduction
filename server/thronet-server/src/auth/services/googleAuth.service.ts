@@ -2,9 +2,14 @@ import axios from 'axios';
 import { OAuth2Client } from 'google-auth-library';
 import { v4 as uuidv4 } from 'uuid';
 import { User, UserProfile } from '@/auth/models';
+import { Session } from '@/shared/models/index.models';
 import userEmitter from '@/shared/events/emitters/user.emitter';
 import { LoggerUtil as logger } from '@/shared/logger.util';
 import { UserType } from '../types/auth.types';
+import { DeviceData } from '../interfaces/auth.interfaces';
+import { DeviceRepository, SessionRepository } from '../repository/auth.repository';
+
+const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 export interface GoogleTokenPayload {
     sub: string;
@@ -30,7 +35,7 @@ export interface GoogleVerifyResult {
     tokens?: {
         accessToken: string;
         refreshToken: string;
-        expiresIn: string;
+        expiresIn: number;
     };
     user?: {
         userId: string;
@@ -49,17 +54,14 @@ export interface GoogleRegistrationData {
     phoneNumber?: string;
     location?: string;
     skills?: string[];
-    // Working profile fields
     jobTitle?: string;
     companyName?: string;
     startDate?: string | Date;
     endDate?: string | Date;
-    // Student profile fields
     collegeName?: string;
     degree?: string;
     fieldOfStudy?: string;
     graduationYear?: string;
-    // Fresher profile fields
     highestEducation?: string;
     preferredRole?: string;
     cgpa?: string;
@@ -118,7 +120,7 @@ export async function verifyGoogleIdToken(idToken: string): Promise<GoogleTokenP
             throw new Error('Google token audience mismatch');
         }
 
-        // Fallback to Google OAuth2 tokeninfo REST API
+        // Fallback: Google tokeninfo REST API
         try {
             const response = await axios.get<Record<string, any>>(
                 `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
@@ -154,28 +156,79 @@ export async function verifyGoogleIdToken(idToken: string): Promise<GoogleTokenP
             logger.error('Google idToken verification failed', {
                 error: error.response?.data || error.message || libraryError.message,
             });
-            throw new Error(error.response?.data?.error_description || libraryError.message || error.message || 'Google token verification failed');
+            throw new Error(
+                error.response?.data?.error_description ||
+                libraryError.message ||
+                error.message ||
+                'Google token verification failed'
+            );
         }
     }
 }
 
 export class GoogleAuthService {
-    /**
-     * Verify Google ID Token using OAuth2Client / tokeninfo API.
-     */
     static async verifyIdToken(idToken: string): Promise<GoogleTokenPayload> {
         return verifyGoogleIdToken(idToken);
     }
 
     /**
-     * Native SDK Flow:
-     * Verify Google ID token and return whether user is new or existing with tokens.
+     * Device + Session banao aur sessionId/deviceId wale tokens issue karo.
+     * Refresh flow (AuthController.refreshToken) sessionId ke bina 401 deta hai,
+     * isliye har Google login mein session zaroori hai.
      */
-    static async verifyOrAuthenticate(idToken: string): Promise<GoogleVerifyResult> {
+    private static async issueSession(
+        user: any,
+        context: DeviceData = {}
+    ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
+        const ipAddress = context.ipAddress || '0.0.0.0';
+
+        const device = await DeviceRepository.registerDevice(user.userId, {
+            deviceType: context.deviceType || 'desktop',
+            deviceName: context.deviceName || 'Google Login Device',
+            os: context.os || 'Unknown',
+            browser: context.browser || 'Unknown',
+            userAgent: context.userAgent || 'Unknown',
+            ipAddress,
+        });
+
+        const session = await SessionRepository.createSession({
+            userId: user.userId,
+            ipAddress,
+            deviceId: device.deviceId,
+            sessionType: 'web',
+            deviceInfo: {
+                userAgent: context.userAgent,
+                browser: context.browser,
+                os: context.os,
+            },
+        });
+
+        const payload = {
+            userId: user.userId,
+            role: user.role || 'user',
+            sessionId: session._id,
+            deviceId: device.deviceId,
+        };
+
+        const accessToken = User.generateAccessToken(payload);
+        const refreshToken = User.generateRefreshToken(payload);
+
+        await Session.setRefreshToken(session._id, refreshToken);
+
+        return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
+    }
+
+    /**
+     * Verify Google ID token. Naya user ho to onboarding data, purana ho to session + tokens.
+     */
+    static async verifyOrAuthenticate(
+        idToken: string,
+        context: DeviceData = {}
+    ): Promise<GoogleVerifyResult> {
         const payload = await this.verifyIdToken(idToken);
         const email = payload.email.toLowerCase();
 
-        let user = await User.findOne({ email });
+        const user = await User.findOne({ email });
 
         if (!user) {
             return {
@@ -190,7 +243,10 @@ export class GoogleAuthService {
             };
         }
 
-        // Link Google provider if not already linked
+        if (user.status !== 'active' || user.flags?.isDeleted) {
+            throw new Error('Account is not active. Contact support.');
+        }
+
         const hasGoogle = user.oauthProviders?.find((p: any) => p.provider === 'google');
         if (!hasGoogle) {
             user.oauthProviders = user.oauthProviders || [];
@@ -202,49 +258,45 @@ export class GoogleAuthService {
             await user.save();
         }
 
-        const accessToken = User.generateAccessToken({
-            userId: user.userId,
-            role: user.role,
-        });
-        const refreshToken = User.generateRefreshToken({
-            userId: user.userId,
-            role: user.role,
-        });
+        const tokens = await this.issueSession(user, context);
 
         return {
             isNewUser: false,
-            tokens: {
-                accessToken,
-                refreshToken,
-                expiresIn: '7d',
-            },
+            tokens,
             user: {
                 userId: user.userId,
                 email: user.email,
                 role: user.role,
                 firstName: user.firstName,
-                lastName: user.lastName || "",
+                lastName: user.lastName || '',
             },
         };
     }
 
     /**
-     * Native SDK Flow:
-     * Register a new user using verified Google account and onboarding data.
+     * Verified Google account se naya user register karo.
      */
-    static async registerGoogleUser(registrationData: GoogleRegistrationData): Promise<GoogleVerifyResult> {
+    static async registerGoogleUser(
+        registrationData: GoogleRegistrationData,
+        context: DeviceData = {}
+    ): Promise<GoogleVerifyResult> {
         const payload = await this.verifyIdToken(registrationData.idToken);
         const email = payload.email.toLowerCase();
 
-        let existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ email });
         if (existingUser) {
             throw new Error('User already registered. Please log in.');
         }
 
         const userId = uuidv4();
         const userType = registrationData.userType || 'fresher';
-        const firstName = registrationData.firstName || payload.given_name || payload.name?.split(' ')[0] || 'User';
-        const lastName = registrationData.lastName || payload.family_name || payload.name?.split(' ').slice(1).join(' ') || '';
+        const firstName =
+            registrationData.firstName || payload.given_name || payload.name?.split(' ')[0] || 'User';
+        const lastName =
+            registrationData.lastName ||
+            payload.family_name ||
+            payload.name?.split(' ').slice(1).join(' ') ||
+            '';
 
         const user = new User({
             userId,
@@ -271,8 +323,12 @@ export class GoogleAuthService {
                     workingProfile: {
                         jobTitle: registrationData.jobTitle || '',
                         companyName: registrationData.companyName || '',
-                        startDate: registrationData.startDate ? new Date(registrationData.startDate) : new Date(),
-                        endDate: registrationData.endDate ? new Date(registrationData.endDate) : undefined,
+                        startDate: registrationData.startDate
+                            ? new Date(registrationData.startDate)
+                            : new Date(),
+                        endDate: registrationData.endDate
+                            ? new Date(registrationData.endDate)
+                            : undefined,
                     },
                 }),
                 ...(userType === 'student' && {
@@ -295,9 +351,10 @@ export class GoogleAuthService {
 
         await user.save();
 
-        // Create UserProfile document
         try {
-            const usernameBase = (email.split('@')[0] || firstName).toLowerCase().replace(/[^a-z0-9_]/g, '');
+            const usernameBase = (email.split('@')[0] || firstName)
+                .toLowerCase()
+                .replace(/[^a-z0-9_]/g, '');
             let username = usernameBase.length >= 3 ? usernameBase : `user_${userId.substring(0, 6)}`;
             if (typeof (UserProfile as any).generateUniqueUsername === 'function') {
                 username = await (UserProfile as any).generateUniqueUsername(username);
@@ -316,12 +373,11 @@ export class GoogleAuthService {
                 avatar: payload.picture ? { url: payload.picture } : undefined,
             });
         } catch (profileErr: any) {
-            logger.warn('⚠️ UserProfile creation skipped or failed in Google registration:', {
+            logger.warn('UserProfile creation skipped or failed in Google registration', {
                 error: profileErr?.message,
             });
         }
 
-        // Emit registration event
         userEmitter.emit('user:registered', {
             userId: user.userId,
             email: user.email,
@@ -332,37 +388,27 @@ export class GoogleAuthService {
             timestamp: new Date(),
         });
 
-        const accessToken = User.generateAccessToken({
-            userId: user.userId,
-            role: user.role,
-        });
-        const refreshToken = User.generateRefreshToken({
-            userId: user.userId,
-            role: user.role,
-        });
+        const tokens = await this.issueSession(user, context);
 
         return {
             isNewUser: false,
-            tokens: {
-                accessToken,
-                refreshToken,
-                expiresIn: '7d',
-            },
+            tokens,
             user: {
                 userId: user.userId,
                 email: user.email,
                 role: user.role,
                 firstName: user.firstName,
-                lastName: user.lastName || "",
+                lastName: user.lastName || '',
             },
         };
     }
 
     /**
-     * Passport OAuth Strategy Callback Handler (Web Flow):
-     * Handles Passport profile ingestion and user linking/creation.
+     * Passport OAuth Strategy Callback Handler (Web Flow).
      */
-    static async handlePassportProfile(profile: GoogleProfileInput): Promise<{ user: any; isNewUser: boolean }> {
+    static async handlePassportProfile(
+        profile: GoogleProfileInput
+    ): Promise<{ user: any; isNewUser: boolean }> {
         const email = profile.emails?.[0]?.value;
         if (!email) {
             throw new Error('No email from Google');
@@ -475,7 +521,9 @@ export class GoogleAuthService {
         const otherProviders = user.oauthProviders?.filter((p: any) => p.provider !== 'google') || [];
 
         if (!hasPassword && otherProviders.length === 0) {
-            throw new Error('Cannot unlink Google account without setting a password or connecting another login method');
+            throw new Error(
+                'Cannot unlink Google account without setting a password or connecting another login method'
+            );
         }
 
         user.oauthProviders = otherProviders;
