@@ -3,9 +3,8 @@ import { PackageStatus } from '../models/Package';
 import { packageService } from '../services';
 import { logger } from '@/shared/logger.util';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
+import { BadRequestError } from '@/shared/errors/app.error';
 import { Request, Response, NextFunction } from 'express';
-// import { StandardPackageType
-// import  StandardPackageType from '../models/StandardPackageType';
 
 
 /**
@@ -47,7 +46,6 @@ export const getSpecificPackagePricing = async (
     const basePrice = mentorBasePrice ? parseInt(mentorBasePrice as string) : 1000;
 
     const packagePricing = packageService.getPackagePricing(
-      // packageType as StandardPackageType,
       packageType as any,
       basePrice
     );
@@ -60,7 +58,9 @@ export const getSpecificPackagePricing = async (
 };
 
 /**
- * @desc    Purchase a package
+ * @desc    Direct purchase disabled - payment ke bina package nahi banega.
+ *          Package ab POST /mentorship/payments/package/order se, payment verify
+ *          hone ke baad hi banta hai.
  * @route   POST /api/packages/purchase
  * @access  Private
  */
@@ -69,37 +69,11 @@ export const purchasePackage = async (
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  try {
-    const userId = req.user?.id;
-    const {
-      packageType,
-      mentorId,
-      paymentMethod,
-      transactionId,
-      customSessions,
-      customPrice,
-    } = req.body;
-
-    if (!userId) {
-      ResponseHandler.unauthorized(res);
-      return;
-    }
-
-    const packageData = await packageService.createPackage({
-      packageType,
-      userId,
-      mentorId,
-      paymentMethod,
-      transactionId,
-      customSessions,
-      customPrice,
-    });
-
-    ResponseHandler.created(res, 'Package purchased successfully', packageData);
-  } catch (error: any) {
-    logger.error('Error purchasing package:', error);
-    next(error);
-  }
+  next(
+    new BadRequestError(
+      'Direct package purchase is disabled. Use POST /mentorship/payments/package/order and complete the payment.'
+    )
+  );
 };
 
 /**
@@ -203,11 +177,10 @@ export const usePackageCredit = async (
       return;
     }
 
-    // aur service call mein bhi
     await packageService.usePackageCredit(
       packageId,
       userId,
-      sessionId,   // lowercase
+      sessionId,
       sessionType,
       new Date(sessionDate)
     );

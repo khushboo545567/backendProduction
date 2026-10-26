@@ -135,7 +135,16 @@ app.use(requestLogger);
 // 2. Body parsers
 // Default 10mb. Agar kahin base64 payload bhejte ho toh JSON_BODY_LIMIT env se badhao.
 const bodyLimit = process.env['JSON_BODY_LIMIT'] || '10mb';
-app.use(express.json({ limit: bodyLimit }));
+app.use(express.json({
+    limit: bodyLimit,
+    // Razorpay webhook signature raw body par verify hota hai.
+    // Sirf webhook route ke liye save karte hain, baaki requests ki memory waste nahi hogi.
+    verify: (req: any, _res: Response, buf: Buffer) => {
+        if (req.originalUrl && req.originalUrl.includes('/mentorship/payments/webhook')) {
+            req.rawBody = buf;
+        }
+    },
+}));
 app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
 // 3. Security middleware

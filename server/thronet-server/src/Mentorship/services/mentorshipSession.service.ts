@@ -15,6 +15,8 @@ import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus'
 import sessionRepository from '../repositories/session.repository';
 import mentorRepository from '../repositories/mentor.repository';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
+import { computePricingFromBase } from '@/Mentorship/utils/pricing.util';
+import { IPayment, GatewayPaymentStatus, PaymentPurpose } from '../models/Payment';
 
 interface CreateSessionInput {
   mentorId: string;
@@ -121,7 +123,7 @@ class MentorshipSessionService {
       };
 
       const session = await sessionRepository.create(sessionData);
-      logger.info(`✅ Session created: ${session.sessionId}`);
+      logger.info(`Session created: ${session.sessionId}`);
       return session;
     } catch (error: any) {
       logger.error(`Failed to create session: ${error.message}`);
@@ -165,7 +167,7 @@ class MentorshipSessionService {
       };
 
       const session = await sessionRepository.create(sessionData);
-      logger.info(`✅ Mentor session template created: ${session.sessionId}`);
+      logger.info(`Mentor session template created: ${session.sessionId}`);
       return session;
     } catch (error: any) {
       logger.error(`Failed to create mentor session: ${error.message}`);
@@ -258,12 +260,15 @@ class MentorshipSessionService {
 
   /**
    * Book an existing mentor-posted session slot.
+   * Paid session ke liye options.payment (verified Razorpay payment) zaroori hai.
+   * Ye param sirf payment.service se aata hai, HTTP body se nahi.
    */
-  async bookSession(input: any, authToken?: string): Promise<any> {
+  async bookSession(
+    input: any,
+    authToken?: string,
+    options?: { payment?: IPayment }
+  ): Promise<any> {
     try {
-      // ✅ FIX: removed debug console.log that dumped the full `input`
-      // object (including payment/pricing details) to server logs in
-      // production. Use logger.info with a trimmed line instead.
       logger.info(`Booking session: ${input.sessionId} by mentee: ${input.menteeId}`);
 
       let query: any = { sessionId: input.sessionId };
@@ -290,25 +295,42 @@ class MentorshipSessionService {
         throw new BadRequestError('Session does not belong to this mentor');
       }
 
+      // Price server decide karta hai, client ka pricing ignore
+      const pricing = computePricingFromBase(session.pricing?.basePrice);
+      const isFreeSession = pricing.totalAmount === 0;
+      const paidPayment = options?.payment;
 
-            // ✅ NEW (optional): ek mentee ka ek mentor ke saath max active bookings
-            const MAX_ACTIVE_PER_MENTOR = 3;
-            const activeCount = await SessionMentor.countDocuments({
-              mentorId: input.mentorId,
-              bookings: {
-                $elemMatch: {
-                  menteeId: input.menteeId,
-                  status: { $in: ['pending', 'confirmed', 'rescheduled', 'in_progress'] },
-                },
-              },
-            });
-            if (activeCount >= MAX_ACTIVE_PER_MENTOR) {
-              throw new BadRequestError(
-                `You can have at most ${MAX_ACTIVE_PER_MENTOR} active bookings with this mentor.`
-              );
-            }
+      if (!isFreeSession) {
+        if (
+          !paidPayment ||
+          paidPayment.status !== GatewayPaymentStatus.PAID ||
+          paidPayment.purpose !== PaymentPurpose.SESSION_BOOKING ||
+          paidPayment.userId !== input.menteeId ||
+          paidPayment.context?.sessionId !== session.sessionId
+        ) {
+          throw new BadRequestError('Payment is required to book this session');
+        }
+        if (paidPayment.pricing?.totalAmount !== pricing.totalAmount) {
+          throw new BadRequestError('Session price has changed. Please try booking again.');
+        }
+      }
 
-
+      // Ek mentee ka ek mentor ke saath max active bookings
+      const MAX_ACTIVE_PER_MENTOR = 3;
+      const activeCount = await SessionMentor.countDocuments({
+        mentorId: input.mentorId,
+        bookings: {
+          $elemMatch: {
+            menteeId: input.menteeId,
+            status: { $in: ['pending', 'confirmed', 'rescheduled', 'in_progress'] },
+          },
+        },
+      });
+      if (activeCount >= MAX_ACTIVE_PER_MENTOR) {
+        throw new BadRequestError(
+          `You can have at most ${MAX_ACTIVE_PER_MENTOR} active bookings with this mentor.`
+        );
+      }
 
       const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
       const [rawStart, rawEnd] = String(input.slotTime).split(' - ').map((t: string) => t.trim());
@@ -323,23 +345,23 @@ class MentorshipSessionService {
         throw new BadRequestError('Invalid slot time');
       }
 
-            // ✅ FIX: duplicate check BEFORE touching availability, active statuses only
-            const ACTIVE_BOOKING_STATUSES = ['pending', 'confirmed', 'rescheduled', 'in_progress'];
-            const requestedTime = new Date(input.scheduledAt).getTime();
-            const duplicateBooking = (session.bookings || []).find(
-              (b: any) =>
-                b.menteeId === input.menteeId &&
-                b.scheduledAt &&
-                new Date(b.scheduledAt).getTime() === requestedTime &&
-                ACTIVE_BOOKING_STATUSES.includes(b.status)
-            );
-            if (duplicateBooking) {
-              throw new ConflictError(
-                'You already have an active booking for this session at this date and time. Please check "My Sessions" or choose a different slot.'
-              );
-            }
-      
-            const bookedRange = await availabilityService.bookRange(
+      // Duplicate check availability touch karne se pehle, sirf active statuses
+      const ACTIVE_BOOKING_STATUSES = ['pending', 'confirmed', 'rescheduled', 'in_progress'];
+      const requestedTime = new Date(input.scheduledAt).getTime();
+      const duplicateBooking = (session.bookings || []).find(
+        (b: any) =>
+          b.menteeId === input.menteeId &&
+          b.scheduledAt &&
+          new Date(b.scheduledAt).getTime() === requestedTime &&
+          ACTIVE_BOOKING_STATUSES.includes(b.status)
+      );
+      if (duplicateBooking) {
+        throw new ConflictError(
+          'You already have an active booking for this session at this date and time. Please check "My Sessions" or choose a different slot.'
+        );
+      }
+
+      const bookedRange = await availabilityService.bookRange(
         input.availabilityId,
         input.mentorId,
         slotStart,
@@ -350,13 +372,26 @@ class MentorshipSessionService {
         throw new BadRequestError('This time slot is no longer available. Please pick another slot.');
       }
 
+      const bookingPayment = isFreeSession
+        ? {
+            status: PaymentStatus.COMPLETED,
+            method: PaymentMethod.FREE,
+            paidAt: new Date(),
+          }
+        : {
+            status: PaymentStatus.COMPLETED,
+            method: 'razorpay',
+            transactionId: paidPayment!.razorpayPaymentId,
+            gatewayOrderId: paidPayment!.razorpayOrderId,
+            gatewayPaymentId: paidPayment!.razorpayPaymentId,
+            paidAt: paidPayment!.paidAt || new Date(),
+          };
+
       const updatedSession = await SessionMentor.findOneAndUpdate(
         {
           sessionId: session.sessionId,
           status: { $nin: [BookingStatus.CANCELLED, BookingStatus.NO_SHOW, BookingStatus.REFUNDED] },
-                    // ✅ FIX: duplicate sirf tab maano jab same mentee ki same date/time
-          // par pehle se active booking ho. Pehle yeh sirf menteeId + status
-          // dekhta tha, isliye ek service dobara kabhi book nahi hoti thi.
+          // Duplicate sirf tab maano jab same mentee ki same date/time par active booking ho
           bookings: {
             $not: {
               $elemMatch: {
@@ -377,15 +412,12 @@ class MentorshipSessionService {
               slotTime:       `${slotStart} - ${slotEnd}`,
               scheduledAt:    new Date(input.scheduledAt),
               availabilityId: input.availabilityId,
-              payment: {
-                status: PaymentStatus.PENDING,
-                method: input.paymentMethod,
-              },
+              payment:        bookingPayment,
               pricing: {
-                basePrice:   input.pricing.basePrice,
-                platformFee: input.pricing.platformFee,
-                totalAmount: input.pricing.totalAmount,
-                currency:    input.pricing.currency || 'INR',
+                basePrice:   pricing.basePrice,
+                platformFee: pricing.platformFee,
+                totalAmount: pricing.totalAmount,
+                currency:    pricing.currency,
               },
             } as any,
           },
@@ -416,7 +448,7 @@ class MentorshipSessionService {
 
       session = updatedSession;
 
-      logger.info(`✅ Booking added: ${session.sessionId} for mentee: ${input.menteeId}`);
+      logger.info(`Booking added: ${session.sessionId} for mentee: ${input.menteeId}`);
 
       try {
         const [mentorDoc, menteeDoc] = await Promise.all([
@@ -438,11 +470,10 @@ class MentorshipSessionService {
             data: {
               menteeId: input.menteeId,
               menteeName,
-            
               title: 'New Booking Request',
               message: `${menteeName} sent a new booking request for "${session.title}".`,
             },
-          }).catch((e) => logger.error('Notification failed (bookSession → mentor):', e));
+          }).catch((e) => logger.error('Notification failed (bookSession -> mentor):', e));
         }
 
         NotificationService.sendNotification({
@@ -453,23 +484,23 @@ class MentorshipSessionService {
             title: 'Booking Request Sent',
             message: `Your booking request for "${session.title}" has been sent to the mentor.`,
           },
-        }).catch((e) => logger.error('Notification failed (bookSession → mentee):', e));
+        }).catch((e) => logger.error('Notification failed (bookSession -> mentee):', e));
 
-        if (input.paymentMethod !== PaymentMethod.FREE) {
+        if (!isFreeSession) {
           NotificationService.sendNotification({
             userId: input.menteeId,
             type: NotificationType.PAYMENT_SUCCESS,
             channels: [NotificationChannel.IN_APP],
             data: {
               title: 'Payment Successful',
-              message: `Your payment of ₹${input.pricing.totalAmount} for "${session.title}" was successful.`,
-              amount: input.pricing.totalAmount,
-              transactionId: session.sessionId,
+              message: `Your payment of Rs.${pricing.totalAmount} for "${session.title}" was successful.`,
+              amount: pricing.totalAmount,
+              transactionId: paidPayment!.razorpayPaymentId,
             },
-          }).catch((e) => logger.error('Notification failed (bookSession → payment):', e));
+          }).catch((e) => logger.error('Notification failed (bookSession -> payment):', e));
         }
       } catch (notifErr: any) {
-        logger.warn(`⚠️ Failed to send booking-request notification: ${notifErr.message}`);
+        logger.warn(`Failed to send booking-request notification: ${notifErr.message}`);
       }
 
       const bookings = session.bookings ?? [];
@@ -484,7 +515,6 @@ class MentorshipSessionService {
         totalBookings: bookings.length,
       };
     } catch (error: any) {
-      // ✅ FIX: removed debug console.log dump of the raw error object
       logger.error(`Failed to book session: ${error.message}`);
       throw error;
     }
@@ -562,7 +592,7 @@ class MentorshipSessionService {
             }
 
             if (now < joinOpensAt) {
-              const err: any = new BadRequestError('Session cannot be started yet — too early.');
+              const err: any = new BadRequestError('Session cannot be started yet - too early.');
               err.code = 'TOO_EARLY';
               throw err;
             }
@@ -877,7 +907,7 @@ class MentorshipSessionService {
           b.status === BookingStatus.CONFIRMED || b.status === BookingStatus.RESCHEDULED
         );
         if (confirmed.length > 1) {
-          throw new BadRequestError('Multiple bookings found on this session — bookingId is required');
+          throw new BadRequestError('Multiple bookings found on this session - bookingId is required');
         }
         targetBooking = confirmed[0] || null;
       }
@@ -890,7 +920,7 @@ class MentorshipSessionService {
       if (!isStartAllowed(bookingScheduledAt)) {
         const isTooEarly = Date.now() < new Date(bookingScheduledAt).getTime();
         const err: any = new Error(
-          isTooEarly ? 'Session cannot be started yet — too early.' : 'Session start window has expired.'
+          isTooEarly ? 'Session cannot be started yet - too early.' : 'Session start window has expired.'
         );
         err.code = isTooEarly ? 'TOO_EARLY' : 'WINDOW_EXPIRED';
         throw err;
@@ -980,7 +1010,7 @@ class MentorshipSessionService {
           (b: any) => b.status === BookingStatus.IN_PROGRESS
         );
         if (inProgress.length > 1) {
-          throw new BadRequestError('Multiple in-progress bookings found — bookingId is required');
+          throw new BadRequestError('Multiple in-progress bookings found - bookingId is required');
         }
         targetBooking = inProgress[0] || null;
       }
@@ -1164,11 +1194,8 @@ class MentorshipSessionService {
         throw new BadRequestError('Booking not found');
       }
 
-      // ✅ FIX: was `session.scheduledAt` (the template's original time) —
-      // inconsistent with startSession/rescheduleSession, which both key
-      // off the SPECIFIC booking's own scheduledAt. If a booking had been
-      // rescheduled, refund-eligibility here was being computed against the
-      // stale template date instead of the mentee's actual new slot time.
+      // Booking ka apna scheduledAt use karo (startSession/rescheduleSession jaisa),
+      // template ka original time nahi. Reschedule ke baad refund eligibility sahi rahe.
       const bookingScheduledAt = booking.scheduledAt || session.scheduledAt;
       const hoursDiff = (bookingScheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
       const refundEligible = hoursDiff >= 24;
@@ -1227,7 +1254,7 @@ class MentorshipSessionService {
           }).catch((e) => logger.error('Notification failed (cancelSession):', e));
         }
       } catch (notifErr: any) {
-        logger.warn(`⚠️ Failed to send cancellation notification: ${notifErr.message}`);
+        logger.warn(`Failed to send cancellation notification: ${notifErr.message}`);
       }
 
       return session;
@@ -1318,7 +1345,7 @@ class MentorshipSessionService {
           }).catch((e) => logger.error('Notification failed (rescheduleSession):', e));
         }
       } catch (notifErr: any) {
-        logger.warn(`⚠️ Failed to send reschedule notification: ${notifErr.message}`);
+        logger.warn(`Failed to send reschedule notification: ${notifErr.message}`);
       }
 
       // TODO: Update calendar via calendarSync.service
@@ -1371,12 +1398,12 @@ class MentorshipSessionService {
             data: {
               ...(reviewerType === 'mentee' ? { menteeId: userId } : {}),
               title: 'New Review',
-              message: `You received a new review with a rating of ${rating}★.`,
+              message: `You received a new review with a rating of ${rating} stars.`,
             },
           }).catch((e) => logger.error('Notification failed (addReview):', e));
         }
       } catch (notifErr: any) {
-        logger.warn(`⚠️ Failed to send review notification: ${notifErr.message}`);
+        logger.warn(`Failed to send review notification: ${notifErr.message}`);
       }
 
       return session;

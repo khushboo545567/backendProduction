@@ -99,7 +99,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         slotTime:       { type: String },
         scheduledAt:    { type: Date },
         availabilityId: { type: String },
-        // ✅ NEW: reminder dedupe flags
+        // Reminder dedupe flags
         reminders: {
           m15: { type: Boolean, default: false },
           m5:  { type: Boolean, default: false },
@@ -109,8 +109,14 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         },
         startedAt:      { type: Date },
         payment: {
-          status: { type: String },
-          method: { type: String },
+          status:           { type: String },
+          method:           { type: String },
+          transactionId:    { type: String },
+          gatewayOrderId:   { type: String },
+          gatewayPaymentId: { type: String, index: true },
+          paidAt:           { type: Date },
+          refundAmount:     { type: Number },
+          refundedAt:       { type: Date },
         },
         pricing: {
           basePrice:   { type: Number, default: 0 },
@@ -127,7 +133,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         },
       },
     ],
-    
+
     isBooked:       { type: Boolean, default: false, index: true },
     bookedBy:       { type: String, default: null },
     bookedAt:       { type: Date, default: null },
@@ -151,11 +157,13 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         enum: Object.values(PaymentMethod),
         required: true,
       },
-      transactionId: { type: String, index: true },
-      paidAt:        { type: Date },
-      refundAmount:  { type: Number, min: 0 },
-      refundedAt:    { type: Date },
-      refundReason:  { type: String },
+      transactionId:    { type: String, index: true },
+      gatewayOrderId:   { type: String },
+      gatewayPaymentId: { type: String },
+      paidAt:           { type: Date },
+      refundAmount:     { type: Number, min: 0 },
+      refundedAt:       { type: Date },
+      refundReason:     { type: String },
     },
     meeting: {
       platform:     { type: String, enum: ['zoom', 'google_meet', 'daily_co', 'custom'] },
@@ -209,7 +217,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
   }
 );
 
-// ── Compound Indexes ─────────────────────────────────────────────
+// -- Compound Indexes ---------------------------------------------
 SessionMentorSchema.index({ mentorId: 1, status: 1 });
 SessionMentorSchema.index({ menteeId: 1, status: 1 });
 SessionMentorSchema.index({ mentorId: 1, scheduledAt: 1 });
@@ -224,7 +232,7 @@ SessionMentorSchema.index({ sessionId: 1, status: 1 });
 SessionMentorSchema.index({ mentorId: 1, createdAt: -1 });
 SessionMentorSchema.index({ status: 1, createdAt: -1 });
 
-// ── Virtuals ─────────────────────────────────────────────────────
+// -- Virtuals -----------------------------------------------------
 SessionMentorSchema.virtual('isUpcoming').get(function () {
   return (
     this.scheduledAt > new Date() &&
@@ -244,7 +252,7 @@ SessionMentorSchema.virtual('canBeCancelled').get(function () {
   );
 });
 
-// ── Pre-save ─────────────────────────────────────────────────────
+// -- Pre-save -----------------------------------------------------
 SessionMentorSchema.pre('save', function (next) {
   if (this.isModified('pricing') && !this.pricing.platformFee) {
     this.pricing.platformFee = Math.round(this.pricing.basePrice * 0.15);
@@ -253,7 +261,7 @@ SessionMentorSchema.pre('save', function (next) {
   next();
 });
 
-// ── Instance Methods ─────────────────────────────────────────────
+// -- Instance Methods ---------------------------------------------
 SessionMentorSchema.methods.confirmBooking = async function () {
   this.status = BookingStatus.CONFIRMED;
   return await this.save();
@@ -265,11 +273,11 @@ SessionMentorSchema.methods.startSession = async function () {
     throw new Error(`Cannot start session from status "${this.status}"`);
   }
 
-  // Guard 2: yahi REAL FIX hai — scheduled time window ke bahar start nahi hoga
+  // Guard 2: scheduled time window ke bahar start nahi hoga
   if (!isStartAllowed(this.scheduledAt)) {
     const isTooEarly = Date.now() < new Date(this.scheduledAt).getTime();
     const err: any = new Error(
-      isTooEarly ? 'Session cannot be started yet — too early.' : 'Session start window has expired.'
+      isTooEarly ? 'Session cannot be started yet - too early.' : 'Session start window has expired.'
     );
     err.code = isTooEarly ? 'TOO_EARLY' : 'WINDOW_EXPIRED';
     throw err;
@@ -340,7 +348,7 @@ SessionMentorSchema.methods.rescheduleSession = async function (
   this.scheduledAt = newScheduledAt;
   if (this.bookings && this.bookings.length > 0) {
     this.bookings[0].scheduledAt = newScheduledAt;
-     // ✅ NEW: reschedule pe saare reminder flags reset karo,
+    // Reschedule par saare reminder flags reset karo,
     // warna naye time ka koi reminder nahi jayega
     this.bookings[0].reminders = {
       m15: false,
@@ -413,7 +421,7 @@ SessionMentorSchema.methods.setMeetingDetails = async function (
   return await this.save();
 };
 
-// ── Static Methods ───────────────────────────────────────────────
+// -- Static Methods -----------------------------------------------
 SessionMentorSchema.statics.findUpcoming = function (userId: string, role: 'mentor' | 'mentee') {
   const query: any = {
     scheduledAt: { $gt: new Date() },

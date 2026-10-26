@@ -14,7 +14,7 @@ import availabilityService from './availability.service';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { NotFoundError, ForbiddenError, ConflictError, BadRequestError } from '@/shared/errors/app.error';
 
-// Razorpay instance — initialized once, reused across calls
+// Razorpay instance - initialized once, reused across calls
 let razorpay: Razorpay | null = null;
 
 function getRazorpay(): Razorpay {
@@ -24,7 +24,7 @@ function getRazorpay(): Razorpay {
 
     if (!key_id || !key_secret) {
       throw new Error(
-        'Razorpay not configured — set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env'
+        'Razorpay not configured - set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env'
       );
     }
 
@@ -59,9 +59,8 @@ class RefundService {
   /**
    * Process refund for cancelled session.
    *
-   * ✅ FIX: session.save() is now called once atomically using findByIdAndUpdate.
-   * Previously two separate saves could leave session in CANCELLED state
-   * if the process crashed between step 6 and step 8.
+   * Session update ek hi atomic findByIdAndUpdate se hota hai. Pehle do alag save()
+   * calls the, jisse process crash hone par session CANCELLED state mein atak sakta tha.
    */
   async processRefund(input: RefundInput, authToken?: string): Promise<RefundResult> {
     try {
@@ -99,7 +98,7 @@ class RefundService {
       const effectivePricing = targetBooking?.pricing?.totalAmount ? targetBooking.pricing : (session.pricing || { totalAmount: 0, basePrice: 0, platformFee: 0 });
       const effectiveScheduledAt = targetBooking?.scheduledAt || session.scheduledAt;
 
-      // Step 2: Idempotency check — prevent double refund
+      // Step 2: Idempotency check - prevent double refund
       if (
         session.status === BookingStatus.CANCELLED ||
         session.status === BookingStatus.REFUNDED ||
@@ -109,39 +108,35 @@ class RefundService {
         throw new ConflictError('Session or booking has already been cancelled');
       }
 
-        // ✅ FIX: session.mentorId is the Mentor-PROFILE id (e.g. from the
-    // Mentor collection), not the mentor's actual auth userId. The old
-    // validation compared session.mentorId directly against input.userId
-    // (the logged-in user's real userId) — for a mentor cancelling their
-    // own session, these can NEVER match, so every mentor-initiated
-    // cancellation was wrongly rejected as "not authorized" (a plain Error
-    // with no statusCode -> 500). Resolve the mentor's real userId first.
-    const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
-    const mentorUserId = mentorDoc?.userId;
+      // session.mentorId Mentor-PROFILE id hai, mentor ka auth userId nahi.
+      // Mentor khud cancel kare to input.userId se direct compare kabhi match nahi hota,
+      // isliye pehle mentor ka real userId resolve karte hain.
+      const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+      const mentorUserId = mentorDoc?.userId;
 
-        // Step 3: Validate cancellation is allowed (against the correct mentee/mentor)
-        this.validateCancellation(session, input.userId, effectiveMenteeId, mentorUserId, effectiveScheduledAt);
+      // Step 3: Validate cancellation is allowed (against the correct mentee/mentor)
+      this.validateCancellation(session, input.userId, effectiveMenteeId, mentorUserId, effectiveScheduledAt);
 
-    // Step 4: Calculate refund using the specific booking's pricing/time
-    const refundCalculation = input.isEmergency
-      ? refundCalculator.calculateEmergencyRefund(
-        effectivePricing.totalAmount,
-        effectivePricing.platformFee,
-        effectivePricing.basePrice
-      )
-      : refundCalculator.calculateRefund({
-        sessionPrice: effectivePricing.basePrice,
-        platformFee: effectivePricing.platformFee,
-        totalAmount: effectivePricing.totalAmount,
-        scheduledAt: effectiveScheduledAt,
-      });
+      // Step 4: Calculate refund using the specific booking's pricing/time
+      const refundCalculation = input.isEmergency
+        ? refundCalculator.calculateEmergencyRefund(
+          effectivePricing.totalAmount,
+          effectivePricing.platformFee,
+          effectivePricing.basePrice
+        )
+        : refundCalculator.calculateRefund({
+          sessionPrice: effectivePricing.basePrice,
+          platformFee: effectivePricing.platformFee,
+          totalAmount: effectivePricing.totalAmount,
+          scheduledAt: effectiveScheduledAt,
+        });
 
-    logger.info(
-      `Refund calculated: ${refundCalculation.refundPercentage}% = Rs.${refundCalculation.refundAmount}`
-    );
+      logger.info(
+        `Refund calculated: ${refundCalculation.refundPercentage}% = Rs.${refundCalculation.refundAmount}`
+      );
 
-    // Step 5: Determine user role
-    const userRole = effectiveMenteeId === input.userId ? 'mentee' : 'mentor';
+      // Step 5: Determine user role
+      const userRole = effectiveMenteeId === input.userId ? 'mentee' : 'mentor';
 
 
       // Step 6: Create cancellation log first (before touching session status)
@@ -152,105 +147,100 @@ class RefundService {
         userRole
       );
 
-            // Step 7: Initiate refund with payment gateway if eligible
-            let transactionId: string | undefined;
-            // ✅ FIX: `bookings[].status` schema enum does NOT include 'refunded' —
-            // only the top-level `status` field (and `payment.status`) support it.
-            // Writing 'refunded' into bookings.$[elem].status threw a Mongoose
-            // ValidationError, which the global handler turned into a 500 for
-            // EVERY refund-eligible (future-date) cancellation. Booking-array
-            // status now always stays 'cancelled'; refund state is tracked
-            // separately via payment.status and top-level session status.
-            let bookingStatus: string = BookingStatus.CANCELLED;
-            let sessionStatus: string = BookingStatus.CANCELLED;
-            let paymentUpdate: any = {
-              'cancellation.cancelledBy': input.userId,
-              'cancellation.cancelledAt': new Date(),
-              'cancellation.reason': input.reason,
-              'cancellation.refundEligible': refundCalculation.refundEligible,
-            };
-      
-            if (refundCalculation.refundEligible && refundCalculation.refundAmount > 0) {
-              transactionId = await this.initiateRefundTransaction(
-                session,
-                refundCalculation.refundAmount
-              );
-      
-              // ✅ FIX: Single atomic update — was previously two separate session.save() calls.
-              // If process crashes between the old step 6 and step 8, session would be stuck
-              // as CANCELLED. Now everything is committed in one DB operation.
-              sessionStatus = BookingStatus.REFUNDED;
-              paymentUpdate = {
-                ...paymentUpdate,
-                'payment.status': PaymentStatus.REFUNDED,
-                'payment.refundAmount': refundCalculation.refundAmount,
-                'payment.refundedAt': new Date(),
-                'payment.refundReason': input.reason,
-              };
-      
-              cancellationLog.refundStatus = 'processing';
-              cancellationLog.refundTransactionId = transactionId;
-              await cancellationLog.save();
-            }
-      
-                      // Check if there are other active bookings in this session
-                      const targetBookingId = (targetBooking as any)?._id?.toString();
-                      const hasOtherActiveBookings = session.bookings?.some(
-                        (b: any) => b._id?.toString() !== targetBookingId && b.status !== 'cancelled'
-                      );
+      // Step 7: Initiate refund with payment gateway if eligible
+      let transactionId: string | undefined;
+      // bookings[].status schema enum mein 'refunded' nahi hai, sirf top-level status
+      // aur payment.status mein hai. Booking-array status hamesha 'cancelled' rehta hai;
+      // refund state payment.status aur top-level session status se track hota hai.
+      let bookingStatus: string = BookingStatus.CANCELLED;
+      let sessionStatus: string = BookingStatus.CANCELLED;
+      let paymentUpdate: any = {
+        'cancellation.cancelledBy': input.userId,
+        'cancellation.cancelledAt': new Date(),
+        'cancellation.reason': input.reason,
+        'cancellation.refundEligible': refundCalculation.refundEligible,
+      };
 
-            const updateFields: any = {
-              ...paymentUpdate,
-            };
+      if (refundCalculation.refundEligible && refundCalculation.refundAmount > 0) {
+        transactionId = await this.initiateRefundTransaction(
+          session,
+          refundCalculation.refundAmount,
+          targetBooking
+        );
 
-            // If there are no other active bookings (or 1-on-1 session), update top-level status as well
-            if (!hasOtherActiveBookings) {
-              updateFields.status = sessionStatus;
-              updateFields.isBooked = false;
-            }
+        // Single atomic update
+        sessionStatus = BookingStatus.REFUNDED;
+        paymentUpdate = {
+          ...paymentUpdate,
+          'payment.status': PaymentStatus.REFUNDED,
+          'payment.refundAmount': refundCalculation.refundAmount,
+          'payment.refundedAt': new Date(),
+          'payment.refundReason': input.reason,
+        };
 
-            if (input.bookingId && targetBooking) {
-              await SessionMentor.findByIdAndUpdate(
-                session._id,
-                {
-                  $set: {
-                    'bookings.$[elem].status': bookingStatus,
-                    ...updateFields,
-                  },
-                },
-                {
-                  runValidators: true,
-                  arrayFilters: [{ 'elem._id': (targetBooking as any)._id }],
-                }
-              );
-            } else {
-              await SessionMentor.findByIdAndUpdate(
-                session._id,
-                {
-                  $set: {
-                    status: sessionStatus,
-                    isBooked: false,
-                    ...updateFields,
-                  },
-                },
-                { runValidators: true }
-              );
-            }
+        cancellationLog.refundStatus = 'processing';
+        cancellationLog.refundTransactionId = transactionId;
+        await cancellationLog.save();
+      }
 
-                       // Step 8: Send notifications (non-critical — failure does not throw)
-// ✅ NEW: cancelled booking ka availability slot wapas free karo
-if (targetBooking?.availabilityId && targetBooking?.slotTime) {
-  try {
-    const [releaseStart, releaseEnd] = String(targetBooking.slotTime)
-      .split(' - ')
-      .map((t: string) => t.trim());
-    await availabilityService.releaseRange(targetBooking.availabilityId, releaseStart, releaseEnd);
-  } catch (releaseErr: any) {
-    logger.warn(`Slot release failed after cancellation: ${releaseErr.message}`);
-  }
-}
+      // Check if there are other active bookings in this session
+      const targetBookingId = (targetBooking as any)?._id?.toString();
+      const hasOtherActiveBookings = session.bookings?.some(
+        (b: any) => b._id?.toString() !== targetBookingId && b.status !== 'cancelled'
+      );
 
-await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId, input.userId);
+      const updateFields: any = {
+        ...paymentUpdate,
+      };
+
+      // If there are no other active bookings (or 1-on-1 session), update top-level status as well
+      if (!hasOtherActiveBookings) {
+        updateFields.status = sessionStatus;
+        updateFields.isBooked = false;
+      }
+
+      if (input.bookingId && targetBooking) {
+        await SessionMentor.findByIdAndUpdate(
+          session._id,
+          {
+            $set: {
+              'bookings.$[elem].status': bookingStatus,
+              ...updateFields,
+            },
+          },
+          {
+            runValidators: true,
+            arrayFilters: [{ 'elem._id': (targetBooking as any)._id }],
+          }
+        );
+      } else {
+        await SessionMentor.findByIdAndUpdate(
+          session._id,
+          {
+            $set: {
+              status: sessionStatus,
+              isBooked: false,
+              ...updateFields,
+            },
+          },
+          { runValidators: true }
+        );
+      }
+
+      // Step 8: Send notifications (non-critical - failure does not throw)
+      // Cancelled booking ka availability slot wapas free karo
+      if (targetBooking?.availabilityId && targetBooking?.slotTime) {
+        try {
+          const [releaseStart, releaseEnd] = String(targetBooking.slotTime)
+            .split(' - ')
+            .map((t: string) => t.trim());
+          await availabilityService.releaseRange(targetBooking.availabilityId, releaseStart, releaseEnd);
+        } catch (releaseErr: any) {
+          logger.warn(`Slot release failed after cancellation: ${releaseErr.message}`);
+        }
+      }
+
+      await this.sendRefundNotifications(session, refundCalculation, input.reason, effectiveMenteeId, input.userId);
 
       // Step 9: Mark notifications sent in log
       try {
@@ -348,48 +338,49 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
 
   /**
    * Initiate refund with Razorpay.
-   *
-   * ✅ FIX: Razorpay properly integrated.
-   * Requires session.payment.gatewayPaymentId to be set when booking was created.
+   * gatewayPaymentId booking-level payment se aata hai (fallback: session-level).
    *
    * Razorpay refund docs: https://razorpay.com/docs/api/refunds/
    */
   private async initiateRefundTransaction(
     session: any,
-    refundAmount: number
+    refundAmount: number,
+    booking?: any
   ): Promise<string> {
-    if (!session.payment?.gatewayPaymentId) {
-      logger.warn(
-        `No gateway payment ID for session ${session._id}. Queuing for manual refund.`
-      );
-      const pendingId = `REFUND_MANUAL_${Date.now()}_${session._id}`;
-      logger.warn(`Manual refund queued: ${pendingId} — amount: Rs.${refundAmount}`);
+    const sessionKey = String(session.sessionId || session._id);
+
+    // Booking pass nahi hui (retry flow) to pehli paid booking le lo
+    const targetBooking =
+      booking || (session.bookings || []).find((b: any) => b.payment?.gatewayPaymentId);
+
+    const gatewayPaymentId =
+      targetBooking?.payment?.gatewayPaymentId || session.payment?.gatewayPaymentId;
+
+    if (!gatewayPaymentId) {
+      logger.warn(`No gateway payment ID for session ${sessionKey}. Queuing for manual refund.`);
+      const pendingId = `REFUND_MANUAL_${Date.now()}_${sessionKey}`;
+      logger.warn(`Manual refund queued: ${pendingId} - amount: Rs.${refundAmount}`);
       return pendingId;
     }
 
     try {
-      const refund = await getRazorpay().payments.refund(
-        session.payment.gatewayPaymentId,
-        {
-          amount: Math.round(refundAmount * 100), // Razorpay expects paise (integer)
-          speed: 'normal',
-          notes: {
-            sessionId: session._id.toString(),
-            reason: 'User cancellation via platform',
-          },
-        }
-      );
+      const refund = await getRazorpay().payments.refund(gatewayPaymentId, {
+        amount: Math.round(refundAmount * 100), // Razorpay expects paise (integer)
+        speed: 'normal',
+        notes: {
+          sessionId: sessionKey,
+          reason: 'User cancellation via platform',
+        },
+      });
 
       logger.info(`Razorpay refund initiated: ${refund.id} for Rs.${refundAmount}`);
       return refund.id;
     } catch (error: any) {
-      // ✅ FIX: Don't let a Razorpay/config failure crash the whole
-      // cancellation with a 500. Fall back to manual refund queuing
-      // so the session still gets cancelled successfully; the refund
-      // itself can be processed manually by admin later.
+      // Razorpay/config failure se poori cancellation 500 na ho. Manual refund queue mein
+      // daal do; session cancel ho jayega aur admin baad mein refund process karega.
       logger.error(`Razorpay refund failed, falling back to manual queue: ${error.message}`);
-      const pendingId = `REFUND_MANUAL_FALLBACK_${Date.now()}_${session._id}`;
-      logger.warn(`Manual refund queued after Razorpay failure: ${pendingId} — amount: Rs.${refundAmount}`);
+      const pendingId = `REFUND_MANUAL_FALLBACK_${Date.now()}_${sessionKey}`;
+      logger.warn(`Manual refund queued after Razorpay failure: ${pendingId} - amount: Rs.${refundAmount}`);
       return pendingId;
     }
   }
@@ -409,9 +400,8 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
     try {
       logger.info('Sending refund notifications');
 
-            // ✅ FIX: session.mentorId is the Mentor-profile id, not the auth
-      // userId — resolve mentor's real userId first (same pattern used
-      // in processRefund's validateCancellation step).
+      // session.mentorId Mentor-profile id hai, auth userId nahi -
+      // mentor ka real userId pehle resolve karo (processRefund jaisa hi pattern).
       const mentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
 
       const [mentee, mentor] = await Promise.all([
@@ -476,53 +466,54 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
         }),
       });
 
-           // SMS to mentor
-           if (mentor.phoneNumber) {
-            const mentorSmsMessage = smsTemplates.mentorCancellationNotification({
-              menteeName: mentee.fullName || mentee.email,
-              sessionType: session.sessionType,
-              scheduledTime: scheduledAtFormatted,
-              compensationAmount: refundCalculation.mentorPayout,
-            });
-            await smsService.sendSMS({ to: mentor.phoneNumber, message: mentorSmsMessage });
-          }
-              // ✅ FIX: figure out who actually cancelled, so the notification
-          // (a) goes to the OTHER party, not back to the canceller, and
-          // (b) correctly names the person who cancelled.
-          const cancelledByMentee = cancelledByUserId === mentee.userId;
-          const cancellerName = cancelledByMentee
-            ? (mentee.fullName || mentee.email)
-            : (mentor.fullName || mentor.email);
+      // SMS to mentor
+      if (mentor.phoneNumber) {
+        const mentorSmsMessage = smsTemplates.mentorCancellationNotification({
+          menteeName: mentee.fullName || mentee.email,
+          sessionType: session.sessionType,
+          scheduledTime: scheduledAtFormatted,
+          compensationAmount: refundCalculation.mentorPayout,
+        });
+        await smsService.sendSMS({ to: mentor.phoneNumber, message: mentorSmsMessage });
+      }
 
-          if (cancelledByMentee) {
-            // Mentee cancelled → notify the mentor only
-            NotificationService.sendNotification({
-              userId: mentor.userId,
-              type: NotificationType.SESSION_CANCELLED,
-              channels: [NotificationChannel.IN_APP],
-              data: {
-                title: 'Session Cancelled',
-                message: `${cancellerName} cancelled the "${session.sessionType}" session. Reason: ${reason}`,
-              },
-            }).catch((e) => logger.error('In-app notification failed (refund → mentor):', e));
-          } else {
-            // Mentor cancelled → notify the mentee only
-            NotificationService.sendNotification({
-              userId: mentee.userId,
-              type: NotificationType.SESSION_CANCELLED,
-              channels: [NotificationChannel.IN_APP],
-              data: {
-                title: refundCalculation.refundEligible ? 'Session Cancelled — Refund Processing' : 'Session Cancelled',
-                message: refundCalculation.refundEligible
-                  ? `${cancellerName} cancelled your "${session.sessionType}" session. Reason: ${reason}. A refund of ₹${refundCalculation.refundAmount} is being processed.`
-                  : `${cancellerName} cancelled your "${session.sessionType}" session. Reason: ${reason}`,
-              },
-            }).catch((e) => logger.error('In-app notification failed (refund → mentee):', e));
-          }
-    
-          logger.info('Refund notifications sent successfully');
+      // Pata karo asal mein cancel kisne kiya, taaki notification
+      // (a) doosri party ko jaye, canceller ko wapas nahi, aur
+      // (b) cancel karne wale ka naam sahi dikhe.
+      const cancelledByMentee = cancelledByUserId === mentee.userId;
+      const cancellerName = cancelledByMentee
+        ? (mentee.fullName || mentee.email)
+        : (mentor.fullName || mentor.email);
+
+      if (cancelledByMentee) {
+        // Mentee cancelled -> notify the mentor only
+        NotificationService.sendNotification({
+          userId: mentor.userId,
+          type: NotificationType.SESSION_CANCELLED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: 'Session Cancelled',
+            message: `${cancellerName} cancelled the "${session.sessionType}" session. Reason: ${reason}`,
+          },
+        }).catch((e) => logger.error('In-app notification failed (refund -> mentor):', e));
+      } else {
+        // Mentor cancelled -> notify the mentee only
+        NotificationService.sendNotification({
+          userId: mentee.userId,
+          type: NotificationType.SESSION_CANCELLED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title: refundCalculation.refundEligible ? 'Session Cancelled - Refund Processing' : 'Session Cancelled',
+            message: refundCalculation.refundEligible
+              ? `${cancellerName} cancelled your "${session.sessionType}" session. Reason: ${reason}. A refund of ₹${refundCalculation.refundAmount} is being processed.`
+              : `${cancellerName} cancelled your "${session.sessionType}" session. Reason: ${reason}`,
+          },
+        }).catch((e) => logger.error('In-app notification failed (refund -> mentee):', e));
+      }
+
+      logger.info('Refund notifications sent successfully');
     } catch (error: any) {
-      // Non-critical — log but do not throw
+      // Non-critical - log but do not throw
       logger.error(`Failed to send refund notifications: ${error.message}`);
     }
   }
@@ -547,7 +538,7 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
       cancellationLog.refundProcessedAt = new Date();
       await cancellationLog.save();
 
-      const session = await SessionMentor.findById(cancellationLog.sessionId);
+      const session = await SessionMentor.findOne({ sessionId: cancellationLog.sessionId });
       if (session) {
         const mentee = await User.findByUserId(session.menteeId);
 
@@ -603,7 +594,7 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
       cancellationLog.refundStatus = 'failed';
       await cancellationLog.save();
 
-      const session = await SessionMentor.findById(cancellationLog.sessionId);
+      const session = await SessionMentor.findOne({ sessionId: cancellationLog.sessionId });
       if (session) {
         const mentee = await User.findByUserId(session.menteeId);
         if (!mentee) {
@@ -679,7 +670,7 @@ await this.sendRefundNotifications(session, refundCalculation, input.reason, eff
         throw new Error('Can only retry failed refunds');
       }
 
-      const session = await SessionMentor.findById(cancellationLog.sessionId);
+      const session = await SessionMentor.findOne({ sessionId: cancellationLog.sessionId });
       if (!session) {
         throw new Error('Session not found');
       }
