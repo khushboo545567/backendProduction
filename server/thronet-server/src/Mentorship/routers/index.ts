@@ -1,4 +1,4 @@
-// src/routes/index.ts
+// src/Mentorship/routers/index.ts
 import { Router, Request, Response } from 'express';
 import ReminderCron from '@/jobs/reminderCron';
 import mentorRoutes from './mentor.routes';
@@ -9,6 +9,7 @@ import sessionRoutes from './session.routes';
 import queryRoutes from './query.routes';
 import groupRoutes from './group.routes';
 import packageRoutes from './package.routes';
+import paymentRoutes from './payment.routes';
 import waitlistRoutes from './waitlist.routes';
 import reviewRoutes from './review.routes'; // ✅ PHASE 11
 import analyticsRoutes from './analytics.routes'; // ✅ PHASE 11
@@ -63,6 +64,7 @@ router.use('/sessions', sessionRoutes);
 router.use('/queries', queryRoutes);
 router.use('/group-sessions', groupRoutes);
 router.use('/packages', packageRoutes);
+router.use('/payments', paymentRoutes);
 router.use('/waitlist', waitlistRoutes);
 router.use('/reviews', reviewRoutes);
 router.use('/analytics', analyticsRoutes);
