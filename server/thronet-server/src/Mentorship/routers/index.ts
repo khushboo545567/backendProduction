@@ -10,6 +10,7 @@ import queryRoutes from './query.routes';
 import groupRoutes from './group.routes';
 import packageRoutes from './package.routes';
 import paymentRoutes from './payment.routes';
+import { adminPayoutRouter, mentorPayoutRouter } from './payout.routes';
 import waitlistRoutes from './waitlist.routes';
 import reviewRoutes from './review.routes'; // ✅ PHASE 11
 import analyticsRoutes from './analytics.routes'; // ✅ PHASE 11
@@ -65,9 +66,11 @@ router.use('/queries', queryRoutes);
 router.use('/group-sessions', groupRoutes);
 router.use('/packages', packageRoutes);
 router.use('/payments', paymentRoutes);
+router.use('/payouts', mentorPayoutRouter);
 router.use('/waitlist', waitlistRoutes);
 router.use('/reviews', reviewRoutes);
 router.use('/analytics', analyticsRoutes);
+router.use('/admin/payouts', adminPayoutRouter); // /admin se pehle
 router.use('/admin', adminRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/senior-mentors', publicSeniorMentorRouter);
