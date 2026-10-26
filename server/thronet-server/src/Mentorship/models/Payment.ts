@@ -22,6 +22,12 @@ export enum FulfillmentStatus {
   REFUNDED = 'refunded',
 }
 
+export enum PayoutStatus {
+  HELD = 'held',
+  RELEASED = 'released',
+  PAID = 'paid',
+}
+
 export interface IPaymentRefund {
   refundId: string;
   amount: number;
@@ -60,6 +66,16 @@ export interface IPayment extends Document {
     packageId?: string;
     error?: string;
     attempts: number;
+  };
+  payout: {
+    status: PayoutStatus;
+    mentorAmount?: number;
+    platformAmount?: number;
+    releasedAt?: Date;
+    releasedBy?: string;
+    paidAt?: Date;
+    paidBy?: string;
+    reference?: string;
   };
   refunds: IPaymentRefund[];
   createdAt: Date;
@@ -118,6 +134,16 @@ const MentorshipPaymentSchema = new Schema<IPayment>(
       error: { type: String },
       attempts: { type: Number, default: 0 },
     },
+    payout: {
+      status: { type: String, enum: Object.values(PayoutStatus), default: PayoutStatus.HELD },
+      mentorAmount: { type: Number },
+      platformAmount: { type: Number },
+      releasedAt: { type: Date },
+      releasedBy: { type: String },
+      paidAt: { type: Date },
+      paidBy: { type: String },
+      reference: { type: String },
+    },
     refunds: { type: [RefundSchema], default: [] },
   },
   { timestamps: true, collection: 'mentorship_payments' }
@@ -125,6 +151,8 @@ const MentorshipPaymentSchema = new Schema<IPayment>(
 
 MentorshipPaymentSchema.index({ userId: 1, createdAt: -1 });
 MentorshipPaymentSchema.index({ status: 1, 'fulfillment.status': 1 });
+MentorshipPaymentSchema.index({ purpose: 1, 'payout.status': 1 });
+MentorshipPaymentSchema.index({ 'context.mentorId': 1 });
 
 const MentorshipPayment = mongoose.model<IPayment>('MentorshipPayment', MentorshipPaymentSchema);
 
