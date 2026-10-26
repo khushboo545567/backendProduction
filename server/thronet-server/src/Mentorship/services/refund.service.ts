@@ -270,6 +270,140 @@ class RefundService {
     }
   }
 
+
+  /**
+   * Missed session (mentor ne start nahi kiya / request par respond nahi kiya) ka refund.
+   * Hamesha 100%, past-session check nahi lagta. Double-refund atomic claim se rukta hai.
+   */
+  async processMissedRefund(input: {
+    sessionId: string;
+    bookingId: string;
+    userId: string;
+  }): Promise<RefundResult> {
+    try {
+      logger.info(`Processing missed-session refund: ${input.sessionId} / ${input.bookingId}`);
+
+      const session: any = await SessionMentor.findOne({ sessionId: input.sessionId });
+      if (!session) throw new NotFoundError('Session');
+
+      const booking: any = session.bookings?.find((b: any) => b._id?.toString() === input.bookingId);
+      if (!booking) throw new NotFoundError('Booking');
+
+      const menteeId = booking.menteeId || booking.bookedBy;
+      if (menteeId !== input.userId) {
+        throw new ForbiddenError('Only the student can request a refund for this booking');
+      }
+      if (booking.status !== BookingStatus.MISSED) {
+        throw new ConflictError('Refund is only available for missed sessions');
+      }
+
+      const pricing = booking.pricing?.totalAmount ? booking.pricing : session.pricing;
+      const refundAmount = Number(pricing?.totalAmount || 0);
+      if (refundAmount <= 0) {
+        throw new BadRequestError(
+          'This was a free session, so there is nothing to refund. You can reschedule it instead.'
+        );
+      }
+
+      // Atomic claim: jo pehle claim karega wahi refund karega (double click / 2 tabs safe)
+      const claim = await SessionMentor.updateOne(
+        {
+          sessionId: session.sessionId,
+          bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.MISSED } },
+        } as any,
+        { $set: { 'bookings.$.status': BookingStatus.CANCELLED } }
+      );
+      if (claim.modifiedCount === 0) {
+        throw new ConflictError('This booking was already refunded or rescheduled');
+      }
+
+      let cancellationLog: any;
+      try {
+        cancellationLog = await this.createCancellationLog(
+          session,
+          {
+            sessionId: input.sessionId,
+            userId: input.userId,
+            reason: 'Session missed: mentor did not start the session',
+            cancellationCategory: 'other',
+          },
+          {
+            hoursBeforeSession: 0,
+            withinPolicy: true,
+            refundEligible: true,
+            refundPercentage: 100,
+            refundAmount,
+          },
+          'mentee'
+        );
+      } catch (logErr) {
+        // Paisa abhi nahi gaya, isliye claim wapas missed kar do taaki student dobara try kar sake
+        await SessionMentor.updateOne(
+          {
+            sessionId: session.sessionId,
+            bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.CANCELLED } },
+          } as any,
+          { $set: { 'bookings.$.status': BookingStatus.MISSED } }
+        ).catch(() => undefined);
+        throw logErr;
+      }
+
+      // Yahan se paisa move hota hai, isliye ab revert nahi karte (double refund ka risk)
+      const transactionId = await this.initiateRefundTransaction(session, refundAmount, booking);
+      cancellationLog.refundStatus = 'processing';
+      cancellationLog.refundTransactionId = transactionId;
+      await cancellationLog.save();
+
+      try {
+        const otherActive = (session.bookings || []).some(
+          (b: any) =>
+            b._id?.toString() !== input.bookingId &&
+            ['pending', 'confirmed', 'rescheduled', 'in_progress'].includes(b.status)
+        );
+        const $set: any = {
+          'payment.status': PaymentStatus.REFUNDED,
+          'payment.refundAmount': refundAmount,
+          'payment.refundedAt': new Date(),
+          'payment.refundReason': 'Session missed',
+        };
+        if (!otherActive) {
+          $set.status = BookingStatus.REFUNDED;
+          $set.isBooked = false;
+        }
+        await SessionMentor.updateOne({ _id: session._id }, { $set });
+      } catch (updErr: any) {
+        logger.error(`Missed refund: session update failed after refund ${transactionId}: ${updErr.message}`);
+      }
+
+      NotificationService.sendNotification({
+        userId: input.userId,
+        type: NotificationType.REFUND_PROCESSED,
+        channels: [NotificationChannel.IN_APP, NotificationChannel.EMAIL],
+        data: {
+          title: 'Refund initiated',
+          message: `A full refund of ₹${refundAmount} for "${session.title}" has been initiated. It usually reflects in 3-5 business days.`,
+          refundAmount,
+          sessionId: session.sessionId,
+        },
+      }).catch((e) => logger.error('Notification failed (missed refund):', e));
+
+      return {
+        success: true,
+        refundAmount,
+        refundPercentage: 100,
+        refundEligible: true,
+        refundStatus: 'processing',
+        transactionId,
+        message: `Full refund of ₹${refundAmount} initiated.`,
+        cancellationLog,
+      };
+    } catch (error: any) {
+      logger.error(`Missed refund failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+
   /**
    * Validate if session can be cancelled
    */

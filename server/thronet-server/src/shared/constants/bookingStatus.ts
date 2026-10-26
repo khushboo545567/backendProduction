@@ -7,24 +7,35 @@ export enum BookingStatus {
   CANCELLED = 'cancelled',
   RESCHEDULED = 'rescheduled',
   NO_SHOW = 'no_show',
+  MISSED = 'missed', // start window band ho gayi aur session kabhi start nahi hua
   REFUNDED = 'refunded',
 }
 
 export const BOOKING_STATUS_FLOW: Record<BookingStatus, BookingStatus[]> = {
-  [BookingStatus.AVAILABLE]: [BookingStatus.PENDING, BookingStatus.CANCELLED], 
-  [BookingStatus.PENDING]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED],
+  [BookingStatus.AVAILABLE]: [BookingStatus.PENDING, BookingStatus.CANCELLED],
+  [BookingStatus.PENDING]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED, BookingStatus.MISSED],
   [BookingStatus.CONFIRMED]: [
     BookingStatus.IN_PROGRESS,
     BookingStatus.CANCELLED,
     BookingStatus.RESCHEDULED,
+    BookingStatus.MISSED,
   ],
   [BookingStatus.IN_PROGRESS]: [BookingStatus.COMPLETED, BookingStatus.NO_SHOW],
   [BookingStatus.COMPLETED]: [],
   [BookingStatus.CANCELLED]: [BookingStatus.REFUNDED],
-  [BookingStatus.RESCHEDULED]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED],
+  [BookingStatus.RESCHEDULED]: [
+    BookingStatus.CONFIRMED,
+    BookingStatus.IN_PROGRESS,
+    BookingStatus.CANCELLED,
+    BookingStatus.MISSED,
+  ],
+  // Missed ke baad student ya to refund lega ya reschedule karega
+  [BookingStatus.MISSED]: [BookingStatus.RESCHEDULED, BookingStatus.CANCELLED, BookingStatus.REFUNDED],
   [BookingStatus.NO_SHOW]: [],
   [BookingStatus.REFUNDED]: [],
 };
+
+
 
 export const CANCELLABLE_STATUSES: BookingStatus[] = [
   BookingStatus.PENDING,
@@ -34,11 +45,15 @@ export const CANCELLABLE_STATUSES: BookingStatus[] = [
 export const RESCHEDULABLE_STATUSES: BookingStatus[] = [
   BookingStatus.PENDING,
   BookingStatus.CONFIRMED,
+  BookingStatus.MISSED,
 ];
 
 export const REFUNDABLE_STATUSES: BookingStatus[] = [
   BookingStatus.CANCELLED,
+  BookingStatus.MISSED,
 ];
+
+
 
 export const FINAL_STATUSES: BookingStatus[] = [
   BookingStatus.COMPLETED,

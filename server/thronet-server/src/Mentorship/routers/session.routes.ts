@@ -154,6 +154,14 @@ router.post(
 router.get('/:id/refund-estimate', sessionController.getRefundEstimate);
 
 /**
+ * @route   POST /api/v1/sessions/:id/refund-missed
+ * @desc    Mentee refunds a missed booking (100%)
+ * @access  Private (Mentee)
+ */
+router.post('/:id/refund-missed', sessionController.refundMissedSession);
+
+
+/**
  * @route   GET /api/v1/sessions/:id/receipt
  * @desc    Get receipt data for a completed booking
  * @query   bookingId (optional - falls back to first completed booking)

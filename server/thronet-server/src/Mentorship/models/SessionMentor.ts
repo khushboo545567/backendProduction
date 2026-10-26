@@ -93,7 +93,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         bookedAt:       { type: Date, default: Date.now },
         status: {
           type: String,
-          enum: ['pending', 'confirmed', 'rescheduled', 'in_progress', 'cancelled', 'completed', 'no_show'],
+          enum: ['pending', 'confirmed', 'rescheduled', 'in_progress', 'cancelled', 'completed', 'no_show', 'missed'],
           default: 'pending',
         },
         slotTime:       { type: String },
@@ -108,8 +108,9 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           m30: { type: Boolean, default: false },
         },
         startedAt:      { type: Date },
+        missedAt:       { type: Date },
         payment: {
-          status:           { type: String },
+          status: { type: String },
           method:           { type: String },
           transactionId:    { type: String },
           gatewayOrderId:   { type: String },
@@ -231,6 +232,10 @@ SessionMentorSchema.index({ sessionId: 1, menteeId: 1 });
 SessionMentorSchema.index({ sessionId: 1, status: 1 });
 SessionMentorSchema.index({ mentorId: 1, createdAt: -1 });
 SessionMentorSchema.index({ status: 1, createdAt: -1 });
+// cron: missed / auto-complete dhoondhne ke liye
+SessionMentorSchema.index({ 'bookings.status': 1, 'bookings.scheduledAt': 1 });
+
+
 
 // -- Virtuals -----------------------------------------------------
 SessionMentorSchema.virtual('isUpcoming').get(function () {

@@ -5,6 +5,8 @@ import { SessionMentor } from '../models';
 import { bookingService, mentorshipSessionService } from '../services';
 import { logger } from '@/shared/logger.util';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
+import refundService from '../services/refund.service'; // adjust path to match your repo
+
 
 class SessionController {
   /**
@@ -447,6 +449,10 @@ class SessionController {
         return;
       }
 
+           // Cron ka intezaar kiye bina: time nikal gaya ho to abhi missed mark karo,
+      // taaki neeche 24h wala rule missed booking par na lage
+      await mentorshipSessionService.ensureMissedIfOverdue(id, bookingId);
+
       const session = await SessionMentor.findOne({ sessionId: id });
       if (!session) {
         ResponseHandler.notFound(res, 'Session not found');
@@ -456,29 +462,36 @@ class SessionController {
       // 1. Identify the true scheduledAt to compare against the 24h baseline.
       // If it's a specific booking, validate against the booking's start time instead of the overall parent session's start time.
       let existingStartTime = session.scheduledAt;
+      let targetBooking: any = null;
       if (bookingId && session.bookings && session.bookings.length > 0) {
-        const targetBooking = session.bookings.find((b: any) => b._id.toString() === bookingId);
+        targetBooking = session.bookings.find((b: any) => b._id.toString() === bookingId);
         if (targetBooking && targetBooking.scheduledAt) {
           existingStartTime = targetBooking.scheduledAt;
         }
       }
 
-      const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
-      
-      // LOGIC: The business rule prevents a user from rescheduling a meeting if the CURRENT EXISTNG start time is within 24 hours, or if it already passed.
-      if (hoursDiff < 24) {
-        ResponseHandler.badRequest(res, 'Cannot reschedule less than 24 hours before start time');
-        return;
-      }
+      // Missed = mentor's fault or no response, so the 24h rule and the reschedule limit don't apply
+      const isMissedBooking = targetBooking?.status === 'missed';
 
-      const rescheduleCount = session.reschedule?.count || 0;
-      if (rescheduleCount >= 2) {
-        ResponseHandler.badRequest(res, 'Maximum reschedule limit (2) reached for this session');
-        return;
+      if (!isMissedBooking) {
+        const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
+        if (hoursDiff < 24) {
+          ResponseHandler.badRequest(res, 'Cannot reschedule less than 24 hours before start time');
+          return;
+        }
+
+        const count = session.reschedule?.count || 0;
+        if (count >= 2) {
+          ResponseHandler.badRequest(res, 'Maximum reschedule limit (2) reached for this session');
+          return;
+        }
       }
+      const rescheduleCount = session.reschedule?.count || 0;
+
+
 
       const authToken = getAuthToken(req) || undefined;
-      const updatedSession = await bookingService.rescheduleBooking(
+      const updatedSession = await mentorshipSessionService.rescheduleSession(
         id,
         userId,
         new Date(newScheduledAt),
@@ -521,6 +534,33 @@ class SessionController {
       }
 
       // Permission check deferred to underlying service
+
+      const estBookingId = req.query.bookingId as string | undefined;
+      const estBooking: any = estBookingId
+        ? (session.bookings || []).find((b: any) => b._id?.toString() === estBookingId)
+        : null;
+
+      if (estBooking?.status === 'missed') {
+        const amount = Number(estBooking.pricing?.totalAmount ?? session.pricing.totalAmount ?? 0);
+        ResponseHandler.success(res, 'Refund estimate calculated', {
+          session: {
+            id: session._id,
+            scheduledAt: estBooking.scheduledAt || session.scheduledAt,
+            totalAmount: amount,
+            currency: session.pricing.currency,
+          },
+          refund: {
+            eligible: amount > 0,
+            percentage: amount > 0 ? 100 : 0,
+            amount,
+            policy: '100% refund: session was missed',
+            processingTime: amount > 0 ? '3-5 business days' : null,
+          },
+          canCancel: false,
+          warning: null,
+        });
+        return;
+      }
 
       const hoursDiff = (session.scheduledAt.getTime() - Date.now()) / (1000 * 60 * 60);
 
@@ -574,6 +614,42 @@ class SessionController {
       next(error);
     }
   }
+
+
+    /**
+   * @route   POST /api/v1/mentorship/sessions/:id/refund-missed
+   * @access  Private (Mentee)
+   */
+    async refundMissedSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+      try {
+        const { id } = req.params;
+        const userId = (req.user as any)?.userId || req.user?.id;
+        if (!userId) {
+          ResponseHandler.unauthorized(res);
+          return;
+        }
+        const { bookingId } = req.body;
+        if (!bookingId) {
+          ResponseHandler.badRequest(res, 'bookingId is required');
+          return;
+        }
+              // Cron ka intezaar kiye bina: time nikal gaya ho to abhi missed mark karo
+              await mentorshipSessionService.ensureMissedIfOverdue(id, bookingId);
+
+              const result = await refundService.processMissedRefund({
+                sessionId: id,
+                bookingId,
+                userId,
+              });
+        ResponseHandler.success(res, 'Refund initiated', result);
+      } catch (error: any) {
+        logger.error('Failed to refund missed session:', error);
+        next(error);
+      }
+    }
+
+
+
 
   /**
    * @route   POST /api/v1/mentorship/sessions/:id/review

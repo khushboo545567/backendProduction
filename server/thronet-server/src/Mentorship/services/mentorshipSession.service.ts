@@ -11,7 +11,7 @@ import { TrustScoreEvents } from '../events/trustScore.events';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { emitToUser } from '@/socket/emitter';
 import { User } from '@/shared/models/index.models';
-import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus';
+import { BookingStatus, isStartAllowed, START_LATE_LIMIT_MS } from '@/shared/constants/bookingStatus';
 import sessionRepository from '../repositories/session.repository';
 import mentorRepository from '../repositories/mentor.repository';
 import cloudinary from '@/config/images/store/cloudinary/cloudinary.config';
@@ -568,6 +568,12 @@ class MentorshipSessionService {
         }
 
         if (options?.intent === 'join') {
+          // Mentee tabhi join kar sakta hai jab mentor ne session start kar diya ho
+          if (!isMentor && session.status !== 'in_progress') {
+            const err: any = new BadRequestError('The mentor has not started this session yet.');
+            err.code = 'NOT_STARTED';
+            throw err;
+          }
           // If session is already in_progress, allow participants to join/reconnect
           if (session.status !== 'in_progress') {
             const bookingScheduledAt = (session.bookings && session.bookings[0]?.scheduledAt) || session.scheduledAt;
@@ -584,8 +590,11 @@ class MentorshipSessionService {
               session.status === 'cancelled' ||
               session.status === 'completed' ||
               session.status === 'no_show' ||
+              session.status === 'missed' ||
               session.status === 'refunded'
             ) {
+
+
               const err: any = new BadRequestError('Session has ended or is no longer active');
               err.code = 'SESSION_ENDED';
               throw err;
@@ -694,7 +703,9 @@ class MentorshipSessionService {
     try {
       const query: any = {
         scheduledAt: { $gt: new Date() },
-        status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+        status: {
+          $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.RESCHEDULED],
+        },
       };
 
       if (role === 'mentor') {
@@ -809,7 +820,8 @@ class MentorshipSessionService {
       }
 
       const hasActiveBooking = (session.bookings || []).some(
-        (b: any) => b.status !== BookingStatus.CANCELLED
+        (b: any) =>
+          ![BookingStatus.CANCELLED, BookingStatus.MISSED, BookingStatus.REFUNDED].includes(b.status)
       );
       if (hasActiveBooking) {
         throw new BadRequestError('Cannot delete a session with active bookings. Cancel the bookings first.');
@@ -850,8 +862,17 @@ class MentorshipSessionService {
         throw new BadRequestError(`Booking is not pending. Current status: ${booking.status}`);
       }
 
-      await SessionMentor.updateOne(
-        { sessionId, 'bookings._id': bookingId },
+      // Slot ka time nikal gaya to accept nahi ho sakta: booking ko missed mark karo
+      const bookingStartMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
+      if (!Number.isNaN(bookingStartMs) && Date.now() >= bookingStartMs) {
+        await this.ensureMissedIfOverdue(sessionId, bookingId).catch(() => undefined);
+        throw new BadRequestError(
+          'This booking request has expired because the slot time has passed. It can no longer be accepted.'
+        );
+      }
+
+      const confirmResult = await SessionMentor.updateOne(
+        { sessionId, bookings: { $elemMatch: { _id: bookingId, status: 'pending' } } } as any,
         {
           $set: {
             'bookings.$.status': BookingStatus.CONFIRMED,
@@ -859,6 +880,9 @@ class MentorshipSessionService {
           }
         }
       );
+      if (confirmResult.modifiedCount === 0) {
+        throw new ConflictError('Booking status just changed. Please refresh and try again.');
+      }
 
       logger.info(`Session confirmed: ${sessionId}, bookedBy/bookingId: ${bookingId}`);
 
@@ -1045,7 +1069,15 @@ class MentorshipSessionService {
       let updatedSession = await SessionMentor.findOne({ sessionId });
 
       const allBookingsFinal = (updatedSession?.bookings || []).every((b: any) =>
-        [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW].includes(b.status)
+        [
+          BookingStatus.COMPLETED,
+          BookingStatus.CANCELLED,
+          BookingStatus.NO_SHOW,
+          BookingStatus.MISSED,
+          BookingStatus.REFUNDED,
+        ].includes(b.status)
+
+
       );
       if (allBookingsFinal && updatedSession && updatedSession.status !== BookingStatus.COMPLETED) {
         updatedSession.status = BookingStatus.COMPLETED;
@@ -1146,7 +1178,13 @@ class MentorshipSessionService {
   
             const updated = await SessionMentor.findOne({ sessionId: session.sessionId });
             const allFinal = (updated?.bookings || []).every((b: any) =>
-              [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW].includes(b.status)
+              [
+                BookingStatus.COMPLETED,
+                BookingStatus.CANCELLED,
+                BookingStatus.NO_SHOW,
+                BookingStatus.MISSED,
+                BookingStatus.REFUNDED,
+              ].includes(b.status)
             );
             if (updated && allFinal && updated.status !== BookingStatus.COMPLETED) {
               updated.status = BookingStatus.COMPLETED;
@@ -1160,15 +1198,217 @@ class MentorshipSessionService {
               bookingId: booking._id,
               timestamp: now,
             });
-            closed++;
-          } catch (err: any) {
-            logger.error(`Auto-complete failed for ${session.sessionId}/${booking._id}: ${err.message}`);
+                        // Manual End jaisa hi: dono UIs refresh ho, mentee ko review ka notification mile
+                        try {
+                          const endedPayload = {
+                            sessionId: session.sessionId,
+                            bookingId: String(booking._id),
+                            roomId: String(booking._id),
+                            endedAt: now.toISOString(),
+                            endedBy: 'system',
+                            status: BookingStatus.COMPLETED,
+                            actualDuration: durationMinutes,
+                            autoCompleted: true,
+                          };
+                          const endedMenteeId = booking.menteeId || booking.bookedBy;
+                          const endedMentor: any = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+                          if (endedMentor?.userId) emitToUser(endedMentor.userId, 'session:ended', endedPayload);
+                          if (endedMenteeId) {
+                            emitToUser(endedMenteeId, 'session:ended', endedPayload);
+                            NotificationService.sendNotification({
+                              userId: endedMenteeId,
+                              type: NotificationType.SESSION_COMPLETED,
+                              channels: [NotificationChannel.IN_APP],
+                              data: {
+                                title: 'Session Completed',
+                                message: `Your session "${session.title}" is complete. Please leave a review!`,
+                                sessionId: session.sessionId,
+                                actionUrl: `/mentorship/user-dashboard/${endedMenteeId}?tab=reviews`,
+                              },
+                            }).catch((e) => logger.error('Notification failed (auto-complete):', e));
+                          }
+                        } catch (emitErr: any) {
+                          logger.warn(`Auto-complete notify/emit failed: ${emitErr.message}`);
+                        }
+            
+                        closed++;
+                      } catch (err: any) {
+                        logger.error(`Auto-complete failed for ${session.sessionId}/${booking._id}: ${err.message}`);
           }
         }
       }
   
       return closed;
     }
+
+
+       /**
+   * Agar booking ka start window band ho chuka hai par cron ne abhi tak missed nahi kiya,
+   * to use abhi missed mark kar do (atomic). Mentee page ke "Missed" aur DB ke beech ka
+   * gap khatam karta hai. true return karta hai agar booking ab missed hai.
+   */
+  async ensureMissedIfOverdue(sessionId: string, bookingId: string): Promise<boolean> {
+    const session: any = await SessionMentor.findOne({ sessionId });
+    if (!session) return false;
+    if (session.sessionType === SessionType.GROUP_SESSION) return false;
+
+    const booking: any = (session.bookings || []).find(
+      (b: any) => b._id?.toString() === bookingId
+    );
+    if (!booking) return false;
+    if (booking.status === BookingStatus.MISSED) return true;
+
+    const OPEN = [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.RESCHEDULED];
+    if (!OPEN.includes(booking.status)) return false;
+
+    const startMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
+    // Pending request slot start par expire; confirmed/rescheduled start + 15 min par
+    const graceMs = booking.status === BookingStatus.PENDING ? 0 : START_LATE_LIMIT_MS;
+    if (Number.isNaN(startMs) || Date.now() <= startMs + graceMs) return false;
+
+    const claim = await SessionMentor.updateOne(
+      {
+        sessionId,
+        bookings: { $elemMatch: { _id: booking._id, status: { $in: OPEN } } },
+      } as any,
+      { $set: { 'bookings.$.status': BookingStatus.MISSED, 'bookings.$.missedAt': new Date() } }
+    );
+    // modifiedCount 0 ho to cron ne beech me missed kar diya, wo bhi theek hai
+    if (claim.modifiedCount === 0) {
+      const fresh: any = await SessionMentor.findOne({ sessionId });
+      const b2 = (fresh?.bookings || []).find((b: any) => b._id?.toString() === bookingId);
+      return b2?.status === BookingStatus.MISSED;
+    }
+
+    const othersOpen = (session.bookings || []).some(
+      (b: any) =>
+        String(b._id) !== String(booking._id) &&
+        [...OPEN, BookingStatus.IN_PROGRESS].includes(b.status)
+    );
+    if (!othersOpen) {
+      await SessionMentor.updateOne(
+        { sessionId, status: { $in: OPEN } } as any,
+        { $set: { status: BookingStatus.MISSED } }
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Cron: pending / confirmed / rescheduled booking jiska start window (scheduled + 15 min)
+   * band ho gaya aur jo kabhi start nahi hui -> MISSED.
+   * Mentee ko "refund ya reschedule" notification, mentor ko info.
+   * Atomic claim ki wajah se multi-instance par bhi notification duplicate nahi hoti.
+   */
+  async markMissedBookings(): Promise<number> {
+    const now = new Date();
+    const cutoffMs = now.getTime() - START_LATE_LIMIT_MS;
+    const ACTIVE = [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.RESCHEDULED];
+    const STILL_OPEN = [...ACTIVE, BookingStatus.IN_PROGRESS];
+    let missed = 0;
+
+    // Group sessions ka alag flow hai, unhe yahan touch nahi karte
+    const sessions = await SessionMentor.find({
+      sessionType: { $ne: SessionType.GROUP_SESSION },
+      bookings: {
+        $elemMatch: {
+          $or: [
+            { status: BookingStatus.PENDING, scheduledAt: { $lte: now } },
+            {
+              status: { $in: [BookingStatus.CONFIRMED, BookingStatus.RESCHEDULED] },
+              scheduledAt: { $lte: new Date(cutoffMs) },
+            },
+          ],
+        },
+      },
+    } as any).limit(500);
+
+
+
+    for (const session of sessions) {
+      const mentorDoc: any = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+
+      for (const booking of (session.bookings || []) as any[]) {
+        if (!ACTIVE.includes(booking.status)) continue;
+        const startMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
+        const wasPending = booking.status === BookingStatus.PENDING;
+        // Pending: slot start par expire. Confirmed/rescheduled: start + 15 min par.
+        const expireAfterMs = wasPending ? now.getTime() : cutoffMs;
+        if (Number.isNaN(startMs) || startMs > expireAfterMs) continue;
+
+        try {
+          const claim = await SessionMentor.updateOne(
+            {
+              sessionId: session.sessionId,
+              bookings: { $elemMatch: { _id: booking._id, status: { $in: ACTIVE } } },
+            } as any,
+            { $set: { 'bookings.$.status': BookingStatus.MISSED, 'bookings.$.missedAt': now } }
+          );
+          if (claim.modifiedCount === 0) continue; // kisi aur run ne / mentor ne beech me badal diya
+
+          // Top-level status tabhi badlo jab koi aur booking open na ho
+          const othersOpen = (session.bookings || []).some(
+            (b: any) => String(b._id) !== String(booking._id) && STILL_OPEN.includes(b.status)
+          );
+          if (!othersOpen) {
+            await SessionMentor.updateOne(
+              { sessionId: session.sessionId, status: { $in: ACTIVE } } as any,
+              { $set: { status: BookingStatus.MISSED } }
+            );
+          }
+
+          const menteeId: string | undefined = booking.menteeId || booking.bookedBy;
+          const bookingId = String(booking._id);
+          const paid = Number(booking.pricing?.totalAmount || session.pricing?.totalAmount || 0) > 0;
+          const title = session.title || 'your session';
+
+          if (menteeId) {
+            NotificationService.sendNotification({
+              userId: menteeId,
+              type: NotificationType.SESSION_MISSED,
+              channels: [NotificationChannel.IN_APP, NotificationChannel.EMAIL],
+              priority: 'high',
+              data: {
+                title: wasPending ? 'Booking request expired' : 'Session missed',
+                message: wasPending
+                  ? `The mentor did not respond to your request for "${title}" in time.${paid ? ' You can get a full refund or reschedule.' : ' You can reschedule.'}`
+                  : `Your session "${title}" did not start.${paid ? ' You can get a full refund or reschedule.' : ' You can reschedule.'}`,
+                sessionId: session.sessionId,
+                bookingId,
+                scheduledAt: new Date(startMs).toISOString(),
+                canRefund: paid,
+                actions: paid ? ['refund', 'reschedule'] : ['reschedule'],
+                actionUrl: `/mentorship/user-dashboard/${menteeId}?tab=my-bookings`,
+              },
+            }).catch((e) => logger.error('Notification failed (missed → mentee):', e));
+          }
+
+          if (mentorDoc?.userId) {
+            NotificationService.sendNotification({
+              userId: mentorDoc.userId,
+              type: NotificationType.SESSION_MISSED,
+              channels: [NotificationChannel.IN_APP],
+              data: {
+                ...(menteeId ? { menteeId } : {}),
+                title: wasPending ? 'Booking request expired' : 'Session missed',
+                message: wasPending
+                  ? `A booking request for "${title}" expired without a response.`
+                  : `You missed "${title}". The student has been notified.`,
+                sessionId: session.sessionId,
+                bookingId,
+              },
+            }).catch((e) => logger.error('Notification failed (missed → mentor):', e));
+          }
+
+          missed++;
+        } catch (err: any) {
+          logger.error(`Mark-missed failed for ${session.sessionId}/${booking._id}: ${err.message}`);
+        }
+      }
+    }
+
+    return missed;
+  }
   
     /**
      * Cancel session
@@ -1283,11 +1523,25 @@ class MentorshipSessionService {
         throw new BadRequestError('Booking not found');
       }
 
-      const existingStartTime = booking.scheduledAt || session.scheduledAt;
-      const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
-      if (hoursDiff < 24) {
-        throw new BadRequestError('Cannot reschedule less than 24 hours before start time');
-      }
+           // Completed / cancelled / in-progress booking reschedule nahi ho sakti
+           const RESCHEDULABLE_BOOKING_STATUSES: string[] = ['pending', 'confirmed', 'rescheduled', 'missed'];
+           if (!RESCHEDULABLE_BOOKING_STATUSES.includes(booking.status)) {
+             throw new BadRequestError(`A ${booking.status} booking cannot be rescheduled`);
+           }
+     
+           const existingStartTime = booking.scheduledAt || session.scheduledAt;
+           if (booking.status === BookingStatus.MISSED) {
+             // Mentor ki wajah se session nahi hua -> 24h rule nahi lagta, aur sirf student reschedule kare
+             const bookingMenteeId = booking.menteeId || booking.bookedBy;
+             if (userId !== bookingMenteeId) {
+               throw new ForbiddenError('Only the student can reschedule a missed session');
+             }
+           } else {
+             const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
+             if (hoursDiff < 24) {
+               throw new BadRequestError('Cannot reschedule less than 24 hours before start time');
+             }
+           }
 
       if (newScheduledAt <= new Date()) {
         throw new BadRequestError('New scheduled time must be in the future');
@@ -1307,7 +1561,8 @@ class MentorshipSessionService {
           'reschedule.reason': reason || 'Rescheduled by user'
         },
         $inc: { 'reschedule.count': 1 },
-        $push: { 'reschedule.previousDates': session.scheduledAt }
+        $push: { 'reschedule.previousDates': session.scheduledAt },
+        $unset: { 'bookings.$.missedAt': '' },
       };
 
       if (session.sessionType !== SessionType.GROUP_SESSION) {
@@ -1315,11 +1570,18 @@ class MentorshipSessionService {
         updateData.$set.status = BookingStatus.RESCHEDULED;
       }
 
-      await SessionMentor.updateOne(
-        { sessionId, 'bookings._id': bookingId },
-        updateData
-      );
-      logger.info(`Session rescheduled: ${sessionId}`);
+           // status filter ke saath: agar isi beech refund ho gaya / status badal gaya to ye fail hoga
+           const rescheduleResult = await SessionMentor.updateOne(
+            {
+              sessionId,
+              bookings: { $elemMatch: { _id: bookingId, status: { $in: RESCHEDULABLE_BOOKING_STATUSES } } },
+            } as any,
+            updateData
+          );
+          if (rescheduleResult.modifiedCount === 0) {
+            throw new ConflictError('Booking status just changed. Please refresh and try again.');
+          }
+          logger.info(`Session rescheduled: ${sessionId}`);
 
       try {
         const menteeId = booking.menteeId || booking.bookedBy;
@@ -1348,9 +1610,9 @@ class MentorshipSessionService {
         logger.warn(`Failed to send reschedule notification: ${notifErr.message}`);
       }
 
-      // TODO: Update calendar via calendarSync.service
+            // TODO: Update calendar via calendarSync.service
 
-      return session;
+            return await SessionMentor.findOne({ sessionId });
     } catch (error: any) {
       logger.error(`Failed to reschedule session: ${error.message}`);
       throw error;

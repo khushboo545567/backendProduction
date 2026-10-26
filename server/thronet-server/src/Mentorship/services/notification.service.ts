@@ -43,6 +43,8 @@ export enum NotificationType {
   REVIEW_RECEIVED = 'review_received',
   REVIEW_REPLIED = 'review_replied',
   SESSION_COMPLETED = 'session_completed',
+  // ✅ NEW: mentor ne session start nahi kiya / request par respond nahi kiya
+  SESSION_MISSED = 'session_missed',  
   // ✅ NEW — query flow had no notification at all before this
   QUERY_RECEIVED = 'query_received',
   QUERY_ANSWERED = 'query_answered',
@@ -441,9 +443,24 @@ class NotificationService {
           `,
         };
 
-      case NotificationType.QUERY_RECEIVED:
-        return {
-          subject: '❓ New Query Received',
+        case NotificationType.SESSION_MISSED:
+          return {
+            subject: '⚠️ Your session did not take place',
+            html: `
+              <h2>Your session was missed</h2>
+              <p>Hi ${userName},</p>
+              <p>${data.message || 'Your mentor did not start the session.'}</p>
+              <p>${
+                data.canRefund
+                  ? 'You can get a <strong>full refund</strong> or <strong>reschedule</strong> from My Bookings → Missed.'
+                  : 'You can <strong>reschedule</strong> from My Bookings → Missed.'
+              }</p>
+            `,
+          };
+  
+        case NotificationType.QUERY_RECEIVED:
+          return {
+            subject: '❓ New Query Received',
           html: `
             <h2>You've Received a New Query</h2>
             <p>Hi ${userName},</p>

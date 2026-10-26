@@ -49,10 +49,10 @@ class CronService {
       this.cleanupExpiredWaitlist.bind(this)
     );
 
-    // Session status update - every 10 minutes
-    this.scheduleJob(
-      'session-status',
-      '*/10 * * * *',
+       // Session status update (auto-complete + missed) - every 5 minutes
+       this.scheduleJob(
+        'session-status',
+        '*/5 * * * *',
       this.updateSessionStatus.bind(this)
     );
 
@@ -233,13 +233,20 @@ class CronService {
    * Update session status
    */
   private async updateSessionStatus(): Promise<void> {
-    // Sirf wahi bookings close hoti hain jo mentor ne start ki thi par End nahi ki.
-    // Confirmed-par-kabhi-start-nahi-hui sessions ko ye touch nahi karta.
+    // 1) Mentor ne start kiya par End nahi kiya -> time + 15 min baad auto-complete
     const closed = await mentorshipSessionService.autoCompleteOverdueBookings();
     if (closed > 0) {
       logger.info(`Auto-completed ${closed} overdue in-progress bookings`);
     }
+
+    // 2) Kabhi start nahi hui (pending / confirmed) aur start window band -> MISSED + mentee notification
+    const missed = await mentorshipSessionService.markMissedBookings();
+    if (missed > 0) {
+      logger.info(`Marked ${missed} bookings as missed`);
+    }
   }
+
+  
 
   /**
    * Stop a specific job

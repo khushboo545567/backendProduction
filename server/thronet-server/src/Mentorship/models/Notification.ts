@@ -62,10 +62,12 @@ const NotificationSchema = new Schema<INotification>(
         'booking_cancelled',
         'booking_rescheduled',
 
+        
         // Session notifications
         'session_starting_soon',
         'session_started',
         'session_completed',
+        'session_missed',
         'session_feedback_request',
 
         // Payment notifications
