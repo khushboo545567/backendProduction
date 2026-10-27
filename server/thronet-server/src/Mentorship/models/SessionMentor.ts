@@ -107,8 +107,12 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           h1:  { type: Boolean, default: false },   // 1-hour reminder
           m30: { type: Boolean, default: false },
         },
+
         startedAt:      { type: Date },
         missedAt:       { type: Date },
+        menteeJoinedAt: { type: Date },   // mentee pehli baar room me kab aaya (completed vs no_show isi se tay hota hai)
+        noShowAt:       { type: Date },
+        
         payment: {
           status: { type: String },
           method:           { type: String },
