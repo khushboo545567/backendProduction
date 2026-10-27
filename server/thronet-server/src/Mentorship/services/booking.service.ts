@@ -10,7 +10,9 @@ import TimezoneUtils from '@/Mentorship/utils/timezone';
 import { SessionType } from '@/shared/constants/sessionTypes';
 import { logger } from '@/shared/logger.util';
 import { User, UserProfile } from '@/shared/models/index.models';
-import { SessionMentor, Mentor } from '../models';
+import { DateTime } from 'luxon';
+import { SessionMentor, Mentor, Availability } from '../models';
+import availabilityService from './availability.service';
 import { ConflictError, NotFoundError, BadRequestError, ForbiddenError } from '@/shared/errors/app.error';
 import { getRedisClient } from '@/services/redis.service';
 import waitlistCron from '@/jobs/waitlistCron';
@@ -380,6 +382,79 @@ class BookingService {
     }
   }
 
+   /**
+   * Reschedule ke baad mentor availability sync:
+   * naya time BOOKED, purana time wapas free, cache invalidate.
+   */
+   private async syncAvailabilityOnReschedule(params: {
+    mentorId: string;
+    sessionId: string;
+    tz?: string;
+    oldStart: Date;
+    newStart: Date;
+    durationMin: number;
+  }): Promise<void> {
+    const { mentorId, sessionId, tz, oldStart, newStart, durationMin } = params;
+    const zone = tz || 'Asia/Kolkata';
+
+    if (oldStart.getTime() === newStart.getTime()) return;
+
+    // Us din ka availability doc dhoondo (frontend jaisa hi local/UTC date match)
+    const findDoc = async (d: Date) => {
+      const dt = DateTime.fromJSDate(d).setZone(zone);
+      const dateStr = dt.toISODate();
+      const docs: any[] = await Availability.find({
+        mentorId,
+        isDeleted: false,
+        date: {
+          $gte: dt.startOf('day').minus({ hours: 14 }).toJSDate(),
+          $lte: dt.endOf('day').plus({ hours: 14 }).toJSDate(),
+        },
+      }).lean();
+      return (
+        docs.find((a: any) => {
+          const x = new Date(a.date);
+          const utcStr = x.toISOString().slice(0, 10);
+          const localStr = DateTime.fromJSDate(x).setZone(zone).toISODate();
+          return utcStr === dateStr || localStr === dateStr;
+        }) || null
+      );
+    };
+
+    const toRange = (d: Date, docTz: string) => {
+      const start = DateTime.fromJSDate(d).setZone(docTz);
+      return {
+        startTime: start.toFormat('HH:mm'),
+        endTime: start.plus({ minutes: durationMin }).toFormat('HH:mm'),
+      };
+    };
+
+    // 1) Naya slot book karo
+    const newDoc = await findDoc(newStart);
+    if (newDoc) {
+      const r = toRange(newStart, newDoc.timezone || zone);
+      const booked = await availabilityService.bookRange(
+        newDoc.availabilityId,
+        mentorId,
+        r.startTime,
+        r.endTime,
+        sessionId
+      );
+      if (!booked) {
+        logger.warn(`New slot ${r.startTime}-${r.endTime} could not be marked booked (already booked or missing)`);
+      }
+    } else {
+      logger.warn(`No availability doc found for new reschedule date, mentor ${mentorId}`);
+    }
+
+    // 2) Purana slot free karo
+    const oldDoc = await findDoc(oldStart);
+    if (oldDoc) {
+      const r = toRange(oldStart, oldDoc.timezone || zone);
+      await availabilityService.releaseRange(oldDoc.availabilityId, r.startTime, r.endTime);
+    }
+  }
+
   /**
    * Reschedule booking
    */
@@ -398,8 +473,11 @@ class BookingService {
       if (!session) {
         throw new Error('Session not found');
       }
-
-      const oldScheduledAt = session.scheduledAt;
+      // Is booking ka purana time (multi-booking session mein booking ka apna time hota hai)
+      const oldBooking: any = (session.bookings || []).find(
+        (b: any) => String(b?.bookingId) === String(bookingId) || String(b?._id) === String(bookingId)
+      );
+      const oldScheduledAt = oldBooking?.scheduledAt || session.scheduledAt;
 
       const updatedSession = await sessionService.rescheduleSession(
         sessionId,
@@ -409,6 +487,20 @@ class BookingService {
         authToken,
         bookingId
       );
+
+      // Naya slot BOOKED karo, purana slot free karo (fail hone par reschedule nahi rukega)
+      try {
+        await this.syncAvailabilityOnReschedule({
+          mentorId: updatedSession.mentorId,
+          sessionId: String(updatedSession.sessionId || sessionId),
+          tz: updatedSession.timezone,
+          oldStart: new Date(oldScheduledAt),
+          newStart: new Date(newScheduledAt),
+          durationMin: Number(updatedSession.duration) || 30,
+        });
+      } catch (syncErr: any) {
+        logger.warn(`⚠️ Availability sync after reschedule failed: ${syncErr.message}`);
+      }
 
       const actualMenteeId = updatedSession.menteeId || (updatedSession.bookings && updatedSession.bookings[0]?.menteeId);
       const mentorDoc = await Mentor.findOne({ mentorId: updatedSession.mentorId, isDeleted: false });
@@ -466,7 +558,10 @@ class BookingService {
         );
       }
 
+      await invalidateMentorAvailabilityCache(updatedSession.mentorId);
+
       // Note: in-app SESSION_RESCHEDULED notification is already sent inside
+
       // sessionService.rescheduleSession() above — not duplicated here.
 
       logger.info(`✅ Booking rescheduled successfully: ${sessionId}`);

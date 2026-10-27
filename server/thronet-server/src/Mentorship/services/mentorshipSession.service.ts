@@ -2,7 +2,8 @@ import mentorService from './mentor.service';
 import { SESSION_DURATIONS, SessionType } from '@/shared/constants/sessionTypes';
 import { PaymentMethod, PaymentStatus, ISessionMentor } from '@/Mentorship/interface/session.types';
 import { Types } from 'mongoose';
-import { Mentor, SessionMentor, SeniorSession } from '../models';
+import { Mentor, SessionMentor, SeniorSession, Availability } from '../models';
+import { DateTime } from 'luxon';
 import availabilityService from './availability.service';
 import { computeEndTime, toMinutes, toTimeString } from '@/Mentorship/utils/slotSplitter';
 import { logger } from '@/shared/logger.util';
@@ -1616,7 +1617,35 @@ class MentorshipSessionService {
     }
   }
 
-  async rescheduleSession(
+
+    /**
+   * Mentor ka us din ka availability doc dhoondta hai.
+   * doc.date UTC date ya doc ke timezone wali date, dono se match karta hai.
+   */
+    private async findAvailabilityDocForDate(mentorId: string, when: Date): Promise<any | null> {
+      const docs: any[] = await Availability.find({
+        mentorId,
+        isDeleted: false,
+        date: {
+          $gte: new Date(when.getTime() - 36 * 60 * 60 * 1000),
+          $lte: new Date(when.getTime() + 36 * 60 * 60 * 1000),
+        },
+      }).lean();
+  
+      const targetIn = (a: any) =>
+        DateTime.fromJSDate(when).setZone(a.timezone || 'Asia/Kolkata').toISODate();
+  
+      return (
+        docs.find((a: any) => new Date(a.date).toISOString().slice(0, 10) === targetIn(a)) ||
+        docs.find(
+          (a: any) =>
+            DateTime.fromJSDate(new Date(a.date)).setZone(a.timezone || 'Asia/Kolkata').toISODate() === targetIn(a)
+        ) ||
+        null
+      );
+    }
+  
+    async rescheduleSession(
     sessionId: string,
     userId: string,
     newScheduledAt: Date,
@@ -1655,9 +1684,39 @@ class MentorshipSessionService {
              }
            }
 
-      if (newScheduledAt <= new Date()) {
-        throw new BadRequestError('New scheduled time must be in the future');
-      }
+           if (newScheduledAt <= new Date()) {
+            throw new BadRequestError('New scheduled time must be in the future');
+          }
+    
+          // ---- Mentor availability sync: pehle NAYA slot lock karo ----
+          const oldSlotParts = String((booking as any).slotTime || '')
+            .split(' - ')
+            .map((t: string) => t.trim());
+          const hasOldSlot = Boolean((booking as any).availabilityId && oldSlotParts[0] && oldSlotParts[1]);
+          const slotDurationMin = Number(session.duration) > 0 ? Number(session.duration) : 30;
+          let newSlot: { availabilityId: string; startTime: string; endTime: string } | null = null;
+    
+          if (session.sessionType !== SessionType.GROUP_SESSION) {
+            const newDoc = await this.findAvailabilityDocForDate(session.mentorId, newScheduledAt);
+            if (newDoc) {
+              const tz = newDoc.timezone || 'Asia/Kolkata';
+              const startTime = DateTime.fromJSDate(newScheduledAt).setZone(tz).toFormat('HH:mm');
+              const endTime = computeEndTime(startTime, slotDurationMin);
+              const locked = await availabilityService.bookRange(
+                newDoc.availabilityId,
+                session.mentorId,
+                startTime,
+                endTime,
+                session.sessionId
+              );
+              if (!locked) {
+                throw new ConflictError('This time slot is no longer available. Please pick another slot.');
+              }
+              newSlot = { availabilityId: newDoc.availabilityId, startTime, endTime };
+            } else {
+              logger.warn(`No availability doc found for reschedule date, mentor ${session.mentorId}`);
+            }
+          }
 
       const updateData: any = {
         $set: {
@@ -1682,6 +1741,11 @@ class MentorshipSessionService {
         updateData.$set.status = BookingStatus.RESCHEDULED;
       }
 
+      if (newSlot) {
+        updateData.$set['bookings.$.availabilityId'] = newSlot.availabilityId;
+        updateData.$set['bookings.$.slotTime'] = `${newSlot.startTime} - ${newSlot.endTime}`;
+      }
+
            // status filter ke saath: agar isi beech refund ho gaya / status badal gaya to ye fail hoga
            const rescheduleResult = await SessionMentor.updateOne(
             {
@@ -1690,10 +1754,29 @@ class MentorshipSessionService {
             } as any,
             updateData
           );
+
           if (rescheduleResult.modifiedCount === 0) {
+            if (newSlot) {
+              await availabilityService.releaseRange(newSlot.availabilityId, newSlot.startTime, newSlot.endTime);
+            }
+
             throw new ConflictError('Booking status just changed. Please refresh and try again.');
           }
+
           logger.info(`Session rescheduled: ${sessionId}`);
+
+          // Purana slot wapas free (naya slot upar lock ho chuka hai)
+          if (hasOldSlot) {
+            try {
+              await availabilityService.releaseRange(
+                String((booking as any).availabilityId),
+                oldSlotParts[0],
+                oldSlotParts[1]
+              );
+            } catch (relErr: any) {
+              logger.warn(`Old slot release failed after reschedule: ${relErr.message}`);
+            }
+          }
 
       try {
         const menteeId = booking.menteeId || booking.bookedBy;
