@@ -60,17 +60,18 @@ class SeniorMentorApplicationValidator {
         .isInt({ min: 1980, max: new Date().getFullYear() + 10 })
         .withMessage('Graduation year seems invalid'),
 
+      // Optional: sirf jinke paas current role / company hai wahi bharenge
       body('currentRole')
+        .optional({ checkFalsy: true })
         .trim()
-        .notEmpty()
-        .withMessage('Current role is required')
-        .isLength({ max: 100 }),
+        .isLength({ max: 100 })
+        .withMessage('Current role cannot exceed 100 characters'),
 
       body('currentCompany')
+        .optional({ checkFalsy: true })
         .trim()
-        .notEmpty()
-        .withMessage('Current company is required')
-        .isLength({ max: 100 }),
+        .isLength({ max: 100 })
+        .withMessage('Current company cannot exceed 100 characters'),
 
       body('shortBio')
         .trim()
@@ -170,8 +171,8 @@ class SeniorMentorApplicationValidator {
       body('graduationYear')
         .optional()
         .isInt({ min: 1980, max: new Date().getFullYear() + 10 }),
-      body('currentRole').optional().trim().isLength({ max: 100 }),
-      body('currentCompany').optional().trim().isLength({ max: 100 }),
+      body('currentRole').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
+      body('currentCompany').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
       body('shortBio').optional().trim().isLength({ min: 50, max: 1000 }),
       body('linkedinUrl')
         .optional()

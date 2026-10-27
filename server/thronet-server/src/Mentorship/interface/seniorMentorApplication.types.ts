@@ -46,8 +46,8 @@ export interface ISeniorMentorApplication extends TimeStamps, SoftDelete {
   degree: string;
   fieldOfStudy: string;
   graduationYear: number;
-  currentRole: string;
-  currentCompany: string;
+  currentRole?: string; // Optional
+  currentCompany?: string; // Optional
   shortBio: string;
 
   // ── 2. Professional ────────────────────────────────────────────
@@ -92,8 +92,8 @@ export interface CreateSeniorMentorApplicationInput {
   degree: string;
   fieldOfStudy: string;
   graduationYear: number;
-  currentRole: string;
-  currentCompany: string;
+  currentRole?: string; // Optional
+  currentCompany?: string; // Optional
   shortBio: string;
 
   linkedinUrl: string;

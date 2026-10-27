@@ -82,13 +82,13 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
     },
     currentRole: {
       type: String,
-      required: [true, 'Current role is required'],
+      // required: [true, 'Current role is required'],
       trim: true,
       maxlength: [100, 'Current role cannot exceed 100 characters'],
     },
     currentCompany: {
       type: String,
-      required: [true, 'Current company is required'],
+      // required: [true, 'Current company is required'],
       trim: true,
       maxlength: [100, 'Current company cannot exceed 100 characters'],
     },
