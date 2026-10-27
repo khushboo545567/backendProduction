@@ -54,7 +54,7 @@ export interface ISeniorMentorApplication extends TimeStamps, SoftDelete {
   linkedinUrl: string;
   githubUrl?: string;
   portfolioUrl?: string;
-  yearsOfExperience: number;
+  yearsOfExperience?: number; // Optional
   experienceLevel: ExperienceLevel;
   primaryExpertise: Domain;
   otherSkills: string[];
@@ -99,7 +99,7 @@ export interface CreateSeniorMentorApplicationInput {
   linkedinUrl: string;
   githubUrl?: string;
   portfolioUrl?: string;
-  yearsOfExperience: number;
+  yearsOfExperience?: number; // Optional
   experienceLevel: ExperienceLevel;
   primaryExpertise: Domain;
   otherSkills?: string[];
