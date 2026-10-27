@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import GoogleAuthService from '../services/googleAuth.service';
 import LoggerUtil from '@/shared/logger.util';
 import { setAuthCookies, tokensForResponse } from '@/shared/utils/authCookies.util';
+import { DeviceData } from '../interfaces/auth.interfaces';
 
 /**
  * Web clients use these endpoints too (Google One Tap), so set the httpOnly session
@@ -19,22 +20,29 @@ const withSessionCookies = (req: Request, res: Response, result: any): any => {
     return { ...result, tokens: tokensForResponse(req, result.tokens) };
 };
 
+/** Request se device info (IP, browser) nikalo, service ko pass karne ke liye. */
+const buildContext = (req: Request): DeviceData => {
+    const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
+    return {
+        ipAddress: req.ip || '0.0.0.0',
+        userAgent,
+        deviceType: /mobile|android|iphone/i.test(userAgent) ? 'mobile' : 'desktop',
+        deviceName: 'Google Login Device',
+    } as DeviceData;
+};
+
 /**
- * Controller for Google ID Token verification (Mobile App Native Auth Flow)
  * POST /api/v1/auth/google/verify
  */
 export async function googleVerifyController(req: Request, res: Response): Promise<void> {
     try {
         const { idToken } = req.body;
         if (!idToken) {
-            res.status(400).json({
-                success: false,
-                message: 'idToken is required',
-            });
+            res.status(400).json({ success: false, message: 'idToken is required' });
             return;
         }
 
-        const result = await GoogleAuthService.verifyOrAuthenticate(idToken);
+        const result = await GoogleAuthService.verifyOrAuthenticate(idToken, buildContext(req));
 
         res.status(200).json({
             success: true,
@@ -50,10 +58,10 @@ export async function googleVerifyController(req: Request, res: Response): Promi
 }
 
 /**
- * Controller for Google Registration / Onboarding completion (Mobile App Flow)
  * POST /api/v1/auth/google/register
  */
 export async function googleRegisterController(req: Request, res: Response): Promise<void> {
+    const startedAt = Date.now();
     try {
         const { idToken } = req.body;
         if (!idToken) {
@@ -64,14 +72,19 @@ export async function googleRegisterController(req: Request, res: Response): Pro
             return;
         }
 
-        const result = await GoogleAuthService.registerGoogleUser(req.body);
+        const result = await GoogleAuthService.registerGoogleUser(req.body, buildContext(req));
+
+        LoggerUtil.info('Google register completed', { ms: Date.now() - startedAt });
 
         res.status(200).json({
             success: true,
             data: withSessionCookies(req, res, result),
         });
     } catch (error: any) {
-        LoggerUtil.error('Google register controller failed', { error: error.message });
+        LoggerUtil.error('Google register controller failed', {
+            error: error.message,
+            ms: Date.now() - startedAt,
+        });
         res.status(400).json({
             success: false,
             message: error.message || 'Google user registration failed',

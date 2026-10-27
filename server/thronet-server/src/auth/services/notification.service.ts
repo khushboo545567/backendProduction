@@ -744,53 +744,83 @@ class NotificationService {
 
     // 5️⃣ Password Reset Template
     this.emailTemplates.set('password-reset', Handlebars.compile(`
-    <!DOCTYPE html>
-    <html>
+    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+    <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Password Reset Request</title>
+      <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Password Reset Request - Throne8</title>
+      <style type="text/css">
+        body { margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f8f6f8; }
+        @media only screen and (max-width: 620px) {
+          .email-container { width: 100% !important; max-width: 100% !important; border-radius: 0 !important; }
+          .mobile-padding { padding-left: 20px !important; padding-right: 20px !important; }
+          .otp-code { font-size: 32px !important; letter-spacing: 6px !important; }
+        }
+      </style>
     </head>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f4f4f4;">
-      <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-        <h1 style="color: white; margin: 0; font-size: 28px;">Password Reset</h1>
-      </div>
-
-      <div style="background: white; padding: 40px; border-radius: 0 0 10px 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-        <p style="font-size: 16px; margin-bottom: 20px;">Hello,</p>
-
-        <p style="font-size: 16px; margin-bottom: 30px;">
-          You requested to reset your password. Use this code to proceed:
-        </p>
-
-        <div style="text-align: center; margin: 40px 0;">
-          <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px 40px; border-radius: 10px; display: inline-block;">
-            <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px; color: white; font-family: 'Courier New', monospace;">{{resetCode}}</span>
-          </div>
-        </div>
-
-        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 30px 0; border-radius: 4px;">
-          <p style="margin: 0; color: #856404; font-size: 14px;">
-            <strong>This code expires in {{expiryMinutes}} minutes</strong>
-          </p>
-        </div>
-
-        <p style="font-size: 14px; color: #666; margin-top: 30px;">
-          If you didn't request this, please ignore this email or contact support if you have concerns.
-        </p>
-
-        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee;">
-          <p style="font-size: 12px; color: #999; text-align: center; margin: 0;">
-            This is an automated message, please do not reply to this email.
-          </p>
-          <p style="font-size: 12px; color: #999; text-align: center; margin: 10px 0 0 0;">
-            © 2024 Auth Service. All rights reserved.
-          </p>
-        </div>
-      </div>
+    <body style="margin: 0; padding: 0; background-color: #f8f6f8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #2d1620; -webkit-font-smoothing: antialiased;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8f6f8; min-height: 100vh;">
+        <tr>
+          <td align="center" style="padding: 40px 15px;">
+            <table role="presentation" class="email-container" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(45, 22, 32, 0.08); border: 1px solid #ebdbe2;">
+              <tr>
+                <td align="center" style="background: #f5576c; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 34px 24px 30px 24px; text-align: center;">
+                  <div style="font-size: 26px; line-height: 1; margin-bottom: 6px;">👑</div>
+                  <div style="font-size: 24px; font-weight: 900; letter-spacing: 1px; color: #ffffff; text-transform: uppercase; margin: 0;">THRONE<span style="color: #fff2f5;">8</span></div>
+                  <div style="font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255, 255, 255, 0.88); margin-top: 4px; font-weight: 600;">Security Verification</div>
+                  <h1 style="color: #ffffff; margin: 16px 0 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.3px;">🔑 Password Reset</h1>
+                </td>
+              </tr>
+              <tr>
+                <td class="mobile-padding" style="padding: 38px 40px 30px 40px;">
+                  <p style="font-size: 16px; line-height: 24px; color: #2d1620; margin: 0 0 14px 0;">Hello{{#if userName}} <strong>{{userName}}</strong>{{/if}},</p>
+                  <p style="font-size: 15px; line-height: 24px; color: #5a4b51; margin: 0 0 28px 0;">You recently requested to reset your password for your Throne8 account. Use the verification code below to proceed:</p>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 0 0 24px 0;">
+                    <tr>
+                      <td align="center">
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="background-color: #fff5f7; border: 2px dashed #f5576c; border-radius: 12px; width: 100%; max-width: 360px;">
+                          <tr>
+                            <td align="center" style="padding: 22px 20px;">
+                              <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #d63384; margin-bottom: 8px;">One-Time Verification Code</div>
+                              <div class="otp-code" style="font-family: 'Courier New', Courier, Consolas, Monaco, monospace; font-size: 38px; font-weight: 900; letter-spacing: 9px; color: #2d1620; padding-left: 9px; margin: 6px 0;">{{resetCode}}</div>
+                              <div style="display: inline-block; background-color: #ffe6ec; color: #c2185b; font-size: 12px; font-weight: 700; padding: 5px 14px; border-radius: 20px; margin-top: 8px;">⏱️ This code expires in {{expiryMinutes}} minutes</div>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                  <p style="font-size: 14px; line-height: 22px; color: #6e5d64; margin: 0 0 26px 0; text-align: center;">Enter this code on the Throne8 password reset screen to set your new password.</p>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #fff9fa; border-left: 4px solid #f5576c; border-radius: 6px; margin: 0 0 24px 0;">
+                    <tr>
+                      <td style="padding: 16px 18px;">
+                        <div style="font-size: 13px; font-weight: 700; color: #721c24; margin-bottom: 6px;">🛡️ Security Information</div>
+                        <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 20px; color: #6e5d64;">
+                          <li style="margin-bottom: 4px;"><strong>Never share this code:</strong> Throne8 team members will never ask for your reset code or password.</li>
+                          {{#if ipAddress}}<li style="margin-bottom: 4px;"><strong>Request details:</strong> Initiated from IP {{ipAddress}}</li>{{/if}}
+                          <li><strong>Didn't request this?</strong> If you didn't initiate this request, please ignore this email or change your password if you suspect unauthorized activity.</li>
+                        </ul>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+              <tr>
+                <td style="background-color: #faf5f7; padding: 24px 30px; border-top: 1px solid #ebdbe2; text-align: center;">
+                  <p style="font-size: 12px; line-height: 18px; color: #8e7d85; margin: 0 0 6px 0;">This is an automated message, please do not reply to this email.</p>
+                  <p style="font-size: 12px; color: #8e7d85; margin: 0 0 10px 0;">Need help? Contact <a href="mailto:support@throne8.com" style="color: #f5576c; font-weight: 600; text-decoration: underline;">support@throne8.com</a></p>
+                  <p style="font-size: 11px; color: #aa9ca3; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;">© 2026 Throne8. All rights reserved.</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
   `));
+
 
     // 6️⃣ Password Changed Confirmation Template
     this.emailTemplates.set('password-changed', Handlebars.compile(`
@@ -994,35 +1024,8 @@ class NotificationService {
   `));
 
     // ==================== PASSWORD RESET CODE TEMPLATE ====================
-    this.emailTemplates.set('password-reset', Handlebars.compile(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Password Reset Code</title>
-    </head>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-        <h1 style="color: white; margin: 0;">Password Reset</h1>
-      </div>
-      <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-        <p style="font-size: 16px;">Hello {{userName}},</p>
-        <p style="font-size: 16px;">You requested to reset your password. Use this code:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <div style="background: white; padding: 20px; border-radius: 10px; display: inline-block; border: 2px solid #fa709a;">
-            <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #fa709a;">{{resetCode}}</span>
-          </div>
-        </div>
-        <p style="font-size: 14px; color: #666;">This code will expire in {{expiryMinutes}} minutes.</p>
-        <p style="font-size: 14px; color: #999;"><strong>IP Address:</strong> {{ipAddress}}</p>
-        <p style="font-size: 14px; color: #666;">If you didn't request this, please ignore this email.</p>
-        <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-        <p style="font-size: 12px; color: #999; text-align: center;">© 2024 Auth Service. All rights reserved.</p>
-      </div>
-    </body>
-    </html>
-  `));
+    // Note: 'password-reset' is registered with the modern Throne8 template above and loaded dynamically from .hbs
+
 
     // ==================== PASSWORD RESET SUCCESS TEMPLATE ====================
     this.emailTemplates.set('password-reset-success', Handlebars.compile(`
