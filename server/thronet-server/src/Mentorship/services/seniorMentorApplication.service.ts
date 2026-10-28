@@ -239,7 +239,7 @@ class SeniorMentorApplicationService {
 
   /**
    * Submit a new "Become Senior Mentor" application.
-   * One active (non-deleted) application per user — enforced both here
+   * One active (non-deleted) application per user, enforced both here
    * (fast, friendly error) and at the DB level (partial unique index).
    */
   async apply(input: CreateSeniorMentorApplicationInput): Promise<any> {
@@ -278,6 +278,10 @@ class SeniorMentorApplicationService {
         }),
       ]);
 
+      // Optional fields: khali string DB me store na ho, undefined jaye
+      const currentRole = input.currentRole?.trim() || undefined;
+      const currentCompany = input.currentCompany?.trim() || undefined;
+
       const application = await seniorMentorApplicationRepository.create({
         userId: input.userId,
         mentorRole: input.mentorRole,
@@ -288,8 +292,8 @@ class SeniorMentorApplicationService {
         degree: input.degree,
         fieldOfStudy: input.fieldOfStudy,
         graduationYear: input.graduationYear,
-        currentRole: input.currentRole,
-        currentCompany: input.currentCompany,
+        currentRole,
+        currentCompany,
         shortBio: input.shortBio,
 
         linkedinUrl: input.linkedinUrl,
@@ -316,7 +320,7 @@ class SeniorMentorApplicationService {
         isActive: true,
       });
 
-      logger.info(`📝 Senior Mentor application submitted: ${application.seniorMentorId}`);
+      logger.info(`Senior Mentor application submitted: ${application.seniorMentorId}`);
       return application;
     } catch (error: any) {
       logger.error(`Failed to submit senior mentor application: ${error.message}`);
@@ -375,7 +379,7 @@ class SeniorMentorApplicationService {
       );
     }
 
-    logger.info(`📸 Senior Mentor profile photo updated for user: ${userId}`);
+    logger.info(`Senior Mentor profile photo updated for user: ${userId}`);
     return updated;
   }
 
@@ -383,6 +387,7 @@ class SeniorMentorApplicationService {
    * Owner-only update. Verified mentors can safely update their profile
    * information (role, company, education, bio, skills, etc.).
    * Protected fields (status, verification, userId, dates, documents) are strictly blocked.
+   * currentRole / currentCompany optional hain: khali string bhejne par field clear ho jayegi.
    */
   async update(
     seniorMentorId: string,
@@ -444,6 +449,7 @@ class SeniorMentorApplicationService {
     );
 
     // Sync to Mentor model if one exists for this user
+    // (khali role/company par Mentor model ko touch nahi karte, taaki wahan required fields na toote)
     try {
       const mentorUpdates: Record<string, any> = {};
       if (cleanUpdates.fullName) mentorUpdates.name = cleanUpdates.fullName;
@@ -467,7 +473,7 @@ class SeniorMentorApplicationService {
       logger.warn(`Could not sync Senior Mentor update to Mentor model: ${err?.message}`);
     }
 
-    logger.info(`✏️ Senior Mentor application updated: ${seniorMentorId}`);
+    logger.info(`Senior Mentor application updated: ${seniorMentorId}`);
     return updated;
   }
 
@@ -481,7 +487,7 @@ class SeniorMentorApplicationService {
     }
 
     await seniorMentorApplicationRepository.softDeleteBySeniorMentorId(seniorMentorId);
-    logger.info(`🗑️ Senior Mentor application withdrawn: ${seniorMentorId}`);
+    logger.info(`Senior Mentor application withdrawn: ${seniorMentorId}`);
   }
 
   async list(
@@ -520,7 +526,7 @@ class SeniorMentorApplicationService {
       rejectionReason: undefined,
     });
 
-    logger.info(`✅ Senior Mentor application approved: ${seniorMentorId} by ${adminUserId}`);
+    logger.info(`Senior Mentor application approved: ${seniorMentorId} by ${adminUserId}`);
 
     seniorNotificationService.notifyApplicationStatus(
       updated || application,
@@ -547,7 +553,7 @@ class SeniorMentorApplicationService {
       verifiedBy: adminUserId,
     });
 
-    logger.info(`❌ Senior Mentor application rejected: ${seniorMentorId} by ${adminUserId}`);
+    logger.info(`Senior Mentor application rejected: ${seniorMentorId} by ${adminUserId}`);
 
     seniorNotificationService.notifyApplicationStatus(
       updated || application,
@@ -571,7 +577,7 @@ class SeniorMentorApplicationService {
       verificationStatus: ApplicationStatus.UNDER_REVIEW,
     });
 
-    logger.info(`👀 Senior Mentor application marked under review: ${seniorMentorId} by ${adminUserId}`);
+    logger.info(`Senior Mentor application marked under review: ${seniorMentorId} by ${adminUserId}`);
     return updated;
   }
 }

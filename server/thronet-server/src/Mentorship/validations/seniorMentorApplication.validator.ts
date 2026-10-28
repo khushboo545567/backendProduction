@@ -60,17 +60,18 @@ class SeniorMentorApplicationValidator {
         .isInt({ min: 1980, max: new Date().getFullYear() + 10 })
         .withMessage('Graduation year seems invalid'),
 
+      // Optional: sirf jinke paas current role / company hai wahi bharenge
       body('currentRole')
+        .optional({ checkFalsy: true })
         .trim()
-        .notEmpty()
-        .withMessage('Current role is required')
-        .isLength({ max: 100 }),
+        .isLength({ max: 100 })
+        .withMessage('Current role cannot exceed 100 characters'),
 
       body('currentCompany')
+        .optional({ checkFalsy: true })
         .trim()
-        .notEmpty()
-        .withMessage('Current company is required')
-        .isLength({ max: 100 }),
+        .isLength({ max: 100 })
+        .withMessage('Current company cannot exceed 100 characters'),
 
       body('shortBio')
         .trim()
@@ -94,9 +95,9 @@ class SeniorMentorApplicationValidator {
 
       body('portfolioUrl').optional({ checkFalsy: true }).trim().isURL().withMessage('Invalid portfolio URL'),
 
+      // Optional: khali chhodne par field body me aata hi nahi
       body('yearsOfExperience')
-        .notEmpty()
-        .withMessage('Years of experience is required')
+        .optional({ checkFalsy: true })
         .isFloat({ min: 0, max: 50 })
         .withMessage('Years of experience must be between 0 and 50'),
 
@@ -170,8 +171,8 @@ class SeniorMentorApplicationValidator {
       body('graduationYear')
         .optional()
         .isInt({ min: 1980, max: new Date().getFullYear() + 10 }),
-      body('currentRole').optional().trim().isLength({ max: 100 }),
-      body('currentCompany').optional().trim().isLength({ max: 100 }),
+      body('currentRole').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
+      body('currentCompany').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
       body('shortBio').optional().trim().isLength({ min: 50, max: 1000 }),
       body('linkedinUrl')
         .optional()
@@ -184,7 +185,7 @@ class SeniorMentorApplicationValidator {
         .matches(/^https?:\/\/(www\.)?github\.com\/.+/i)
         .withMessage('Invalid GitHub URL'),
       body('portfolioUrl').optional({ checkFalsy: true }).trim().isURL(),
-      body('yearsOfExperience').optional().isFloat({ min: 0, max: 60 }),
+      body('yearsOfExperience').optional({ checkFalsy: true }).isFloat({ min: 0, max: 60 }),
       body('experienceLevel').optional().isIn(Object.values(ExperienceLevel)),
       body('primaryExpertise').optional().isIn(Object.values(Domain)),
       body('otherSkills').optional().isArray({ max: 20 }),

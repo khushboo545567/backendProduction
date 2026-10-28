@@ -107,8 +107,12 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           h1:  { type: Boolean, default: false },   // 1-hour reminder
           m30: { type: Boolean, default: false },
         },
+
         startedAt:      { type: Date },
         missedAt:       { type: Date },
+        menteeJoinedAt: { type: Date },   // mentee pehli baar room me kab aaya (completed vs no_show isi se tay hota hai)
+        noShowAt:       { type: Date },
+        
         payment: {
           status: { type: String },
           method:           { type: String },
@@ -131,6 +135,22 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           wasSuccessful:    { type: Boolean, default: true },
           followUpRequired: { type: Boolean, default: false },
           followUpNotes:    { type: String },
+        },
+        // Missed-session refund: mentee ke payout details (mentor ko return karne ke liye)
+        refundRequest: {
+          email:         { type: String },
+          phone:         { type: String },
+          upiId:         { type: String },
+          note:          { type: String },
+          amount:        { type: Number },
+          requestedAt:   { type: Date },
+          // Admin panel tracking
+          status:        { type: String, enum: ['pending', 'refunded'], index: true },
+          refundMode:    { type: String, enum: ['gateway', 'manual'] },
+          transactionId: { type: String },
+          reference:     { type: String },
+          refundedAt:    { type: Date },
+          handledBy:     { type: String },
         },
       },
     ],

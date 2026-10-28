@@ -44,7 +44,8 @@ export enum NotificationType {
   REVIEW_REPLIED = 'review_replied',
   SESSION_COMPLETED = 'session_completed',
   // ✅ NEW: mentor ne session start nahi kiya / request par respond nahi kiya
-  SESSION_MISSED = 'session_missed',  
+  SESSION_MISSED = 'session_missed',
+  SESSION_NO_SHOW = 'session_no_show',
   // ✅ NEW — query flow had no notification at all before this
   QUERY_RECEIVED = 'query_received',
   QUERY_ANSWERED = 'query_answered',
@@ -567,7 +568,7 @@ class NotificationService {
   ): NotificationChannel[] {
     // High priority - send via all channels
     if (priority === 'urgent' || priority === 'high') {
-      return [NotificationChannel.EMAIL, NotificationChannel.SMS];
+      return [NotificationChannel.IN_APP, NotificationChannel.EMAIL, NotificationChannel.SMS];
     }
 
     // Type-specific defaults

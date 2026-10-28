@@ -279,6 +279,7 @@ class RefundService {
     sessionId: string;
     bookingId: string;
     userId: string;
+    refundDetails?: { email: string; phone?: string; upiId?: string; note?: string };
   }): Promise<RefundResult> {
     try {
       logger.info(`Processing missed-session refund: ${input.sessionId} / ${input.bookingId}`);
@@ -311,7 +312,25 @@ class RefundService {
           sessionId: session.sessionId,
           bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.MISSED } },
         } as any,
-        { $set: { 'bookings.$.status': BookingStatus.CANCELLED } }
+        {
+          $set: {
+            'bookings.$.status': BookingStatus.CANCELLED,
+            ...(input.refundDetails
+              ? {
+                  'bookings.$.refundRequest': {
+                    email: input.refundDetails.email,
+                    phone: input.refundDetails.phone || '',
+                    upiId: input.refundDetails.upiId || '',
+                    note: input.refundDetails.note || '',
+
+                    amount: refundAmount,
+                    requestedAt: new Date(),
+                    status: 'pending',
+                  },
+                }
+              : {}),
+          },
+        }
       );
       if (claim.modifiedCount === 0) {
         throw new ConflictError('This booking was already refunded or rescheduled');
@@ -354,6 +373,32 @@ class RefundService {
       cancellationLog.refundTransactionId = transactionId;
       await cancellationLog.save();
 
+      // Admin panel ke liye: gateway se gaya to auto-refunded, warna admin ko manually dena hai
+      const isManualRefund = String(transactionId).startsWith('REFUND_MANUAL');
+      try {
+        await SessionMentor.updateOne(
+          { sessionId: session.sessionId, 'bookings._id': booking._id } as any,
+          {
+            $set: {
+              'bookings.$.refundRequest.refundMode': isManualRefund ? 'manual' : 'gateway',
+              'bookings.$.refundRequest.transactionId': transactionId,
+              ...(isManualRefund
+                ? {}
+                : {
+                    'bookings.$.refundRequest.status': 'refunded',
+                    'bookings.$.refundRequest.refundedAt': new Date(),
+                    'bookings.$.refundRequest.reference': transactionId,
+                  }),
+            },
+          } as any
+        );
+      } catch (rrErr: any) {
+        logger.error(`Missed refund: refundRequest update failed: ${rrErr.message}`);
+      }
+
+
+      
+
       try {
         const otherActive = (session.bookings || []).some(
           (b: any) =>
@@ -387,6 +432,84 @@ class RefundService {
         },
       }).catch((e) => logger.error('Notification failed (missed refund):', e));
 
+       // Mentor ko notification + email: student ne refund maanga, ye uski payout details hain
+       try {
+        const missedMentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+        if (missedMentorDoc?.userId) {
+          const rd = input.refundDetails;
+          const isManual = String(transactionId).startsWith('REFUND_MANUAL');
+          const contactParts = [
+            rd?.email ? `Email: ${rd.email}` : '',
+            rd?.phone ? `Phone: ${rd.phone}` : '',
+            rd?.upiId ? `UPI: ${rd.upiId}` : '',
+          ]
+            .filter(Boolean)
+            .join(' | ');
+          const mentorMessage = (
+            isManual
+              ? `Refund requested for missed session "${session.title}". Please return ₹${refundAmount} to the student. ${contactParts}${rd?.note ? ` | Note: ${rd.note}` : ''}`
+              : `Student requested a refund of ₹${refundAmount} for missed session "${session.title}" (initiated via payment gateway). ${contactParts}${rd?.note ? ` | Note: ${rd.note}` : ''}`
+          ).slice(0, 1000);
+
+          NotificationService.sendNotification({
+            userId: missedMentorDoc.userId,
+            type: NotificationType.SESSION_CANCELLED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              menteeId: input.userId,
+              title: isManual ? 'Refund Required - Missed Session' : 'Refund Requested - Missed Session',
+              message: mentorMessage,
+              sessionId: session.sessionId,
+              bookingId: input.bookingId,
+              refundAmount,
+              refundDetails: rd || null,
+              requiresManualPayout: isManual,
+            },
+          }).catch((e) => logger.error('Notification failed (missed refund -> mentor):', e));
+
+          // Email (best-effort)
+          const esc = (v?: string) =>
+            String(v ?? '').replace(/[&<>"']/g, (c) =>
+              ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
+            );
+          const mentorUser = await User.findByUserId(missedMentorDoc.userId);
+          if (mentorUser?.email) {
+            emailService
+              .sendEmail({
+                to: mentorUser.email,
+                subject: isManual ? 'Action needed: refund for a missed session' : 'Refund requested for a missed session',
+                html: `
+                  <h2>Refund requested - missed session</h2>
+                  <p>Session: <strong>${esc(session.title)}</strong></p>
+                  <p>Amount: <strong>₹${refundAmount}</strong></p>
+                  <p>${isManual ? 'Please return the amount to the student using the details below.' : 'The refund was initiated through the payment gateway. Student contact details:'}</p>
+                  <ul>
+                    <li>Email: ${esc(rd?.email)}</li>
+                    ${rd?.phone ? `<li>Phone: ${esc(rd.phone)}</li>` : ''}
+                    ${rd?.upiId ? `<li>UPI ID: ${esc(rd.upiId)}</li>` : ''}
+                    ${rd?.note ? `<li>Note: ${esc(rd.note)}</li>` : ''}
+                  </ul>
+                `,
+              })
+              .catch((e: any) => logger.warn(`Mentor email failed (missed refund): ${e?.message}`));
+          }
+        }
+      } catch (mentorNotifErr: any) {
+        logger.warn(`Mentor notification failed (missed refund): ${mentorNotifErr.message}`);
+      }
+
+      // Admin ko in-app + email (best-effort)
+      this.notifyAdminsOfRefundRequest({
+        session,
+        bookingId: input.bookingId,
+        menteeId: input.userId,
+        refundAmount,
+        refundDetails: input.refundDetails,
+        isManual: isManualRefund,
+      }).catch((e: any) => logger.warn(`Admin notification failed (missed refund): ${e?.message}`));
+
+
+      
       return {
         success: true,
         refundAmount,
@@ -404,9 +527,89 @@ class RefundService {
   }
 
 
-  /**
-   * Validate if session can be cancelled
+    /**
+   * Missed-session refund request par saare admins ko in-app + email bhejo.
    */
+    private async notifyAdminsOfRefundRequest(p: {
+      session: any;
+      bookingId: string;
+      menteeId: string;
+      refundAmount: number;
+      refundDetails?: { email: string; phone?: string; upiId?: string; note?: string };
+      isManual: boolean;
+    }): Promise<void> {
+      const rd = p.refundDetails;
+      const admins: any[] = await (User as any).find({ role: 'admin' }).lean();
+      const { name: menteeName } = await NotificationService.resolveActorDisplay(p.menteeId);
+  
+      const contact = [
+        rd?.email ? `Email: ${rd.email}` : '',
+        rd?.phone ? `Phone: ${rd.phone}` : '',
+        rd?.upiId ? `UPI: ${rd.upiId}` : '',
+      ]
+        .filter(Boolean)
+        .join(' | ');
+  
+      const title = p.isManual
+        ? 'Refund Required - Missed Session'
+        : 'Refund Auto-processed - Missed Session';
+      const message = (
+        p.isManual
+          ? `${menteeName} requested a refund of ₹${p.refundAmount} for missed session "${p.session.title}". Please pay the student. ${contact}${rd?.note ? ` | Note: ${rd.note}` : ''}`
+          : `Refund of ₹${p.refundAmount} for missed session "${p.session.title}" was sent to ${menteeName} via payment gateway. No action needed.`
+      ).slice(0, 1000);
+  
+      for (const admin of admins) {
+        const adminUserId = String(admin.userId || admin._id);
+        NotificationService.sendNotification({
+          userId: adminUserId,
+          type: NotificationType.REFUND_PROCESSED,
+          channels: [NotificationChannel.IN_APP],
+          data: {
+            title,
+            message,
+            sessionId: p.session.sessionId,
+            bookingId: p.bookingId,
+            refundAmount: p.refundAmount,
+            refundDetails: rd || null,
+            requiresManualPayout: p.isManual,
+            link: '/mentorship/admin?tab=refunds',
+          },
+        }).catch((e) => logger.error('Notification failed (missed refund -> admin):', e));
+      }
+  
+      const esc = (v?: string) =>
+        String(v ?? '').replace(/[&<>"']/g, (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
+        );
+      const emails = Array.from(
+        new Set([...admins.map((a) => a.email), process.env.ADMIN_NOTIFY_EMAIL].filter(Boolean))
+      ) as string[];
+  
+      if (emails.length > 0) {
+        await emailService.sendEmail({
+          to: emails,
+          subject: p.isManual ? 'Action needed: student refund (missed session)' : 'Refund auto-processed (missed session)',
+          html: `
+            <h2>${esc(title)}</h2>
+            <p>Session: <strong>${esc(p.session.title)}</strong></p>
+            <p>Student: <strong>${esc(menteeName)}</strong></p>
+            <p>Amount: <strong>₹${p.refundAmount}</strong></p>
+            <ul>
+              <li>Email: ${esc(rd?.email)}</li>
+              ${rd?.phone ? `<li>Phone: ${esc(rd.phone)}</li>` : ''}
+              ${rd?.upiId ? `<li>UPI ID: ${esc(rd.upiId)}</li>` : ''}
+              ${rd?.note ? `<li>Note: ${esc(rd.note)}</li>` : ''}
+            </ul>
+            <p>${p.isManual ? 'Open Admin Panel → Refunds, pay the student, then click "Mark Refunded".' : 'No action needed.'}</p>
+          `,
+        });
+      }
+    }
+  
+    /**
+     * Validate if session can be cancelled
+     */
   private validateCancellation(
     session: any,
     userId: string,

@@ -15,8 +15,6 @@ import versionRoutes from '../modules/version/version.routes';
 import adminRoutes from '../modules/admin/admin.routes';
 import dashboardRoutes from '../modules/dashboard/dashboard.routes';
 import interviewRoutes from '../modules/interview/interview.routes';
-import notificationRoutes from '../modules/notification/notification.routes';
-import bookingRoutes from '../modules/booking/booking.routes';
 import uploadRoutes from '../modules/upload/upload.routes';
 
 const router = Router();
@@ -31,8 +29,6 @@ router.use('/versions', versionRoutes);
 router.use('/admin', adminRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/interview', interviewRoutes);
-router.use('/notifications', notificationRoutes);
-router.use('/booking', bookingRoutes);
 router.use('/upload', uploadRoutes);
 
 export default router;

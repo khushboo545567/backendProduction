@@ -38,7 +38,7 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
     },
     userId: {
      type: String,
-     required: [true, 'User ID is required'],  
+     required: [true, 'User ID is required'],
     },
     mentorRole: {
       type: String,
@@ -80,15 +80,15 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
       min: [1980, 'Graduation year seems invalid'],
       max: [new Date().getFullYear() + 10, 'Graduation year seems invalid'],
     },
+    // Optional
     currentRole: {
       type: String,
-      required: [true, 'Current role is required'],
       trim: true,
       maxlength: [100, 'Current role cannot exceed 100 characters'],
     },
+    // Optional
     currentCompany: {
       type: String,
-      required: [true, 'Current company is required'],
       trim: true,
       maxlength: [100, 'Current company cannot exceed 100 characters'],
     },
@@ -113,9 +113,9 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
       match: [/^https?:\/\/(www\.)?github\.com\/.+/i, 'Invalid GitHub URL'],
     },
     portfolioUrl: { type: String, trim: true },
+    // Optional
     yearsOfExperience: {
       type: Number,
-      required: [true, 'Years of experience is required'],
       min: [0, 'Years of experience cannot be negative'],
       max: [50, 'Years of experience seems invalid'],
     },
@@ -201,7 +201,7 @@ const SeniorMentorApplicationSchema = new Schema<SeniorMentorApplicationDocument
       type: String,
       required: [true, 'Proof of experience/achievement is required'],
       trim: true
-    },  
+    },
     proofDocumentKey: { type: String, trim: true },
     verificationStatus: {
       type: String,
@@ -249,6 +249,8 @@ SeniorMentorApplicationSchema.index(
 );
 
 // ── Virtuals ─────────────────────────────────────────────────────
+// Optional fields (currentRole, currentCompany, yearsOfExperience) yahan count
+// nahi hote, taaki unke bina bhi completion 100% tak pahunch sake.
 SeniorMentorApplicationSchema.virtual('profileCompletion').get(function (
   this: SeniorMentorApplicationDocument
 ) {
@@ -259,12 +261,9 @@ SeniorMentorApplicationSchema.virtual('profileCompletion').get(function (
     this.degree,
     this.fieldOfStudy,
     this.graduationYear,
-    this.currentRole,
-    this.currentCompany,
     this.shortBio,
     this.linkedinUrl,
     this.githubUrl || this.portfolioUrl,
-    this.yearsOfExperience !== undefined && this.yearsOfExperience !== null,
     this.experienceLevel,
     this.primaryExpertise,
     this.otherSkills && this.otherSkills.length > 0,

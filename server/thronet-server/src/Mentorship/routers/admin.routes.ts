@@ -4,6 +4,7 @@ import { body, param, query } from 'express-validator';
 import AuthMiddleware from '@/shared/middlewares/auth.middleware';
 import { validate } from '@/shared/middlewares/validation.middleware';
 import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
+import refundAdminController from '../controllers/refundAdmin.controller';
 
 const router = Router();
 
@@ -196,6 +197,32 @@ router.get(
     query('status').optional(),
   ]),
   adminController.getPaymentLogs
+);
+
+/**
+ * @route   GET /refunds
+ * @desc    Missed-session refund requests (pending | refunded)
+ * @access  Private (Admin)
+ */
+router.get(
+  '/refunds',
+  AuthMiddleware.authenticate as any,
+  validate([...paginationValidation, query('status').optional().isIn(['pending', 'refunded'])]),
+  refundAdminController.list
+);
+
+/**
+ * @route   POST /refunds/:bookingId/mark-refunded
+ * @access  Private (Admin)
+ */
+router.post(
+  '/refunds/:bookingId/mark-refunded',
+  AuthMiddleware.authenticate as any,
+  validate([
+    param('bookingId').isMongoId().withMessage('Invalid booking ID'),
+    body('reference').trim().isLength({ min: 3, max: 100 }).withMessage('Reference must be 3-100 characters'),
+  ]),
+  refundAdminController.markRefunded
 );
 
 export default router;
