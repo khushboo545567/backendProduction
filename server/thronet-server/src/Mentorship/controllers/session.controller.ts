@@ -628,19 +628,48 @@ class SessionController {
           ResponseHandler.unauthorized(res);
           return;
         }
-        const { bookingId } = req.body;
+        const { bookingId, refundDetails } = req.body;
         if (!bookingId) {
           ResponseHandler.badRequest(res, 'bookingId is required');
           return;
         }
-              // Cron ka intezaar kiye bina: time nikal gaya ho to abhi missed mark karo
-              await mentorshipSessionService.ensureMissedIfOverdue(id, bookingId);
 
-              const result = await refundService.processMissedRefund({
-                sessionId: id,
-                bookingId,
-                userId,
-              });
+        // Mentee ke payout details validate karo
+        const rd = refundDetails || {};
+        const email = String(rd.email || '').trim();
+        const phone = String(rd.phone || '').replace(/\D/g, '').slice(-10);
+        const upiId = String(rd.upiId || '').trim();
+        const note = String(rd.note || '').trim().slice(0, 300);
+
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          ResponseHandler.badRequest(res, 'A valid email is required for the refund');
+          return;
+        }
+        if (!phone && !upiId) {
+          ResponseHandler.badRequest(res, 'Please provide a phone number or UPI ID');
+          return;
+        }
+        if (phone && phone.length < 10) {
+          ResponseHandler.badRequest(res, 'Phone number must be 10 digits');
+          return;
+        }
+        if (upiId && !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upiId)) {
+          ResponseHandler.badRequest(res, 'Please provide a valid UPI ID');
+          return;
+        }
+
+        // Cron ka intezaar kiye bina: time nikal gaya ho to abhi missed mark karo
+        await mentorshipSessionService.ensureMissedIfOverdue(id, bookingId);
+
+        const result = await refundService.processMissedRefund({
+          sessionId: id,
+          bookingId,
+          userId,
+          refundDetails: { email, phone, upiId, note },
+        });
+
+
+        
         ResponseHandler.success(res, 'Refund initiated', result);
       } catch (error: any) {
         logger.error('Failed to refund missed session:', error);

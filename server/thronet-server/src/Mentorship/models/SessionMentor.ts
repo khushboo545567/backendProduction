@@ -136,6 +136,15 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           followUpRequired: { type: Boolean, default: false },
           followUpNotes:    { type: String },
         },
+        // Missed-session refund: mentee ke payout details (mentor ko return karne ke liye)
+        refundRequest: {
+          email:       { type: String },
+          phone:       { type: String },
+          upiId:       { type: String },
+          note:        { type: String },
+          amount:      { type: Number },
+          requestedAt: { type: Date },
+        },
       },
     ],
 

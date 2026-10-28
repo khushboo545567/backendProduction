@@ -279,6 +279,7 @@ class RefundService {
     sessionId: string;
     bookingId: string;
     userId: string;
+    refundDetails?: { email: string; phone?: string; upiId?: string; note?: string };
   }): Promise<RefundResult> {
     try {
       logger.info(`Processing missed-session refund: ${input.sessionId} / ${input.bookingId}`);
@@ -311,7 +312,23 @@ class RefundService {
           sessionId: session.sessionId,
           bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.MISSED } },
         } as any,
-        { $set: { 'bookings.$.status': BookingStatus.CANCELLED } }
+        {
+          $set: {
+            'bookings.$.status': BookingStatus.CANCELLED,
+            ...(input.refundDetails
+              ? {
+                  'bookings.$.refundRequest': {
+                    email: input.refundDetails.email,
+                    phone: input.refundDetails.phone || '',
+                    upiId: input.refundDetails.upiId || '',
+                    note: input.refundDetails.note || '',
+                    amount: refundAmount,
+                    requestedAt: new Date(),
+                  },
+                }
+              : {}),
+          },
+        }
       );
       if (claim.modifiedCount === 0) {
         throw new ConflictError('This booking was already refunded or rescheduled');
@@ -387,6 +404,74 @@ class RefundService {
         },
       }).catch((e) => logger.error('Notification failed (missed refund):', e));
 
+       // Mentor ko notification + email: student ne refund maanga, ye uski payout details hain
+       try {
+        const missedMentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+        if (missedMentorDoc?.userId) {
+          const rd = input.refundDetails;
+          const isManual = String(transactionId).startsWith('REFUND_MANUAL');
+          const contactParts = [
+            rd?.email ? `Email: ${rd.email}` : '',
+            rd?.phone ? `Phone: ${rd.phone}` : '',
+            rd?.upiId ? `UPI: ${rd.upiId}` : '',
+          ]
+            .filter(Boolean)
+            .join(' | ');
+          const mentorMessage = (
+            isManual
+              ? `Refund requested for missed session "${session.title}". Please return ₹${refundAmount} to the student. ${contactParts}${rd?.note ? ` | Note: ${rd.note}` : ''}`
+              : `Student requested a refund of ₹${refundAmount} for missed session "${session.title}" (initiated via payment gateway). ${contactParts}${rd?.note ? ` | Note: ${rd.note}` : ''}`
+          ).slice(0, 1000);
+
+          NotificationService.sendNotification({
+            userId: missedMentorDoc.userId,
+            type: NotificationType.SESSION_CANCELLED,
+            channels: [NotificationChannel.IN_APP],
+            data: {
+              menteeId: input.userId,
+              title: isManual ? 'Refund Required - Missed Session' : 'Refund Requested - Missed Session',
+              message: mentorMessage,
+              sessionId: session.sessionId,
+              bookingId: input.bookingId,
+              refundAmount,
+              refundDetails: rd || null,
+              requiresManualPayout: isManual,
+            },
+          }).catch((e) => logger.error('Notification failed (missed refund -> mentor):', e));
+
+          // Email (best-effort)
+          const esc = (v?: string) =>
+            String(v ?? '').replace(/[&<>"']/g, (c) =>
+              ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
+            );
+          const mentorUser = await User.findByUserId(missedMentorDoc.userId);
+          if (mentorUser?.email) {
+            emailService
+              .sendEmail({
+                to: mentorUser.email,
+                subject: isManual ? 'Action needed: refund for a missed session' : 'Refund requested for a missed session',
+                html: `
+                  <h2>Refund requested - missed session</h2>
+                  <p>Session: <strong>${esc(session.title)}</strong></p>
+                  <p>Amount: <strong>₹${refundAmount}</strong></p>
+                  <p>${isManual ? 'Please return the amount to the student using the details below.' : 'The refund was initiated through the payment gateway. Student contact details:'}</p>
+                  <ul>
+                    <li>Email: ${esc(rd?.email)}</li>
+                    ${rd?.phone ? `<li>Phone: ${esc(rd.phone)}</li>` : ''}
+                    ${rd?.upiId ? `<li>UPI ID: ${esc(rd.upiId)}</li>` : ''}
+                    ${rd?.note ? `<li>Note: ${esc(rd.note)}</li>` : ''}
+                  </ul>
+                `,
+              })
+              .catch((e: any) => logger.warn(`Mentor email failed (missed refund): ${e?.message}`));
+          }
+        }
+      } catch (mentorNotifErr: any) {
+        logger.warn(`Mentor notification failed (missed refund): ${mentorNotifErr.message}`);
+      }
+
+
+      
       return {
         success: true,
         refundAmount,
