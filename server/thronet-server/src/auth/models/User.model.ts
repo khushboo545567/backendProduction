@@ -273,6 +273,7 @@ const JWT_CONFIG = {
       "dev-only-access-secret-change-me-0123456789",
     ),
     expiresIn: (process.env["JWT_ACCESS_EXPIRES_IN"] ||
+      process.env["ACCESS_TOKEN_EXPIRY"] ||
       "15m") as jwt.SignOptions["expiresIn"],
   },
   refreshToken: {
@@ -281,6 +282,7 @@ const JWT_CONFIG = {
       "dev-only-refresh-secret-change-me-0123456789",
     ),
     expiresIn: (process.env["JWT_REFRESH_EXPIRES_IN"] ||
+      process.env["REFRESH_TOKEN_EXPIRY"] ||
       "30d") as jwt.SignOptions["expiresIn"],
   },
 } as const;
