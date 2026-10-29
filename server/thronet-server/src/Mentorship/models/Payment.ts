@@ -26,6 +26,7 @@ export enum PayoutStatus {
   HELD = 'held',
   RELEASED = 'released',
   PAID = 'paid',
+  CANCELLED = 'cancelled',
 }
 
 export interface IPaymentRefund {

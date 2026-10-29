@@ -228,7 +228,7 @@ class AdminController {
       }
 
       // Validate status against BookingStatus enum
-      const validStatuses = ['available', 'pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'rescheduled', 'no_show', 'refunded'];
+      const validStatuses = ['available', 'pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'rescheduled', 'no_show', 'missed', 'refunded'];
       if (status && !validStatuses.includes(status as string)) {
         ResponseHandler.badRequest(res, `Invalid status value. Must be one of: ${validStatuses.join(', ')}`);
         return;

@@ -11,6 +11,7 @@ import emailTemplates from '@/Mentorship/utils/emailTemplates';
 import smsTemplates from '@/Mentorship/utils/smsTemplates';
 import Razorpay from 'razorpay';
 import availabilityService from './availability.service';
+import MentorshipPayment, { PayoutStatus } from '../models/Payment';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { NotFoundError, ForbiddenError, ConflictError, BadRequestError } from '@/shared/errors/app.error';
 
@@ -315,20 +316,15 @@ class RefundService {
         {
           $set: {
             'bookings.$.status': BookingStatus.CANCELLED,
-            ...(input.refundDetails
-              ? {
-                  'bookings.$.refundRequest': {
-                    email: input.refundDetails.email,
-                    phone: input.refundDetails.phone || '',
-                    upiId: input.refundDetails.upiId || '',
-                    note: input.refundDetails.note || '',
-
-                    amount: refundAmount,
-                    requestedAt: new Date(),
-                    status: 'pending',
-                  },
-                }
-              : {}),
+            'bookings.$.refundRequest': {
+              email: input.refundDetails?.email || '',
+              phone: input.refundDetails?.phone || '',
+              upiId: input.refundDetails?.upiId || '',
+              note: input.refundDetails?.note || '',
+              amount: refundAmount,
+              requestedAt: new Date(),
+              status: 'pending',
+            },
           },
         }
       );
@@ -396,8 +392,21 @@ class RefundService {
         logger.error(`Missed refund: refundRequest update failed: ${rrErr.message}`);
       }
 
+      // Refund ho raha hai to mentor ka held payout cancel karo, warna admin galti se release kar sakta hai
+      try {
+        const gatewayPaymentId = booking?.payment?.gatewayPaymentId;
+        if (gatewayPaymentId) {
+          await MentorshipPayment.updateOne(
+            { razorpayPaymentId: gatewayPaymentId, 'payout.status': PayoutStatus.HELD },
+            { $set: { 'payout.status': PayoutStatus.CANCELLED } }
+          );
+        }
+      } catch (payoutErr: any) {
+        logger.error(`Missed refund: payout cancel failed: ${payoutErr.message}`);
+      }
 
-      
+
+
 
       try {
         const otherActive = (session.bookings || []).some(
@@ -426,73 +435,31 @@ class RefundService {
         channels: [NotificationChannel.IN_APP, NotificationChannel.EMAIL],
         data: {
           title: 'Refund initiated',
-          message: `A full refund of ₹${refundAmount} for "${session.title}" has been initiated. It usually reflects in 3-5 business days.`,
+          message: isManualRefund
+            ? `Your refund of ₹${refundAmount} for "${session.title}" has been received. Our team will send it to your UPI/bank shortly and you will be notified.`
+            : `A full refund of ₹${refundAmount} for "${session.title}" has been initiated. It usually reflects in 3-5 business days.`,
           refundAmount,
           sessionId: session.sessionId,
         },
       }).catch((e) => logger.error('Notification failed (missed refund):', e));
 
-       // Mentor ko notification + email: student ne refund maanga, ye uski payout details hain
-       try {
+                // Mentor ko sirf info: student ki contact details mentor ko nahi dikhani, refund admin dega
+      try {
         const missedMentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
         if (missedMentorDoc?.userId) {
-          const rd = input.refundDetails;
-          const isManual = String(transactionId).startsWith('REFUND_MANUAL');
-          const contactParts = [
-            rd?.email ? `Email: ${rd.email}` : '',
-            rd?.phone ? `Phone: ${rd.phone}` : '',
-            rd?.upiId ? `UPI: ${rd.upiId}` : '',
-          ]
-            .filter(Boolean)
-            .join(' | ');
-          const mentorMessage = (
-            isManual
-              ? `Refund requested for missed session "${session.title}". Please return ₹${refundAmount} to the student. ${contactParts}${rd?.note ? ` | Note: ${rd.note}` : ''}`
-              : `Student requested a refund of ₹${refundAmount} for missed session "${session.title}" (initiated via payment gateway). ${contactParts}${rd?.note ? ` | Note: ${rd.note}` : ''}`
-          ).slice(0, 1000);
-
           NotificationService.sendNotification({
             userId: missedMentorDoc.userId,
             type: NotificationType.SESSION_CANCELLED,
             channels: [NotificationChannel.IN_APP],
             data: {
               menteeId: input.userId,
-              title: isManual ? 'Refund Required - Missed Session' : 'Refund Requested - Missed Session',
-              message: mentorMessage,
+              title: 'Refund issued - Missed Session',
+              message: `The student is being refunded ₹${refundAmount} for the missed session "${session.title}". No action is needed from you.`,
               sessionId: session.sessionId,
               bookingId: input.bookingId,
               refundAmount,
-              refundDetails: rd || null,
-              requiresManualPayout: isManual,
             },
           }).catch((e) => logger.error('Notification failed (missed refund -> mentor):', e));
-
-          // Email (best-effort)
-          const esc = (v?: string) =>
-            String(v ?? '').replace(/[&<>"']/g, (c) =>
-              ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
-            );
-          const mentorUser = await User.findByUserId(missedMentorDoc.userId);
-          if (mentorUser?.email) {
-            emailService
-              .sendEmail({
-                to: mentorUser.email,
-                subject: isManual ? 'Action needed: refund for a missed session' : 'Refund requested for a missed session',
-                html: `
-                  <h2>Refund requested - missed session</h2>
-                  <p>Session: <strong>${esc(session.title)}</strong></p>
-                  <p>Amount: <strong>₹${refundAmount}</strong></p>
-                  <p>${isManual ? 'Please return the amount to the student using the details below.' : 'The refund was initiated through the payment gateway. Student contact details:'}</p>
-                  <ul>
-                    <li>Email: ${esc(rd?.email)}</li>
-                    ${rd?.phone ? `<li>Phone: ${esc(rd.phone)}</li>` : ''}
-                    ${rd?.upiId ? `<li>UPI ID: ${esc(rd.upiId)}</li>` : ''}
-                    ${rd?.note ? `<li>Note: ${esc(rd.note)}</li>` : ''}
-                  </ul>
-                `,
-              })
-              .catch((e: any) => logger.warn(`Mentor email failed (missed refund): ${e?.message}`));
-          }
         }
       } catch (mentorNotifErr: any) {
         logger.warn(`Mentor notification failed (missed refund): ${mentorNotifErr.message}`);
@@ -572,8 +539,10 @@ class RefundService {
             bookingId: p.bookingId,
             refundAmount: p.refundAmount,
             refundDetails: rd || null,
+
             requiresManualPayout: p.isManual,
             link: '/mentorship/admin?tab=refunds',
+            actionUrl: '/mentorship/admin?tab=refunds',
           },
         }).catch((e) => logger.error('Notification failed (missed refund -> admin):', e));
       }
