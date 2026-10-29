@@ -37,14 +37,14 @@ type SameSite = 'lax' | 'strict' | 'none';
 const isProduction = (): boolean => process.env['NODE_ENV'] === 'production';
 
 const isSecure = (): boolean => {
-    const explicit = process.env['COOKIE_SECURE'];
+    const explicit = process.env['COOKIE_SECURE'] || process.env['SESSION_SECURE'];
     if (explicit === 'true') return true;
     if (explicit === 'false') return false;
     return isProduction();
 };
 
 const getSameSite = (): SameSite => {
-    const value = (process.env['COOKIE_SAMESITE'] || 'lax').toLowerCase();
+    const value = (process.env['COOKIE_SAMESITE'] || process.env['SESSION_SAME_SITE'] || 'lax').toLowerCase();
     return value === 'strict' || value === 'none' ? value : 'lax';
 };
 
@@ -143,6 +143,10 @@ export const getAccessTokenFromCookieHeader = (header?: string): string | undefi
  * See AUTH_TOKEN_BODY_MODE at the top of this file.
  */
 export const shouldExposeTokensInBody = (req: Request): boolean => {
+    // If client explicitly sent a refreshToken in body or Bearer token, it's using token storage
+    if ((req.body as any)?.refreshToken || req.headers.authorization) {
+        return true;
+    }
     const mode = (process.env['AUTH_TOKEN_BODY_MODE'] || 'legacy').toLowerCase();
     if (mode === 'never') return false;
     if (mode === 'native-only') return !req.headers['origin'];
