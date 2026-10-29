@@ -652,6 +652,43 @@ class ProfilePhotoController {
             return;
         }
     }
+    /**
+     * ✅ DELETE ACTIVE PHOTO
+     * DELETE /api/v1/profile-photo/delete-active-photo
+     */
+    static async deleteActivePhoto(
+        req: Request & { user?: UserPayload },
+        res: Response
+    ): Promise<void> {
+        const correlationId = (req as any).correlationId || uuidv4();
+
+        try {
+            if (!req.user?.userId) {
+                ResponseUtil.unauthorized(res, 'Authentication required');
+                return;
+            }
+
+            const result = await ProfilePhotoService.deleteActivePhoto(req.user.userId);
+
+            ResponseUtil.success(res, result, 'Photo deleted successfully');
+            return;
+
+        } catch (error: any) {
+            LoggerUtil.error('Delete active photo failed', {
+                error: error.message,
+                userId: req.user?.userId,
+                correlationId,
+            });
+
+            if (error.message === 'Photo not found') {
+                ResponseUtil.notFound(res, 'Photo not found');
+                return;
+            }
+
+            ResponseUtil.internalError(res, error.message, error);
+            return;
+        }
+    }
 
     /**
      * ✅ ARCHIVE PHOTO

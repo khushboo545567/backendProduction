@@ -237,6 +237,25 @@ router.delete(
 );
 
 /**
+ * @route   DELETE /api/v1/profile-photo/delete-active-photo
+ * @desc    Delete the currently active profile photo of the logged-in user
+ * @access  Private
+ */
+router.delete(
+    '/delete-active-photo',
+    AuthMiddleware.authenticate as any,
+    rateLimitMiddleware({ maxRequests: 10, windowMs: 60000 }),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            await ProfilePhotoController.deleteActivePhoto(req as any, res);
+        } catch (error: any) {
+            console.error('❌ DELETE ACTIVE PHOTO ROUTE ERROR:', error);
+            next(error);
+        }
+    }
+);
+
+/**
  * @route   POST /api/v1/profile-photo/:photoId/archive
  * @desc    Archive photo
  * @access  Private

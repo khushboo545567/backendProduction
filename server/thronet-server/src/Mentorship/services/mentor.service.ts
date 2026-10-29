@@ -218,6 +218,16 @@ class MentorService {
       if (profilePicFile) {
         const profilePicUrl = await this.uploadImageToCloudinary(profilePicFile.buffer, userId);
         updates.profilePic = profilePicUrl;
+
+        // Purani photo Cloudinary se hatao (best-effort) taaki orphan files na bane
+        if (mentor.profilePic && mentor.profilePic !== profilePicUrl) {
+          const oldMatch = String(mentor.profilePic).match(/\/upload\/(?:v\d+\/)?(.+)\.[a-z0-9]+$/i);
+          if (oldMatch?.[1]) {
+            cloudinary.uploader.destroy(oldMatch[1]).catch((err: any) =>
+              logger.warn(`Old mentor photo cleanup failed for ${mentorId}: ${err?.message}`)
+            );
+          }
+        }
       }
 
       if (bannerImageFile) {

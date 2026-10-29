@@ -64,9 +64,13 @@ class ProfilePhotoService {
                 throw new Error('User account is not active');
             }
 
-            // Step 2: Check photo count limit
+                        // Step 2: Check photo count limit
+            // Naya photo purani active photo ko replace karega, isliye count nahi badhega
+            const previousActive = setAsActive
+                ? await ProfilePhoto.findOne({ userId, isActive: true, isDeleted: false })
+                : null;
             const photoCount = await ProfilePhoto.getUserPhotoCount(userId);
-            if (photoCount >= Constants.PROFILE_PHOTO_VALIDATION.MAX_PHOTOS_PER_USER) {
+            if (photoCount - (previousActive ? 1 : 0) >= Constants.PROFILE_PHOTO_VALIDATION.MAX_PHOTOS_PER_USER) {
                 throw new Error(`Maximum ${Constants.PROFILE_PHOTO_VALIDATION.MAX_PHOTOS_PER_USER} photos allowed per user`);
             }
 
@@ -143,6 +147,19 @@ class ProfilePhotoService {
                 // This was the root cause of "photo uploads but disappears
                 // on refresh" — DB was correct, cached auth user was stale.
                 await AuthCacheRepository.invalidateUserCaches(userId);
+
+                // Purani active photo hatao (Cloudinary + soft delete)
+                if (previousActive && previousActive.photoId !== photoId) {
+                    try {
+                        await cloudinary.uploader.destroy(previousActive.cloudinaryPublicId);
+                    } catch (e: any) {
+                        LoggerUtil.warn('Old photo Cloudinary cleanup failed', { error: e.message });
+                    }
+                    previousActive.isDeleted = true;
+                    previousActive.deletedAt = new Date();
+                    previousActive.isActive = false;
+                    await previousActive.save();
+                }
 
                 LoggerUtil.info('User profilePhotoId updated', {
                     userId,
@@ -660,6 +677,23 @@ class ProfilePhotoService {
             });
             throw error;
         }
+    }
+
+      /**
+     * ✅ Delete the user's currently active photo
+     */
+      static async deleteActivePhoto(userId: string): Promise<any> {
+        const active = await ProfilePhoto.findOne({
+            userId,
+            isActive: true,
+            isDeleted: false,
+        });
+
+        if (!active) {
+            throw new Error('Photo not found');
+        }
+
+        return this.deletePhoto(active.photoId, userId);
     }
 
     /**

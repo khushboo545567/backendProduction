@@ -195,8 +195,26 @@ class SeniorMentorApplicationController {
     }
   }
 
-  /**
-   * @route   GET /api/v1/mentorship/senior-mentor-applications/:id/profile
+    /**
+   * @route   DELETE /api/v1/mentorship/senior-mentor-applications/me/profile-photo
+   * @access  Private (application owner only)
+   */
+    async removeMyProfilePhoto(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+      try {
+        const application = await seniorMentorApplicationService.removeProfilePhoto(req.user!.id);
+        ResponseHandler.success(res, 'Profile photo removed successfully', application);
+      } catch (error: any) {
+        if (isNotFoundError(error)) {
+          res.status(404).json({ success: false, message: 'No senior mentor application found' });
+          return;
+        }
+        logger.error('Error removing senior mentor profile photo:', error);
+        next(error);
+      }
+    }
+  
+    /**
+     * @route   GET /api/v1/mentorship/senior-mentor-applications/:id/profile
    * @access  Private
    */
   async getProfile(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {

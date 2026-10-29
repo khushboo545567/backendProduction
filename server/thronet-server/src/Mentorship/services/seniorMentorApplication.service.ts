@@ -383,8 +383,39 @@ class SeniorMentorApplicationService {
     return updated;
   }
 
-  /**
-   * Owner-only update. Verified mentors can safely update their profile
+    /**
+   * Owner-only photo removal. Verified application par bhi allowed.
+   * $unset use kiya hai taaki schema ke "required" validator se na takraye.
+   */
+    async removeProfilePhoto(userId: string): Promise<any> {
+      const existing = await seniorMentorApplicationRepository.findByUserId(userId);
+      if (!existing) {
+         throw new NotFoundError('Senior Mentor application');
+      }
+  
+      const updated = await SeniorMentorApplication.findOneAndUpdate(
+        { userId, isDeleted: false },
+        { $unset: { profilePhoto: 1, profilePhotoKey: 1 } },
+        { new: true }
+      ).lean();
+  
+      if (!updated) {
+        throw new NotFoundError('Senior Mentor application');
+      }
+  
+      // Cloudinary se bhi hatao (best-effort)
+      if (existing.profilePhotoKey) {
+        cloudinary.uploader.destroy(existing.profilePhotoKey).catch((err: any) =>
+          logger.warn(`Senior photo cleanup failed (${existing.profilePhotoKey}): ${err?.message}`)
+        );
+      }
+  
+      logger.info(`Senior Mentor profile photo removed for user: ${userId}`);
+      return updated;
+    }
+  
+    /**
+     * Owner-only update. Verified mentors can safely update their profile
    * information (role, company, education, bio, skills, etc.).
    * Protected fields (status, verification, userId, dates, documents) are strictly blocked.
    * currentRole / currentCompany optional hain: khali string bhejne par field clear ho jayegi.

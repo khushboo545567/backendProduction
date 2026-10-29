@@ -131,6 +131,17 @@ router.put(
 );
 
 /**
+ * @route   DELETE /api/v1/mentorship/senior-mentor-applications/me/profile-photo
+ * @desc    Remove ONLY the profile photo of the current user's application
+ * @access  Private
+ */
+router.delete(
+  '/me/profile-photo',
+  AuthMiddleware.authenticate as any,
+  seniorMentorApplicationController.removeMyProfilePhoto as any
+);
+
+/**
  * @route   GET /api/v1/mentorship/senior-mentor-applications
  * @desc    List all applications with filters (admin review queue)
  * @access  Private (Admin)
