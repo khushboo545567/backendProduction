@@ -3,8 +3,63 @@ import mongoose from 'mongoose';
 import { SessionMentor, Mentor } from '../models';
 import { User } from '@/auth/models';
 import { logger } from '@/shared/logger.util';
+import NotificationService, { NotificationType, NotificationChannel } from '../services/notification.service';
+import emailService from '../services/email.service';
+
 
 const fullName = (u: any) => `${u?.firstName || ''} ${u?.lastName || ''}`.trim();
+
+const esc = (v?: string) =>
+  String(v ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
+  );
+
+/**
+ * Admin ne manual refund bhej diya: student ko in-app + email (best-effort).
+ */
+const notifyStudentRefundSent = async (session: any, booking: any, reference: string): Promise<void> => {
+  const rr = booking?.refundRequest || {};
+  const menteeId = booking?.menteeId || booking?.bookedBy;
+  const amount = Number(rr.amount ?? booking?.pricing?.totalAmount ?? 0);
+  const title = session?.title || 'your session';
+  const message = `Your refund of ₹${amount} for "${title}" has been sent to your UPI/bank account.${
+    reference ? ` Reference: ${reference}.` : ''
+  }`;
+
+  if (menteeId) {
+    await NotificationService.sendNotification({
+      userId: menteeId,
+      type: NotificationType.REFUND_PROCESSED,
+      channels: [NotificationChannel.IN_APP],
+      data: {
+        title: 'Refund sent',
+        message,
+        refundAmount: amount,
+        sessionId: session?.sessionId,
+      },
+    });
+  }
+
+  let to: string | undefined = rr.email || undefined;
+  if (!to && menteeId) {
+    const u: any = await (User as any).findOne({ userId: menteeId }, { email: 1, _id: 0 }).lean();
+    to = u?.email;
+  }
+
+  if (to) {
+    await emailService.sendEmail({
+      to,
+      subject: 'Your refund has been sent',
+      html: `
+        <h2>Refund sent</h2>
+        <p>Your refund of <strong>₹${amount}</strong> for <strong>${esc(title)}</strong> has been sent to your UPI/bank account.</p>
+        ${reference ? `<p>Reference (UTR): <strong>${esc(reference)}</strong></p>` : ''}
+        <p>If you do not see it within 24 hours, please contact support with the reference above.</p>
+      `,
+    });
+  }
+};
+
 
 /**
  * @route GET /api/v1/mentorship/admin/refunds?status=pending|refunded&page=&limit=
@@ -128,7 +183,9 @@ const markRefunded = async (req: Request, res: Response, next: NextFunction): Pr
     const reference = String(req.body?.reference || '').trim();
     const adminId = (req.user as any)?.userId || (req.user as any)?.id || '';
 
-    const result = await (SessionMentor as any).updateOne(
+
+
+    const before: any = await (SessionMentor as any).findOneAndUpdate(
       {
         bookings: {
           $elemMatch: {
@@ -145,16 +202,24 @@ const markRefunded = async (req: Request, res: Response, next: NextFunction): Pr
           'bookings.$.refundRequest.refundedAt': new Date(),
           'bookings.$.refundRequest.handledBy': adminId,
         },
-      }
+      },
+      { new: false, lean: true }
     );
 
-    if (result.modifiedCount === 0) {
+    if (!before) {
       res.status(409).json({
         success: false,
         message: 'Refund not found or already marked as refunded',
       });
       return;
     }
+
+
+
+    const bookingBefore = (before.bookings || []).find((b: any) => String(b._id) === bookingId);
+    notifyStudentRefundSent(before, bookingBefore, reference).catch((e: any) =>
+      logger.warn(`Refund-sent notification failed: ${e?.message}`)
+    );
 
     res.status(200).json({ success: true, message: 'Refund marked as refunded', data: null });
   } catch (error: any) {
