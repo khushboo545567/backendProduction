@@ -1,7 +1,8 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface IWithdrawalMethod extends Document {
-  mentorId: mongoose.Types.ObjectId;
+  // Mentor ki id UUID string hai (ObjectId nahi)
+  mentorId: string;
   type: "bank" | "upi";
 
   // Bank fields
@@ -24,10 +25,10 @@ export interface IWithdrawalMethod extends Document {
 const WithdrawalMethodSchema = new Schema<IWithdrawalMethod>(
   {
     mentorId: {
-      type: Schema.Types.ObjectId,
-      ref: "Mentor",
+      type: String,
       required: true,
       index: true,
+      trim: true,
     },
     type: {
       type: String,
@@ -52,7 +53,7 @@ const WithdrawalMethodSchema = new Schema<IWithdrawalMethod>(
   { timestamps: true }
 );
 
-// Only one default per mentor
+// Fast lookup of a mentor's default method
 WithdrawalMethodSchema.index(
   { mentorId: 1, isDefault: 1 },
   { unique: false }
