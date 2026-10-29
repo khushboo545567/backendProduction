@@ -138,28 +138,19 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         },
         // Missed-session refund: mentee ke payout details (mentor ko return karne ke liye)
         refundRequest: {
-<<<<<<< Updated upstream
-          email:         { type: String },
-          phone:         { type: String },
-          upiId:         { type: String },
-          note:          { type: String },
-          amount:        { type: Number },
-          requestedAt:   { type: Date },
-          // Admin panel tracking
-          status:        { type: String, enum: ['pending', 'refunded'], index: true },
-          refundMode:    { type: String, enum: ['gateway', 'manual'] },
-          transactionId: { type: String },
-          reference:     { type: String },
-          refundedAt:    { type: Date },
-          handledBy:     { type: String },
-=======
           email: { type: String },
           phone: { type: String },
           upiId: { type: String },
           note: { type: String },
           amount: { type: Number },
           requestedAt: { type: Date },
->>>>>>> Stashed changes
+          // Admin panel tracking
+          status: { type: String, enum: ['pending', 'refunded'], index: true },
+          refundMode: { type: String, enum: ['gateway', 'manual'] },
+          transactionId: { type: String },
+          reference: { type: String },
+          refundedAt: { type: Date },
+          handledBy: { type: String },
         },
       },
     ],
