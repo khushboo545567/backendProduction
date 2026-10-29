@@ -15,6 +15,13 @@ import MentorshipPayment, { PayoutStatus } from '../models/Payment';
 import NotificationService, { NotificationType, NotificationChannel } from './notification.service';
 import { NotFoundError, ForbiddenError, ConflictError, BadRequestError } from '@/shared/errors/app.error';
 
+
+
+
+// true  = missed-session refunds go to the admin Refunds tab (Pending) and are paid manually
+// false = missed-session refunds are sent automatically through Razorpay
+const MISSED_REFUND_MANUAL_ONLY = true;
+
 // Razorpay instance - initialized once, reused across calls
 let razorpay: Razorpay | null = null;
 
@@ -364,7 +371,12 @@ class RefundService {
       }
 
       // Yahan se paisa move hota hai, isliye ab revert nahi karte (double refund ka risk)
-      const transactionId = await this.initiateRefundTransaction(session, refundAmount, booking);
+      const transactionId = await this.initiateRefundTransaction(
+        session,
+        refundAmount,
+        booking,
+        MISSED_REFUND_MANUAL_ONLY
+      );
       cancellationLog.refundStatus = 'processing';
       cancellationLog.refundTransactionId = transactionId;
       await cancellationLog.save();
@@ -432,7 +444,9 @@ class RefundService {
       NotificationService.sendNotification({
         userId: input.userId,
         type: NotificationType.REFUND_PROCESSED,
-        channels: [NotificationChannel.IN_APP, NotificationChannel.EMAIL],
+        channels: isManualRefund
+          ? [NotificationChannel.IN_APP]
+          : [NotificationChannel.IN_APP, NotificationChannel.EMAIL],        
         data: {
           title: 'Refund initiated',
           message: isManualRefund
@@ -443,6 +457,21 @@ class RefundService {
         },
       }).catch((e) => logger.error('Notification failed (missed refund):', e));
 
+      // Manual mode: send our own email so the student does not get the "3-5 business days" gateway text
+      if (isManualRefund && input.refundDetails?.email) {
+        const safeTitle = String(session.title || 'your session').replace(/[<>&"']/g, '');
+        emailService
+          .sendEmail({
+            to: input.refundDetails.email,
+            subject: 'We received your refund request',
+            html: `
+              <h2>Refund request received</h2>
+              <p>We have received your refund request of <strong>₹${refundAmount}</strong> for <strong>${safeTitle}</strong>.</p>
+              <p>Our team will send the amount to your UPI/bank account shortly. You will get another email once it is sent.</p>
+            `,
+          })
+          .catch((e: any) => logger.warn(`Student email failed (missed refund): ${e?.message}`));
+      }
                 // Mentor ko sirf info: student ki contact details mentor ko nahi dikhani, refund admin dega
       try {
         const missedMentorDoc = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
@@ -651,9 +680,17 @@ class RefundService {
   private async initiateRefundTransaction(
     session: any,
     refundAmount: number,
-    booking?: any
+    booking?: any,
+    forceManual = false
   ): Promise<string> {
     const sessionKey = String(session.sessionId || session._id);
+
+    // Admin pays the student manually (UPI) and then clicks Mark Refunded
+    if (forceManual) {
+      const manualId = `REFUND_MANUAL_${Date.now()}_${sessionKey}`;
+      logger.info(`Manual refund queued for admin: ${manualId} - amount: Rs.${refundAmount}`);
+      return manualId;
+    }
 
     // Booking pass nahi hui (retry flow) to pehli paid booking le lo
     const targetBooking =
