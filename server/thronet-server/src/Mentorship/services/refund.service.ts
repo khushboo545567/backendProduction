@@ -433,7 +433,8 @@ class RefundService {
           'payment.refundReason': 'Session missed',
         };
         if (!otherActive) {
-          $set.status = BookingStatus.REFUNDED;
+          // Reusable service: keep it bookable for other students instead of marking the whole session refunded
+          $set.status = BookingStatus.PENDING;
           $set.isBooked = false;
         }
         await SessionMentor.updateOne({ _id: session._id }, { $set });
