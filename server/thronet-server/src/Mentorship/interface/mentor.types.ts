@@ -34,6 +34,20 @@ export interface IMentorReport {
   createdAt: Date;
 }
 
+export type EmploymentType = 'Full-time' | 'Part-time' | 'Contract' | 'Internship' | 'Freelance';
+
+export interface PreviousRole {
+  title: string;
+  company: string;
+  duration?: string;
+  startDate?: string;
+  endDate?: string;
+  isCurrent?: boolean;
+  employmentType?: EmploymentType;
+  description?: string;
+  companyLogo?: string;
+}
+
 export interface IMentor extends TimeStamps, SoftDelete {
   _id: string;           // ✅ Keep for internal use
   mentorId: string;
@@ -61,11 +75,7 @@ export interface IMentor extends TimeStamps, SoftDelete {
     total: number;
     level?: ExperienceLevel;  // optional — backend set karega
     currentRole: string;
-    previousRoles?: {
-      title: string;
-      company: string;
-      duration: string;
-    }[];
+    previousRoles?: PreviousRole[];
   };
   // CHANGE: pricing optional karo (whole block)
   pricing?: {
@@ -116,6 +126,7 @@ export interface IMentor extends TimeStamps, SoftDelete {
     githubUrl: string;
     portfolioUrl?: string;
     twitterUrl?: string;
+    leetcodeUrl?: string;
     websiteUrl?: string;
     certifications?: string[];
     achievements?: string[];
@@ -212,11 +223,7 @@ export interface CreateMentorInput {
   experience: {
     total: number;
     currentRole: string;
-    previousRoles?: {
-      title: string;
-      company: string;
-      duration: string;
-    }[];
+    previousRoles?: PreviousRole[];
     // level yahan nahi aayega — backend set karega
   };
   pricing?: Partial<IMentor['pricing']>;        // CHANGE: optional karo

@@ -246,7 +246,7 @@ services:
       - ./server/thronet-server/server.ts:/app/server.ts:ro
       - server_logs:/app/logs
  
-    command: ["npx", "tsx", "server.ts"]
+    command: ["npx", "tsx", "watch", "server.ts"]
   
     healthcheck:
       test:

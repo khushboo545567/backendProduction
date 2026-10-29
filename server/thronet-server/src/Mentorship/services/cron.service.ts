@@ -49,10 +49,10 @@ class CronService {
       this.cleanupExpiredWaitlist.bind(this)
     );
 
-       // Session status update (auto-complete + missed) - every 5 minutes
-       this.scheduleJob(
-        'session-status',
-        '*/5 * * * *',
+    // Session status update (auto-complete + missed) - every 5 minutes
+    this.scheduleJob(
+      'session-status',
+      '*/5 * * * *',
       this.updateSessionStatus.bind(this)
     );
 
@@ -76,14 +76,14 @@ class CronService {
           await task();
           const duration = Date.now() - startTime;
           logger.info(`✅ Cron job ${name} completed in ${duration}ms`);
-        } catch(error : any) {
+        } catch (error: any) {
           logger.error(`❌ Cron job ${name} failed:${error}`);
         }
       });
 
       this.jobs.set(name, job);
       logger.info(`📅 Scheduled job: ${name} (${schedule})`);
-    } catch(error : any) {
+    } catch (error: any) {
       logger.error(`Failed to schedule job ${name}: ${error}`);
     }
   }
@@ -119,7 +119,7 @@ class CronService {
         });
 
         logger.info(`Sent reminder for session ${session._id}`);
-      } catch(error : any) {
+      } catch (error: any) {
         logger.error(`Failed to send reminder for session ${session._id}: ${error}`);
       }
     }
@@ -142,8 +142,8 @@ class CronService {
       );
 
       logger.info(`Deactivated ${result.modifiedCount} expired coupons`);
-    } catch(error : any) {
-      logger.error( `Failed to cleanup expired coupons:${error}`);
+    } catch (error: any) {
+      logger.error(`Failed to cleanup expired coupons:${error}`);
     }
   }
 
@@ -161,7 +161,7 @@ class CronService {
       });
 
       logger.info(`Deleted ${result.deletedCount} old notifications`);
-    } catch(error : any) {
+    } catch (error: any) {
       logger.error(`Failed to cleanup old notifications:${error}`);
     }
   }
@@ -208,7 +208,7 @@ class CronService {
         });
 
         logger.info(`Sent expiry notification for package ${pkg._id}`);
-      } catch(error : any) {
+      } catch (error: any) {
         logger.error(`Failed to send expiry notification for package ${pkg._id}: ${error}`);
       }
     }
@@ -231,22 +231,24 @@ class CronService {
 
   /**
    * Update session status
+   * 1) Closes in_progress bookings past scheduled end + 15 minutes grace
+   *    (mentor started but never ended) -> auto-completed.
+   * 2) Marks bookings that never started (pending / confirmed) once the
+   *    start window has closed -> missed, and notifies the mentee.
    */
   private async updateSessionStatus(): Promise<void> {
-    // 1) Mentor ne start kiya par End nahi kiya -> time + 15 min baad auto-complete
+    // 1) Mentor started but did not End -> auto-complete after scheduled time + 15 min
     const closed = await mentorshipSessionService.autoCompleteOverdueBookings();
     if (closed > 0) {
       logger.info(`Auto-completed ${closed} overdue in-progress bookings`);
     }
 
-    // 2) Kabhi start nahi hui (pending / confirmed) aur start window band -> MISSED + mentee notification
+    // 2) Never started (pending / confirmed) and start window closed -> MISSED + mentee notification
     const missed = await mentorshipSessionService.markMissedBookings();
     if (missed > 0) {
       logger.info(`Marked ${missed} bookings as missed`);
     }
   }
-
-  
 
   /**
    * Stop a specific job

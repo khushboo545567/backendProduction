@@ -84,7 +84,16 @@ const MentorSchema = new Schema<MentorDocument>(
         {
           title: { type: String, required: true },
           company: { type: String, required: true },
-          duration: { type: String, required: true },
+          duration: { type: String },
+          startDate: { type: String, trim: true },
+          endDate: { type: String, trim: true },
+          isCurrent: { type: Boolean, default: false },
+          employmentType: {
+            type: String,
+            enum: ['Full-time', 'Part-time', 'Contract', 'Internship', 'Freelance'],
+          },
+          description: { type: String, maxlength: 300, trim: true },
+          companyLogo: { type: String, trim: true },
         },
       ],
     },
@@ -158,6 +167,7 @@ const MentorSchema = new Schema<MentorDocument>(
       githubUrl:      { type: String, trim: true },
       portfolioUrl:   { type: String, trim: true },
       twitterUrl:     { type: String, trim: true },
+      leetcodeUrl:    { type: String, trim: true },
       websiteUrl:     { type: String, trim: true },
       certifications: [String],
       achievements:   [String],
@@ -189,7 +199,7 @@ const MentorSchema = new Schema<MentorDocument>(
       breakdown: {
         profileCompleteness: { type: Number, default: 0 },
         reliability: { type: Number, default: 0 },
-        studentSatisfaction: { type: Number, default: 0 },
+        studentSatisfaction: { type: Number, default: null },
         engagement: { type: Number, default: 0 }
       },
       metrics: {
@@ -198,6 +208,15 @@ const MentorSchema = new Schema<MentorDocument>(
         averageRating: { type: Number, default: 0 },
         reviewCount: { type: Number, default: 0 }
       },
+      tier: { type: Object },
+      nextTier: { type: Object },
+      pointsToNextTier: { type: Number, default: 0 },
+      improvementSuggestions: [
+        {
+          text: { type: String },
+          action: { type: String }
+        }
+      ],
       version: { type: String, default: "1.0" },
       lastCalculatedAt: { type: Date }
     },

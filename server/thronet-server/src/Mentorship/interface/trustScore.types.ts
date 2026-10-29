@@ -3,7 +3,7 @@ export interface ITrustScore {
   breakdown: {
     profileCompleteness: number;
     reliability: number;
-    studentSatisfaction: number;
+    studentSatisfaction: number | null;
     engagement: number;
   };
   metrics: {
@@ -17,7 +17,7 @@ export interface ITrustScore {
   tier: { min: number; name: string; color: string; bg: string; ring: string };
   nextTier: { min: number; name: string; color: string; bg: string; ring: string } | null;
   pointsToNextTier: number;
-  improvementSuggestions: { text: string }[];
+  improvementSuggestions: { text: string; action?: string }[];
   version: string;
   lastCalculatedAt: Date;
 }
@@ -32,6 +32,9 @@ export interface TrustScoreMetrics {
   hasBio: boolean;
   hasDomains: boolean;
   hasSkills: boolean;
+  hasCompany: boolean;
+  hasExperience: boolean;
+  hasSocialLinks: boolean;
   isVerified: boolean;
   profileViews: number;
   conversionRate: number;

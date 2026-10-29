@@ -6,6 +6,7 @@ import GroupSession from '../models/GroupSession';
 import { TrustScoreCalculator } from '../utils/trustScoreCalculator';
 import { TrustScoreMetrics } from '../interface/trustScore.types';
 import mentorshipanalyticsService from './mentorshipAnalytics.service';
+import { calculateMentorSessionCounts } from '../utils/sessionCounting.util';
 
 export class TrustScoreService {
   /**
@@ -22,10 +23,12 @@ export class TrustScoreService {
 
       // Fetch the actual real dashboard stats from the analytics service
       const dashboardStats = await mentorshipanalyticsService.getMentorDashboardStats(mentorId);
+      const mentorIds = [mentor.mentorId, mentor.userId].filter(Boolean);
+      const sessionCounts = await calculateMentorSessionCounts(mentorIds);
 
       const metrics: TrustScoreMetrics = {
-        totalSessions: dashboardStats.cancellationRate.total,
-        completedSessions: dashboardStats.conversion.bookings,
+        totalSessions: sessionCounts.totalSessions,
+        completedSessions: sessionCounts.completed,
         cancelledSessions: dashboardStats.cancellationRate.cancelled,
         averageRating: dashboardStats.reviews.averageRating,
         totalReviews: dashboardStats.reviews.totalReviews,
@@ -33,6 +36,15 @@ export class TrustScoreService {
         hasBio: !!mentor.bio && mentor.bio.length >= 50,
         hasDomains: Array.isArray(mentor.domains) && mentor.domains.length > 0,
         hasSkills: Array.isArray(mentor.skills) && mentor.skills.length > 0,
+        hasCompany: !!(mentor.company && mentor.company.trim()),
+        hasExperience: !!(mentor.experience?.previousRoles && mentor.experience.previousRoles.length > 0),
+        hasSocialLinks: !!(
+          mentor.socialProof?.githubUrl ||
+          mentor.socialProof?.portfolioUrl ||
+          mentor.socialProof?.twitterUrl ||
+          mentor.socialProof?.leetcodeUrl ||
+          mentor.socialProof?.websiteUrl
+        ),
         isVerified: !!mentor.verification?.isVerified,
         profileViews: dashboardStats.profileViews.value,
         conversionRate: dashboardStats.conversion.rate,

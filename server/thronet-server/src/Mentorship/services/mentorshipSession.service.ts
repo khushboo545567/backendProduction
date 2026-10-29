@@ -1,7 +1,7 @@
 import mentorService from './mentor.service';
 import { SESSION_DURATIONS, SessionType } from '@/shared/constants/sessionTypes';
 import { PaymentMethod, PaymentStatus, ISessionMentor } from '@/Mentorship/interface/session.types';
-import { Types } from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import { Mentor, SessionMentor, SeniorSession, Availability } from '../models';
 import { DateTime } from 'luxon';
 import availabilityService from './availability.service';
@@ -90,12 +90,12 @@ class MentorshipSessionService {
       }
 
       const duration = SESSION_DURATIONS[input.sessionType];
-      const isFree   = input.paymentMethod === PaymentMethod.FREE;
+      const isFree = input.paymentMethod === PaymentMethod.FREE;
 
-      const basePrice   = isFree ? 0 : input.pricing.basePrice;
+      const basePrice = isFree ? 0 : input.pricing.basePrice;
       const platformFee = isFree ? 0 : input.pricing.platformFee;
       const totalAmount = isFree ? 0 : input.pricing.totalAmount;
-      const currency    = input.pricing?.currency || 'INR';
+      const currency = input.pricing?.currency || 'INR';
 
       if (!isFree) {
         const priceKey = this.mapSessionTypeToPrice(input.sessionType);
@@ -375,18 +375,18 @@ class MentorshipSessionService {
 
       const bookingPayment = isFreeSession
         ? {
-            status: PaymentStatus.COMPLETED,
-            method: PaymentMethod.FREE,
-            paidAt: new Date(),
-          }
+          status: PaymentStatus.COMPLETED,
+          method: PaymentMethod.FREE,
+          paidAt: new Date(),
+        }
         : {
-            status: PaymentStatus.COMPLETED,
-            method: 'razorpay',
-            transactionId: paidPayment!.razorpayPaymentId,
-            gatewayOrderId: paidPayment!.razorpayOrderId,
-            gatewayPaymentId: paidPayment!.razorpayPaymentId,
-            paidAt: paidPayment!.paidAt || new Date(),
-          };
+          status: PaymentStatus.COMPLETED,
+          method: 'razorpay',
+          transactionId: paidPayment!.razorpayPaymentId,
+          gatewayOrderId: paidPayment!.razorpayOrderId,
+          gatewayPaymentId: paidPayment!.razorpayPaymentId,
+          paidAt: paidPayment!.paidAt || new Date(),
+        };
 
       const updatedSession = await SessionMentor.findOneAndUpdate(
         {
@@ -406,19 +406,19 @@ class MentorshipSessionService {
         {
           $push: {
             bookings: {
-              menteeId:       input.menteeId,
-              bookedBy:       input.menteeId,
-              bookedAt:       new Date(),
-              status:         'pending',
-              slotTime:       `${slotStart} - ${slotEnd}`,
-              scheduledAt:    new Date(input.scheduledAt),
+              menteeId: input.menteeId,
+              bookedBy: input.menteeId,
+              bookedAt: new Date(),
+              status: 'pending',
+              slotTime: `${slotStart} - ${slotEnd}`,
+              scheduledAt: new Date(input.scheduledAt),
               availabilityId: input.availabilityId,
-              payment:        bookingPayment,
+              payment: bookingPayment,
               pricing: {
-                basePrice:   pricing.basePrice,
+                basePrice: pricing.basePrice,
                 platformFee: pricing.platformFee,
                 totalAmount: pricing.totalAmount,
-                currency:    pricing.currency,
+                currency: pricing.currency,
               },
             } as any,
           },
@@ -507,12 +507,12 @@ class MentorshipSessionService {
       const bookings = session.bookings ?? [];
       const myBooking = bookings[bookings.length - 1];
       return {
-        sessionId:     session.sessionId,
-        mentorId:      session.mentorId,
-        title:         session.title,
-        sessionType:   session.sessionType,
-        duration:      session.duration,
-        booking:       myBooking,
+        sessionId: session.sessionId,
+        mentorId: session.mentorId,
+        title: session.title,
+        sessionType: session.sessionType,
+        duration: session.duration,
+        booking: myBooking,
         totalBookings: bookings.length,
       };
     } catch (error: any) {
@@ -527,19 +527,19 @@ class MentorshipSessionService {
         $or: [{ menteeId: userId }, { mentorId: userId }],
       }).lean()) as unknown as ISessionMentor[];
 
-      const total     = sessions.length;
+      const total = sessions.length;
       const completed = sessions.filter((s: ISessionMentor) => s.status === BookingStatus.COMPLETED).length;
-      const left      = sessions.filter((s: ISessionMentor) => s.completion?.leftAt !== undefined).length;
+      const left = sessions.filter((s: ISessionMentor) => s.completion?.leftAt !== undefined).length;
       const totalTimeSpent = sessions
         .filter((s: ISessionMentor) => s.completion?.actualDuration)
         .reduce((acc: number, s: ISessionMentor) => acc + (s.completion?.actualDuration || 0), 0);
 
       return {
-        totalSessionsBooked:   total,
-        completedSessions:     completed,
-        leftSessions:          left,
+        totalSessionsBooked: total,
+        completedSessions: completed,
+        leftSessions: left,
         totalTimeSpentMinutes: totalTimeSpent,
-        completionRate:        total > 0 ? Math.round((completed / total) * 100) : 0,
+        completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
       };
     } catch (error: any) {
       logger.error(`Failed to fetch session progress: ${error.message}`);
@@ -560,16 +560,31 @@ class MentorshipSessionService {
       if (!session) throw new NotFoundError('Session not found');
 
       if (userId) {
-        const mentor  = await Mentor.findOne({ userId, isDeleted: false });
-        const isMentor = mentor && session.mentorId === mentor.mentorId;
-        const isMentee = session.menteeId === userId || (session.bookings && session.bookings.some((b: any) => b.menteeId === userId));
+        const mentor = await Mentor.findOne({
+          $or: [
+            { userId },
+            ...(mongoose.isValidObjectId(userId) ? [{ _id: userId }] : []),
+            { mentorId: userId },
+          ],
+          isDeleted: false,
+        }).lean();
+        const isMentor =
+          (mentor && (
+            session.mentorId === mentor.mentorId ||
+            session.mentorId?.toString() === mentor._id?.toString() ||
+            session.mentorId?.toString() === mentor.userId?.toString()
+          )) ||
+          session.mentorId?.toString() === userId;
+        const isMentee =
+          session.menteeId === userId ||
+          (session.bookings && session.bookings.some((b: any) => b.menteeId === userId || b.bookedBy === userId));
 
         if (!isMentor && !isMentee) {
           throw new ForbiddenError('You are not authorized to view this session');
         }
 
         if (options?.intent === 'join') {
-                  // Mentee tabhi join kar sakta hai jab uski apni booking mentor ne start kar di ho
+          // Mentee tabhi join kar sakta hai jab uski apni booking mentor ne start kar di ho
           // (group session ka flow alag hai, use yahan nahi rokte)
           if (!isMentor && session.sessionType !== SessionType.GROUP_SESSION) {
             const myBooking: any = (session.bookings || []).find(
@@ -599,12 +614,13 @@ class MentorshipSessionService {
           if (session.status !== 'in_progress') {
             const bookingScheduledAt = (session.bookings && session.bookings[0]?.scheduledAt) || session.scheduledAt;
             const startMs = new Date(bookingScheduledAt).getTime();
-            const earlyMinutes = isMentor ? 5 : 0;
+            const earlyMinutes = 15;
             const joinOpensAt = startMs - earlyMinutes * 60 * 1000;
             const durationMinutes = Number(session.duration || (session.bookings as any)?.[0]?.slotDuration || 60);
+            const bufferMinutes = 60;
             const endMs = session.endedAt
               ? new Date(session.endedAt).getTime()
-              : startMs + Math.max(durationMinutes, 15) * 60 * 1000;
+              : startMs + (durationMinutes + bufferMinutes) * 60 * 1000;
             const now = Date.now();
 
             if (
@@ -662,12 +678,12 @@ class MentorshipSessionService {
         query['bookings.menteeId'] = userId;
       }
 
-      if (filters?.status)      query.status      = filters.status;
-      if (filters?.sessionType) query.sessionType  = filters.sessionType;
+      if (filters?.status) query.status = filters.status;
+      if (filters?.sessionType) query.sessionType = filters.sessionType;
       if (filters?.startDate || filters?.endDate) {
         query.scheduledAt = {};
         if (filters.startDate) query.scheduledAt.$gte = filters.startDate;
-        if (filters.endDate)   query.scheduledAt.$lte = filters.endDate;
+        if (filters.endDate) query.scheduledAt.$lte = filters.endDate;
       }
 
       const skip = (page - 1) * limit;
@@ -804,7 +820,7 @@ class MentorshipSessionService {
       }
 
       const allowedUpdates = ['notes', 'description', 'title', 'thumbnailImage', 'scheduledAt', 'duration', 'pricing', 'followUp', 'bufferTimeMinutes'];
-      const isValidUpdate  = Object.keys(updates).every((key) => allowedUpdates.includes(key));
+      const isValidUpdate = Object.keys(updates).every((key) => allowedUpdates.includes(key));
 
       if (!isValidUpdate) {
         throw new BadRequestError('Invalid update fields. Only notes, description, title, thumbnailImage, scheduledAt, duration, pricing, followUp, bufferTimeMinutes are allowed.');
@@ -1154,162 +1170,162 @@ class MentorshipSessionService {
     }
   }
 
-    /**
-   * Cron: jo bookings mentor ne start kiye (in_progress) par End nahi kiye, unhe
-   * scheduled time + grace ke baad auto-complete karo. DB updates completeSession()
-   * jaise hi hain, bas mentor auth check aur notifications ke bina.
-   */
-    async autoCompleteOverdueBookings(graceMinutes = 15): Promise<number> {
-      const now = new Date();
-      let closed = 0;
-  
-      const sessions = await SessionMentor.find({
-        bookings: { $elemMatch: { status: BookingStatus.IN_PROGRESS } },
-      });
-  
-      for (const session of sessions) {
-        const durationMinutes = Math.max(Number(session.duration) || 60, 15);
-  
-        for (const booking of (session.bookings || []) as any[]) {
-          if (booking.status !== BookingStatus.IN_PROGRESS) continue;
-  
-          const startMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
-          if (Number.isNaN(startMs)) continue;
+  /**
+ * Cron: jo bookings mentor ne start kiye (in_progress) par End nahi kiye, unhe
+ * scheduled time + grace ke baad auto-complete karo. DB updates completeSession()
+ * jaise hi hain, bas mentor auth check aur notifications ke bina.
+ */
+  async autoCompleteOverdueBookings(graceMinutes = 15): Promise<number> {
+    const now = new Date();
+    let closed = 0;
 
-          if (now.getTime() <= startMs + (durationMinutes + graceMinutes) * 60000) continue;
+    const sessions = await SessionMentor.find({
+      bookings: { $elemMatch: { status: BookingStatus.IN_PROGRESS } },
+    });
 
-          // Session sirf mentor End kar sakta hai. Mentee aaya tha to cron kuch nahi karega,
-          // booking in_progress rahegi jab tak mentor End Session na dabaye.
-          // (Sirf wo booking aage badhegi jisme mentee kabhi aaya hi nahi -> no_show)
-          if (booking.menteeJoinedAt) continue;
+    for (const session of sessions) {
+      const durationMinutes = Math.max(Number(session.duration) || 60, 15);
+
+      for (const booking of (session.bookings || []) as any[]) {
+        if (booking.status !== BookingStatus.IN_PROGRESS) continue;
+
+        const startMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
+        if (Number.isNaN(startMs)) continue;
+
+        if (now.getTime() <= startMs + (durationMinutes + graceMinutes) * 60000) continue;
+
+        // Session sirf mentor End kar sakta hai. Mentee aaya tha to cron kuch nahi karega,
+        // booking in_progress rahegi jab tak mentor End Session na dabaye.
+        // (Sirf wo booking aage badhegi jisme mentee kabhi aaya hi nahi -> no_show)
+        if (booking.menteeJoinedAt) continue;
 
 
-                   // Mentee kabhi room me aaya? Haan => completed. Nahi => no_show (mentor ki galti nahi)
-                   const menteeAttended = !!booking.menteeJoinedAt;
+        // Mentee kabhi room me aaya? Haan => completed. Nahi => no_show (mentor ki galti nahi)
+        const menteeAttended = !!booking.menteeJoinedAt;
 
-                   try {
-                     const result = await SessionMentor.updateOne(
-                       {
-                         sessionId: session.sessionId,
-                         bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.IN_PROGRESS } },
-                       },
-                       {
-                         $set: menteeAttended
-                           ? {
-                               'bookings.$.status': BookingStatus.COMPLETED,
-                               'bookings.$.completion': {
-                                 completedAt: now,
-                                 actualDuration: durationMinutes,
-                                 wasSuccessful: true,
-                                 followUpRequired: false,
-                               },
-                             }
-                           : {
-                               'bookings.$.status': BookingStatus.NO_SHOW,
-                               'bookings.$.noShowAt': now,
-                             },
-                       }
-                     );
-                     if (result.modifiedCount === 0) continue; // mentor ne beech me khud End kar diya
-  
-            const updated = await SessionMentor.findOne({ sessionId: session.sessionId });
-            const allFinal = (updated?.bookings || []).every((b: any) =>
-              [
-                BookingStatus.COMPLETED,
-                BookingStatus.CANCELLED,
-                BookingStatus.NO_SHOW,
-                BookingStatus.MISSED,
-                BookingStatus.REFUNDED,
-              ].includes(b.status)
-            );
-            if (updated && allFinal && updated.status !== BookingStatus.COMPLETED) {
-              updated.status = menteeAttended ? BookingStatus.COMPLETED : BookingStatus.NO_SHOW;
-              updated.endedAt = now;
-              await updated.save();
+        try {
+          const result = await SessionMentor.updateOne(
+            {
+              sessionId: session.sessionId,
+              bookings: { $elemMatch: { _id: booking._id, status: BookingStatus.IN_PROGRESS } },
+            },
+            {
+              $set: menteeAttended
+                ? {
+                  'bookings.$.status': BookingStatus.COMPLETED,
+                  'bookings.$.completion': {
+                    completedAt: now,
+                    actualDuration: durationMinutes,
+                    wasSuccessful: true,
+                    followUpRequired: false,
+                  },
+                }
+                : {
+                  'bookings.$.status': BookingStatus.NO_SHOW,
+                  'bookings.$.noShowAt': now,
+                },
             }
-  
-            if (menteeAttended) {
-              TrustScoreEvents.emit('SessionCompleted', {
-                mentorId: session.mentorId,
-                sessionId: session.sessionId,
-                bookingId: booking._id,
-                timestamp: now,
-              });
-            }
-                        // Manual End jaisa hi: dono UIs refresh ho, mentee ko review ka notification mile
-                        try {
-                          const endedPayload = {
-                            sessionId: session.sessionId,
-                            bookingId: String(booking._id),
-                            roomId: String(booking._id),
-                            endedAt: now.toISOString(),
-                            endedBy: 'system',
+          );
+          if (result.modifiedCount === 0) continue; // mentor ne beech me khud End kar diya
 
-                            status: menteeAttended ? BookingStatus.COMPLETED : BookingStatus.NO_SHOW,
-                            actualDuration: durationMinutes,
-                            autoCompleted: true,
-                          };
-                          const endedMenteeId = booking.menteeId || booking.bookedBy;
-                          const endedMentor: any = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
-                          if (endedMentor?.userId) emitToUser(endedMentor.userId, 'session:ended', endedPayload);
-                          if (endedMenteeId) {
-                            emitToUser(endedMenteeId, 'session:ended', endedPayload);
-                            
-                            NotificationService.sendNotification({
-                              userId: endedMenteeId,
-                              type: menteeAttended ? NotificationType.SESSION_COMPLETED : NotificationType.SESSION_NO_SHOW,
-                              channels: [NotificationChannel.IN_APP],
-                              data: menteeAttended
-                                ? {
-                                    title: 'Session Completed',
-                                    message: `Your session "${session.title}" is complete. Please leave a review!`,
-                                    sessionId: session.sessionId,
-                                    actionUrl: `/mentorship/user-dashboard/${endedMenteeId}?tab=reviews&review=${encodeURIComponent(session.sessionId)}`,
-                                  }
-                                : {
-                                    title: 'You missed your session',
-                                    message: `The mentor started "${session.title}" but you did not join. Refund is not available for a no-show.`,
-                                    sessionId: session.sessionId,
-                                    bookingId: String(booking._id),
-                                    actionUrl: `/mentorship/user-dashboard/${endedMenteeId}?tab=my-bookings`,
-                                  },
-                            }).catch((e) => logger.error('Notification failed (auto-complete):', e));
-                            if (!menteeAttended && endedMentor?.userId) {
-                              NotificationService.sendNotification({
-                                userId: endedMentor.userId,
-                                type: NotificationType.SESSION_NO_SHOW,
-                                channels: [NotificationChannel.IN_APP],
-                                data: {
-                                  title: 'Mentee did not join',
-                                  message: `The mentee did not join "${session.title}". It was marked as a no-show.`,
-                                  sessionId: session.sessionId,
-                                  bookingId: String(booking._id),
-                                },
-                              }).catch((e) => logger.error('Notification failed (no-show → mentor):', e));
-                            }
-
-
-                          }
-                        } catch (emitErr: any) {
-                          logger.warn(`Auto-complete notify/emit failed: ${emitErr.message}`);
-                        }
-            
-                        closed++;
-                      } catch (err: any) {
-                        logger.error(`Auto-complete failed for ${session.sessionId}/${booking._id}: ${err.message}`);
+          const updated = await SessionMentor.findOne({ sessionId: session.sessionId });
+          const allFinal = (updated?.bookings || []).every((b: any) =>
+            [
+              BookingStatus.COMPLETED,
+              BookingStatus.CANCELLED,
+              BookingStatus.NO_SHOW,
+              BookingStatus.MISSED,
+              BookingStatus.REFUNDED,
+            ].includes(b.status)
+          );
+          if (updated && allFinal && updated.status !== BookingStatus.COMPLETED) {
+            updated.status = menteeAttended ? BookingStatus.COMPLETED : BookingStatus.NO_SHOW;
+            updated.endedAt = now;
+            await updated.save();
           }
+
+          if (menteeAttended) {
+            TrustScoreEvents.emit('SessionCompleted', {
+              mentorId: session.mentorId,
+              sessionId: session.sessionId,
+              bookingId: booking._id,
+              timestamp: now,
+            });
+          }
+          // Manual End jaisa hi: dono UIs refresh ho, mentee ko review ka notification mile
+          try {
+            const endedPayload = {
+              sessionId: session.sessionId,
+              bookingId: String(booking._id),
+              roomId: String(booking._id),
+              endedAt: now.toISOString(),
+              endedBy: 'system',
+
+              status: menteeAttended ? BookingStatus.COMPLETED : BookingStatus.NO_SHOW,
+              actualDuration: durationMinutes,
+              autoCompleted: true,
+            };
+            const endedMenteeId = booking.menteeId || booking.bookedBy;
+            const endedMentor: any = await Mentor.findOne({ mentorId: session.mentorId, isDeleted: false });
+            if (endedMentor?.userId) emitToUser(endedMentor.userId, 'session:ended', endedPayload);
+            if (endedMenteeId) {
+              emitToUser(endedMenteeId, 'session:ended', endedPayload);
+
+              NotificationService.sendNotification({
+                userId: endedMenteeId,
+                type: menteeAttended ? NotificationType.SESSION_COMPLETED : NotificationType.SESSION_NO_SHOW,
+                channels: [NotificationChannel.IN_APP],
+                data: menteeAttended
+                  ? {
+                    title: 'Session Completed',
+                    message: `Your session "${session.title}" is complete. Please leave a review!`,
+                    sessionId: session.sessionId,
+                    actionUrl: `/mentorship/user-dashboard/${endedMenteeId}?tab=reviews&review=${encodeURIComponent(session.sessionId)}`,
+                  }
+                  : {
+                    title: 'You missed your session',
+                    message: `The mentor started "${session.title}" but you did not join. Refund is not available for a no-show.`,
+                    sessionId: session.sessionId,
+                    bookingId: String(booking._id),
+                    actionUrl: `/mentorship/user-dashboard/${endedMenteeId}?tab=my-bookings`,
+                  },
+              }).catch((e) => logger.error('Notification failed (auto-complete):', e));
+              if (!menteeAttended && endedMentor?.userId) {
+                NotificationService.sendNotification({
+                  userId: endedMentor.userId,
+                  type: NotificationType.SESSION_NO_SHOW,
+                  channels: [NotificationChannel.IN_APP],
+                  data: {
+                    title: 'Mentee did not join',
+                    message: `The mentee did not join "${session.title}". It was marked as a no-show.`,
+                    sessionId: session.sessionId,
+                    bookingId: String(booking._id),
+                  },
+                }).catch((e) => logger.error('Notification failed (no-show → mentor):', e));
+              }
+
+
+            }
+          } catch (emitErr: any) {
+            logger.warn(`Auto-complete notify/emit failed: ${emitErr.message}`);
+          }
+
+          closed++;
+        } catch (err: any) {
+          logger.error(`Auto-complete failed for ${session.sessionId}/${booking._id}: ${err.message}`);
         }
       }
-  
-      return closed;
     }
 
+    return closed;
+  }
 
-       /**
-   * Agar booking ka start window band ho chuka hai par cron ne abhi tak missed nahi kiya,
-   * to use abhi missed mark kar do (atomic). Mentee page ke "Missed" aur DB ke beech ka
-   * gap khatam karta hai. true return karta hai agar booking ab missed hai.
-   */
+
+  /**
+* Agar booking ka start window band ho chuka hai par cron ne abhi tak missed nahi kiya,
+* to use abhi missed mark kar do (atomic). Mentee page ke "Missed" aur DB ke beech ka
+* gap khatam karta hai. true return karta hai agar booking ab missed hai.
+*/
   async ensureMissedIfOverdue(sessionId: string, bookingId: string): Promise<boolean> {
     const session: any = await SessionMentor.findOne({ sessionId });
     if (!session) return false;
@@ -1522,12 +1538,12 @@ class MentorshipSessionService {
 
     return missed;
   }
-  
-    /**
-     * Cancel session
-     */
 
-    
+  /**
+   * Cancel session
+   */
+
+
   async cancelSession(
     sessionId: string,
     userId: string,
@@ -1618,34 +1634,34 @@ class MentorshipSessionService {
   }
 
 
-    /**
-   * Mentor ka us din ka availability doc dhoondta hai.
-   * doc.date UTC date ya doc ke timezone wali date, dono se match karta hai.
-   */
-    private async findAvailabilityDocForDate(mentorId: string, when: Date): Promise<any | null> {
-      const docs: any[] = await Availability.find({
-        mentorId,
-        isDeleted: false,
-        date: {
-          $gte: new Date(when.getTime() - 36 * 60 * 60 * 1000),
-          $lte: new Date(when.getTime() + 36 * 60 * 60 * 1000),
-        },
-      }).lean();
-  
-      const targetIn = (a: any) =>
-        DateTime.fromJSDate(when).setZone(a.timezone || 'Asia/Kolkata').toISODate();
-  
-      return (
-        docs.find((a: any) => new Date(a.date).toISOString().slice(0, 10) === targetIn(a)) ||
-        docs.find(
-          (a: any) =>
-            DateTime.fromJSDate(new Date(a.date)).setZone(a.timezone || 'Asia/Kolkata').toISODate() === targetIn(a)
-        ) ||
-        null
-      );
-    }
-  
-    async rescheduleSession(
+  /**
+ * Mentor ka us din ka availability doc dhoondta hai.
+ * doc.date UTC date ya doc ke timezone wali date, dono se match karta hai.
+ */
+  private async findAvailabilityDocForDate(mentorId: string, when: Date): Promise<any | null> {
+    const docs: any[] = await Availability.find({
+      mentorId,
+      isDeleted: false,
+      date: {
+        $gte: new Date(when.getTime() - 36 * 60 * 60 * 1000),
+        $lte: new Date(when.getTime() + 36 * 60 * 60 * 1000),
+      },
+    }).lean();
+
+    const targetIn = (a: any) =>
+      DateTime.fromJSDate(when).setZone(a.timezone || 'Asia/Kolkata').toISODate();
+
+    return (
+      docs.find((a: any) => new Date(a.date).toISOString().slice(0, 10) === targetIn(a)) ||
+      docs.find(
+        (a: any) =>
+          DateTime.fromJSDate(new Date(a.date)).setZone(a.timezone || 'Asia/Kolkata').toISODate() === targetIn(a)
+      ) ||
+      null
+    );
+  }
+
+  async rescheduleSession(
     sessionId: string,
     userId: string,
     newScheduledAt: Date,
@@ -1664,59 +1680,59 @@ class MentorshipSessionService {
         throw new BadRequestError('Booking not found');
       }
 
-           // Completed / cancelled / in-progress booking reschedule nahi ho sakti
-           const RESCHEDULABLE_BOOKING_STATUSES: string[] = ['pending', 'confirmed', 'rescheduled', 'missed'];
-           if (!RESCHEDULABLE_BOOKING_STATUSES.includes(booking.status)) {
-             throw new BadRequestError(`A ${booking.status} booking cannot be rescheduled`);
-           }
-     
-           const existingStartTime = booking.scheduledAt || session.scheduledAt;
-           if (booking.status === BookingStatus.MISSED) {
-             // Mentor ki wajah se session nahi hua -> 24h rule nahi lagta, aur sirf student reschedule kare
-             const bookingMenteeId = booking.menteeId || booking.bookedBy;
-             if (userId !== bookingMenteeId) {
-               throw new ForbiddenError('Only the student can reschedule a missed session');
-             }
-           } else {
-             const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
-             if (hoursDiff < 24) {
-               throw new BadRequestError('Cannot reschedule less than 24 hours before start time');
-             }
-           }
+      // Completed / cancelled / in-progress booking reschedule nahi ho sakti
+      const RESCHEDULABLE_BOOKING_STATUSES: string[] = ['pending', 'confirmed', 'rescheduled', 'missed'];
+      if (!RESCHEDULABLE_BOOKING_STATUSES.includes(booking.status)) {
+        throw new BadRequestError(`A ${booking.status} booking cannot be rescheduled`);
+      }
 
-           if (newScheduledAt <= new Date()) {
-            throw new BadRequestError('New scheduled time must be in the future');
+      const existingStartTime = booking.scheduledAt || session.scheduledAt;
+      if (booking.status === BookingStatus.MISSED) {
+        // Mentor ki wajah se session nahi hua -> 24h rule nahi lagta, aur sirf student reschedule kare
+        const bookingMenteeId = booking.menteeId || booking.bookedBy;
+        if (userId !== bookingMenteeId) {
+          throw new ForbiddenError('Only the student can reschedule a missed session');
+        }
+      } else {
+        const hoursDiff = (existingStartTime.getTime() - Date.now()) / (1000 * 60 * 60);
+        if (hoursDiff < 24) {
+          throw new BadRequestError('Cannot reschedule less than 24 hours before start time');
+        }
+      }
+
+      if (newScheduledAt <= new Date()) {
+        throw new BadRequestError('New scheduled time must be in the future');
+      }
+
+      // ---- Mentor availability sync: pehle NAYA slot lock karo ----
+      const oldSlotParts = String((booking as any).slotTime || '')
+        .split(' - ')
+        .map((t: string) => t.trim());
+      const hasOldSlot = Boolean((booking as any).availabilityId && oldSlotParts[0] && oldSlotParts[1]);
+      const slotDurationMin = Number(session.duration) > 0 ? Number(session.duration) : 30;
+      let newSlot: { availabilityId: string; startTime: string; endTime: string } | null = null;
+
+      if (session.sessionType !== SessionType.GROUP_SESSION) {
+        const newDoc = await this.findAvailabilityDocForDate(session.mentorId, newScheduledAt);
+        if (newDoc) {
+          const tz = newDoc.timezone || 'Asia/Kolkata';
+          const startTime = DateTime.fromJSDate(newScheduledAt).setZone(tz).toFormat('HH:mm');
+          const endTime = computeEndTime(startTime, slotDurationMin);
+          const locked = await availabilityService.bookRange(
+            newDoc.availabilityId,
+            session.mentorId,
+            startTime,
+            endTime,
+            session.sessionId
+          );
+          if (!locked) {
+            throw new ConflictError('This time slot is no longer available. Please pick another slot.');
           }
-    
-          // ---- Mentor availability sync: pehle NAYA slot lock karo ----
-          const oldSlotParts = String((booking as any).slotTime || '')
-            .split(' - ')
-            .map((t: string) => t.trim());
-          const hasOldSlot = Boolean((booking as any).availabilityId && oldSlotParts[0] && oldSlotParts[1]);
-          const slotDurationMin = Number(session.duration) > 0 ? Number(session.duration) : 30;
-          let newSlot: { availabilityId: string; startTime: string; endTime: string } | null = null;
-    
-          if (session.sessionType !== SessionType.GROUP_SESSION) {
-            const newDoc = await this.findAvailabilityDocForDate(session.mentorId, newScheduledAt);
-            if (newDoc) {
-              const tz = newDoc.timezone || 'Asia/Kolkata';
-              const startTime = DateTime.fromJSDate(newScheduledAt).setZone(tz).toFormat('HH:mm');
-              const endTime = computeEndTime(startTime, slotDurationMin);
-              const locked = await availabilityService.bookRange(
-                newDoc.availabilityId,
-                session.mentorId,
-                startTime,
-                endTime,
-                session.sessionId
-              );
-              if (!locked) {
-                throw new ConflictError('This time slot is no longer available. Please pick another slot.');
-              }
-              newSlot = { availabilityId: newDoc.availabilityId, startTime, endTime };
-            } else {
-              logger.warn(`No availability doc found for reschedule date, mentor ${session.mentorId}`);
-            }
-          }
+          newSlot = { availabilityId: newDoc.availabilityId, startTime, endTime };
+        } else {
+          logger.warn(`No availability doc found for reschedule date, mentor ${session.mentorId}`);
+        }
+      }
 
       const updateData: any = {
         $set: {
@@ -1746,37 +1762,37 @@ class MentorshipSessionService {
         updateData.$set['bookings.$.slotTime'] = `${newSlot.startTime} - ${newSlot.endTime}`;
       }
 
-           // status filter ke saath: agar isi beech refund ho gaya / status badal gaya to ye fail hoga
-           const rescheduleResult = await SessionMentor.updateOne(
-            {
-              sessionId,
-              bookings: { $elemMatch: { _id: bookingId, status: { $in: RESCHEDULABLE_BOOKING_STATUSES } } },
-            } as any,
-            updateData
+      // status filter ke saath: agar isi beech refund ho gaya / status badal gaya to ye fail hoga
+      const rescheduleResult = await SessionMentor.updateOne(
+        {
+          sessionId,
+          bookings: { $elemMatch: { _id: bookingId, status: { $in: RESCHEDULABLE_BOOKING_STATUSES } } },
+        } as any,
+        updateData
+      );
+
+      if (rescheduleResult.modifiedCount === 0) {
+        if (newSlot) {
+          await availabilityService.releaseRange(newSlot.availabilityId, newSlot.startTime, newSlot.endTime);
+        }
+
+        throw new ConflictError('Booking status just changed. Please refresh and try again.');
+      }
+
+      logger.info(`Session rescheduled: ${sessionId}`);
+
+      // Purana slot wapas free (naya slot upar lock ho chuka hai)
+      if (hasOldSlot) {
+        try {
+          await availabilityService.releaseRange(
+            String((booking as any).availabilityId),
+            oldSlotParts[0],
+            oldSlotParts[1]
           );
-
-          if (rescheduleResult.modifiedCount === 0) {
-            if (newSlot) {
-              await availabilityService.releaseRange(newSlot.availabilityId, newSlot.startTime, newSlot.endTime);
-            }
-
-            throw new ConflictError('Booking status just changed. Please refresh and try again.');
-          }
-
-          logger.info(`Session rescheduled: ${sessionId}`);
-
-          // Purana slot wapas free (naya slot upar lock ho chuka hai)
-          if (hasOldSlot) {
-            try {
-              await availabilityService.releaseRange(
-                String((booking as any).availabilityId),
-                oldSlotParts[0],
-                oldSlotParts[1]
-              );
-            } catch (relErr: any) {
-              logger.warn(`Old slot release failed after reschedule: ${relErr.message}`);
-            }
-          }
+        } catch (relErr: any) {
+          logger.warn(`Old slot release failed after reschedule: ${relErr.message}`);
+        }
+      }
 
       try {
         const menteeId = booking.menteeId || booking.bookedBy;
@@ -1805,9 +1821,9 @@ class MentorshipSessionService {
         logger.warn(`Failed to send reschedule notification: ${notifErr.message}`);
       }
 
-            // TODO: Update calendar via calendarSync.service
+      // TODO: Update calendar via calendarSync.service
 
-            return await SessionMentor.findOne({ sessionId });
+      return await SessionMentor.findOne({ sessionId });
     } catch (error: any) {
       logger.error(`Failed to reschedule session: ${error.message}`);
       throw error;
@@ -1828,7 +1844,7 @@ class MentorshipSessionService {
         throw new BadRequestError('Can only review completed sessions');
       }
 
-      const mentor       = await Mentor.findOne({ userId, isDeleted: false });
+      const mentor = await Mentor.findOne({ userId, isDeleted: false });
       const reviewerType = mentor && session.mentorId === mentor.mentorId ? 'mentor' : 'mentee';
 
       await session.addReview(rating, review, reviewerType);
@@ -1944,10 +1960,10 @@ class MentorshipSessionService {
         {
           $group: {
             _id: null,
-            total:     { $sum: 1 },
+            total: { $sum: 1 },
             completed: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
             cancelled: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
-            upcoming:  {
+            upcoming: {
               $sum: {
                 $cond: [
                   {
@@ -1977,14 +1993,14 @@ class MentorshipSessionService {
 
   private mapSessionTypeToPrice(sessionType: SessionType): string {
     const mapping: Record<SessionType, string> = {
-      [SessionType.QUICK_CALL]:      'quickCall',
-      [SessionType.DEEP_DIVE]:       'deepDive',
-      [SessionType.RESUME_REVIEW]:   'resumeReview',
-      [SessionType.MOCK_INTERVIEW]:  'mockInterview',
+      [SessionType.QUICK_CALL]: 'quickCall',
+      [SessionType.DEEP_DIVE]: 'deepDive',
+      [SessionType.RESUME_REVIEW]: 'resumeReview',
+      [SessionType.MOCK_INTERVIEW]: 'mockInterview',
       [SessionType.CAREER_PLANNING]: 'careerPlanning',
-      [SessionType.PORTFOLIO_REVIEW]:'portfolioReview',
-      [SessionType.ASK_QUERY]:       'askQuery',
-      [SessionType.GROUP_SESSION]:   'groupSession',
+      [SessionType.PORTFOLIO_REVIEW]: 'portfolioReview',
+      [SessionType.ASK_QUERY]: 'askQuery',
+      [SessionType.GROUP_SESSION]: 'groupSession',
     };
     return mapping[sessionType] as any;
   }

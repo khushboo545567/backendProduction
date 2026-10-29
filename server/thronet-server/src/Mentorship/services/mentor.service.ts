@@ -1,7 +1,7 @@
 import { User, ProfilePhoto, Education, Experience } from '@/shared/models/index.models';
-import mongoose from 'mongoose';
 import Company from '@/company/models/Company.model';
-import { Mentor, SessionMentor, GroupSession } from '../models';
+import { Mentor, SessionMentor, SeniorSession, GroupSession } from '../models';
+import { calculateMentorSessionCounts } from '../utils/sessionCounting.util';
 import {
   CreateMentorInput,
   ExperienceLevel,
@@ -103,6 +103,14 @@ class MentorService {
       };
 
       // 8. Create mentor
+      if (Array.isArray(input.experience?.previousRoles)) {
+        input.experience.previousRoles = input.experience.previousRoles.map((role: any) => {
+          const r = { ...role };
+          if (r.isCurrent) delete r.endDate;
+          return r;
+        });
+      }
+
       const mentorData = {
         ...input,
         experience: {
@@ -243,6 +251,15 @@ class MentorService {
       // widen ho jana). Local const par TS ki narrowing reliably kaam karti hai.
       if (updates.experience) {
         const mergedExperience = { ...mentor.experience, ...updates.experience };
+        if (Array.isArray(mergedExperience.previousRoles)) {
+          mergedExperience.previousRoles = mergedExperience.previousRoles.map((role: any) => {
+            const r = typeof role.toObject === 'function' ? role.toObject() : { ...role };
+            if (r.isCurrent) {
+              delete r.endDate;
+            }
+            return r;
+          });
+        }
         // ✅ FIX: total change hone par level bhi recalculate karo, warna purana level hi reh jayega
         if (mergedExperience.total !== undefined) {
           mergedExperience.level = this.calculateExperienceLevel(mergedExperience.total);
@@ -250,7 +267,44 @@ class MentorService {
         updates.experience = mergedExperience;
       }
       if (updates.socialProof) {
-        updates.socialProof = { ...mentor.socialProof, ...updates.socialProof };
+        const socialUrlKeys = [
+          'linkedinUrl',
+          'githubUrl',
+          'portfolioUrl',
+          'twitterUrl',
+          'leetcodeUrl',
+          'websiteUrl',
+        ] as const;
+
+        const unsets: Record<string, 1> = {};
+        const sets: Record<string, any> = {};
+
+        for (const key of socialUrlKeys) {
+          if (key in updates.socialProof) {
+            const val = (updates.socialProof as any)[key];
+            if (val === '' || val === null || val === undefined) {
+              if (key === 'linkedinUrl') {
+                throw new BadRequestError('LinkedIn URL cannot be cleared or empty');
+              }
+              unsets[`socialProof.${key}`] = 1;
+            } else {
+              sets[`socialProof.${key}`] = typeof val === 'string' ? val.trim() : val;
+            }
+          }
+        }
+
+        if (updates.socialProof.certifications !== undefined) {
+          sets['socialProof.certifications'] = updates.socialProof.certifications;
+        }
+        if (updates.socialProof.achievements !== undefined) {
+          sets['socialProof.achievements'] = updates.socialProof.achievements;
+        }
+
+        delete updates.socialProof;
+        Object.assign(updates, sets);
+        if (Object.keys(unsets).length > 0) {
+          (updates as any).$unset = { ...((updates as any).$unset || {}), ...unsets };
+        }
       }
     
           if (updates.pricing) {
@@ -980,13 +1034,36 @@ class MentorService {
 
       const mentorIds = [mentor.mentorId, mentor.userId].filter(Boolean);
 
-      // Stats calculations
-      const completedSessionsCount = await SessionMentor.countDocuments({
-        mentorId: { $in: mentorIds },
-        status: 'completed',
-      });
-
       const now = new Date();
+
+      // Unified session counts across SessionMentor, SeniorSession, and GroupSession:
+      // totalSessions = completed + upcoming + missedNotHeld
+      // (exclude pending and cancelled; treat overdue confirmed AND overdue in_progress as missed/not held)
+      const sessionCounts = await calculateMentorSessionCounts(mentorIds, now);
+
+      // thisMonthEarnings (IST calendar month): sum of pricing.totalAmount for bookings
+      // where session actually took place (status: 'completed') and payment was successful.
+      const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
+      const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+      const istMonthStart = new Date(Date.UTC(nowIST.getUTCFullYear(), nowIST.getUTCMonth(), 1) - IST_OFFSET_MS);
+      const istMonthEnd   = new Date(Date.UTC(nowIST.getUTCFullYear(), nowIST.getUTCMonth() + 1, 1) - IST_OFFSET_MS);
+      const earningsAgg = await SessionMentor.aggregate([
+        { $match: { mentorId: { $in: mentorIds } } },
+        { $unwind: { path: '$bookings', preserveNullAndEmptyArrays: false } },
+        {
+          $match: {
+            'bookings.scheduledAt': { $gte: istMonthStart, $lt: istMonthEnd },
+            'bookings.status': 'completed',
+            $or: [
+              { 'bookings.payment.status': { $in: ['paid', 'completed'] } },
+              { 'bookings.payoutStatus': 'paid_out' },
+            ],
+          },
+        },
+        { $group: { _id: null, total: { $sum: '$bookings.pricing.totalAmount' } } },
+      ]);
+      const thisMonthEarnings: number = earningsAgg[0]?.total ?? 0;
+
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
 
@@ -1018,7 +1095,7 @@ class MentorService {
         .limit(10)
         .lean();
 
-      // Collect all raw mentee IDs across 1-on-1 and group sessions for bulk resolution
+      // Collect all raw mentee IDs across upcoming AND missed sessions for bulk resolution
       const rawMenteeIds: string[] = [];
 
       upcoming1on1Docs.forEach((s: any) => {
@@ -1046,6 +1123,57 @@ class MentorService {
           });
         }
       });
+
+      // ── Missed / Not-held sessions list ──────────────────────────────────────────
+      // Collect overdue or missed bookings across SessionMentor and SeniorSession
+      // so DashboardOverviewPage missed/not-held panel has real data matching the stats card.
+      const missed1on1Docs = await SessionMentor.find({
+        mentorId: { $in: mentorIds },
+        'bookings.0': { $exists: true },
+      }).lean();
+
+      const missedSeniorDocs = await SeniorSession.find({
+        mentorId: { $in: mentorIds },
+        'bookings.0': { $exists: true },
+      }).lean();
+
+      const missedBookingsList: any[] = [];
+
+      for (const s of missed1on1Docs as any[]) {
+        if (Array.isArray(s.bookings)) {
+          for (const b of s.bookings) {
+            const status = b.status;
+            if (!status || ['cancelled', 'refunded', 'rejected', 'pending'].includes(status)) continue;
+            const start = new Date(b.scheduledAt || s.scheduledAt || 0);
+            const dur = Number(b.duration || b.slotDuration || s.duration || 60);
+            const end = b.endTime ? new Date(b.endTime) : new Date(start.getTime() + dur * 60000);
+
+            if (['missed', 'not_held', 'no_show'].includes(status) || (['confirmed', 'in_progress', 'rescheduled'].includes(status) && end < now)) {
+              if (b.menteeId) rawMenteeIds.push(String(b.menteeId));
+              if (b.bookedBy) rawMenteeIds.push(String(b.bookedBy));
+              missedBookingsList.push({ s, b, start, end, dur, status });
+            }
+          }
+        }
+      }
+
+      for (const s of missedSeniorDocs as any[]) {
+        if (Array.isArray(s.bookings)) {
+          for (const b of s.bookings) {
+            const status = b.status;
+            if (!status || ['cancelled', 'refunded', 'rejected', 'pending'].includes(status)) continue;
+            const start = new Date(b.scheduledAt || s.scheduledAt || 0);
+            const dur = Number(b.duration || s.duration || 60);
+            const end = b.endTime ? new Date(b.endTime) : new Date(start.getTime() + dur * 60000);
+
+            if (['missed', 'not_held', 'no_show'].includes(status) || (['confirmed', 'in_progress', 'rescheduled', 'upcoming'].includes(status) && end < now)) {
+              if (b.menteeId) rawMenteeIds.push(String(b.menteeId));
+              if (b.bookedBy) rawMenteeIds.push(String(b.bookedBy));
+              missedBookingsList.push({ s, b, start, end, dur, status });
+            }
+          }
+        }
+      }
 
       // Bulk resolve all mentee details and photo URLs (Zero N+1)
       const userDetailsMap = await resolveUserDetails(rawMenteeIds);
@@ -1126,6 +1254,40 @@ class MentorService {
         };
       });
 
+      const formattedMissed = missedBookingsList.map(({ s, b, start, end, dur, status }) => {
+        const rawId = b.menteeId || b.bookedBy || null;
+        const resolved = rawId ? userDetailsMap.get(String(rawId)) : null;
+
+        const menteeId = resolved?.userId || (rawId ? String(rawId) : null);
+        const menteeName = (resolved && resolved.name && resolved.name !== 'User')
+          ? resolved.name
+          : (b.menteeName || s.bookedMenteeName || 'Student');
+        const menteeProfilePhoto = resolved?.photoUrl || null;
+
+        const startTimeIso = start.toISOString();
+        const endTimeIso = end.toISOString();
+
+        return {
+          _id: b._id || s._id,
+          sessionId: s.sessionId || String(s._id),
+          bookingId: b._id || b.bookingId,
+          menteeId,
+          menteeName,
+          menteeProfilePhoto,
+          title: s.title || s.sessionType || '1-on-1 Mentorship',
+          sessionType: s.sessionType || '1-on-1 Mentorship',
+          scheduledAt: startTimeIso,
+          startTime: startTimeIso,
+          endTime: endTimeIso,
+          durationMinutes: dur,
+          status,
+          isGroupSession: false,
+          meetingUrl: s.meetingDetails?.meetingUrl || null,
+          startedAt: b.startedAt || null,
+          bookings: [b],
+        };
+      });
+
       const allUpcoming = [...formatted1on1, ...formattedGroup].sort(
         (a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
       );
@@ -1134,7 +1296,12 @@ class MentorService {
 
       const averageRating = mentor.stats?.averageRating ?? 0;
       const totalReviews = mentor.stats?.totalReviews ?? 0;
-      const trustScore = mentor.trustScore?.score ?? mentor.stats?.trustScore ?? null;
+      // trustScore.overall is the correct DB field; .score does not exist
+      const trustScore =
+        (mentor.trustScore?.overall != null ? mentor.trustScore.overall : undefined) ??
+        (mentor.trustScore?.score != null ? mentor.trustScore.score : undefined) ??
+        mentor.stats?.trustScore ??
+        null;
       const isVerified = Boolean(mentor.verification?.isVerified || mentor.isVerified);
       const category = (Array.isArray(mentor.domains) && mentor.domains[0]) || mentor.title || 'Web Development';
 
@@ -1153,14 +1320,18 @@ class MentorService {
         rating: averageRating,
         totalReviews,
         stats: {
-          totalSessions: completedSessionsCount,
-          upcoming: upcomingCount,
+          totalSessions: sessionCounts.totalSessions,
+          upcoming: sessionCounts.upcoming,
+          completed: sessionCounts.completed,
+          missedNotHeld: sessionCounts.missedNotHeld,
           rating: averageRating,
           trustScore,
+          thisMonthEarnings,
         },
         isVerified,
         serverNow: new Date().toISOString(),
         upcomingSessions,
+        missedNotHeldSessions: formattedMissed,
       };
     } catch (error: any) {
       logger.error(`Error fetching mentor dashboard data: ${error.message}`);
