@@ -4,7 +4,7 @@ import { SessionType } from '@/shared/constants/sessionTypes';
 import { BookingStatus, isStartAllowed } from '@/shared/constants/bookingStatus';
 import { ISessionMentor, PaymentStatus, PaymentMethod } from '@/Mentorship/interface/session.types';
 
-export interface SessionMentorshipDocument extends Omit<ISessionMentor, '_id'>, Document {}
+export interface SessionMentorshipDocument extends Omit<ISessionMentor, '_id'>, Document { }
 
 const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
   {
@@ -58,7 +58,7 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       default: 'UTC',
     },
     startedAt: { type: Date },
-    endedAt:   { type: Date },
+    endedAt: { type: Date },
     title: {
       type: String,
       required: [true, 'Title is required'],
@@ -70,74 +70,75 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
       trim: true,
       maxlength: [1000, 'Description cannot exceed 1000 characters'],
     },
-    notes:       { type: String, trim: true },
+    notes: { type: String, trim: true },
     attachments: [String],
     thumbnailImage: { type: String },
     pricing: {
-      basePrice:    { type: Number, required: true, min: 0 },
-      platformFee:  { type: Number, required: true, min: 0 },
-      totalAmount:  { type: Number, required: true, min: 0 },
-      currency:     { type: String, default: 'INR' },
+      basePrice: { type: Number, required: true, min: 0 },
+      platformFee: { type: Number, required: true, min: 0 },
+      totalAmount: { type: Number, required: true, min: 0 },
+      currency: { type: String, default: 'INR' },
     },
     settings: {
       followUp: {
-        allowed:    { type: Number, default: 0 },
+        allowed: { type: Number, default: 0 },
         periodDays: { type: Number, default: 0 },
       },
       bufferTimeMinutes: { type: Number, default: 0 },
     },
     bookings: [
       {
-        menteeId:       { type: String, required: true },
-        bookedBy:       { type: String },
-        bookedAt:       { type: Date, default: Date.now },
+        menteeId: { type: String, required: true },
+        bookedBy: { type: String },
+        bookedAt: { type: Date, default: Date.now },
         status: {
           type: String,
           enum: ['pending', 'confirmed', 'rescheduled', 'in_progress', 'cancelled', 'completed', 'no_show', 'missed'],
           default: 'pending',
         },
-        slotTime:       { type: String },
-        scheduledAt:    { type: Date },
+        slotTime: { type: String },
+        scheduledAt: { type: Date },
         availabilityId: { type: String },
         // Reminder dedupe flags
         reminders: {
           m15: { type: Boolean, default: false },
-          m5:  { type: Boolean, default: false },
+          m5: { type: Boolean, default: false },
           h24: { type: Boolean, default: false },   // 24-hour reminder
-          h1:  { type: Boolean, default: false },   // 1-hour reminder
+          h1: { type: Boolean, default: false },   // 1-hour reminder
           m30: { type: Boolean, default: false },
         },
 
-        startedAt:      { type: Date },
-        missedAt:       { type: Date },
+        startedAt: { type: Date },
+        missedAt: { type: Date },
         menteeJoinedAt: { type: Date },   // mentee pehli baar room me kab aaya (completed vs no_show isi se tay hota hai)
-        noShowAt:       { type: Date },
-        
+        noShowAt: { type: Date },
+
         payment: {
           status: { type: String },
-          method:           { type: String },
-          transactionId:    { type: String },
-          gatewayOrderId:   { type: String },
+          method: { type: String },
+          transactionId: { type: String },
+          gatewayOrderId: { type: String },
           gatewayPaymentId: { type: String, index: true },
-          paidAt:           { type: Date },
-          refundAmount:     { type: Number },
-          refundedAt:       { type: Date },
+          paidAt: { type: Date },
+          refundAmount: { type: Number },
+          refundedAt: { type: Date },
         },
         pricing: {
-          basePrice:   { type: Number, default: 0 },
+          basePrice: { type: Number, default: 0 },
           platformFee: { type: Number, default: 0 },
           totalAmount: { type: Number, default: 0 },
-          currency:    { type: String, default: 'INR' },
+          currency: { type: String, default: 'INR' },
         },
         completion: {
-          completedAt:      { type: Date },
-          actualDuration:   { type: Number },
-          wasSuccessful:    { type: Boolean, default: true },
+          completedAt: { type: Date },
+          actualDuration: { type: Number },
+          wasSuccessful: { type: Boolean, default: true },
           followUpRequired: { type: Boolean, default: false },
-          followUpNotes:    { type: String },
+          followUpNotes: { type: String },
         },
         // Missed-session refund: mentee ke payout details (mentor ko return karne ke liye)
         refundRequest: {
+<<<<<<< Updated upstream
           email:         { type: String },
           phone:         { type: String },
           upiId:         { type: String },
@@ -151,20 +152,28 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
           reference:     { type: String },
           refundedAt:    { type: Date },
           handledBy:     { type: String },
+=======
+          email: { type: String },
+          phone: { type: String },
+          upiId: { type: String },
+          note: { type: String },
+          amount: { type: Number },
+          requestedAt: { type: Date },
+>>>>>>> Stashed changes
         },
       },
     ],
 
-    isBooked:       { type: Boolean, default: false, index: true },
-    bookedBy:       { type: String, default: null },
-    bookedAt:       { type: Date, default: null },
-    slotTime:       { type: String },
+    isBooked: { type: Boolean, default: false, index: true },
+    bookedBy: { type: String, default: null },
+    bookedAt: { type: Date, default: null },
+    slotTime: { type: String },
     availabilityId: { type: String, index: true },
     progress: {
       totalSessionsBooked: { type: Number, default: 0 },
-      completedSessions:   { type: Number, default: 0 },
-      leftSessions:        { type: Number, default: 0 },
-      totalTimeSpent:      { type: Number, default: 0 },
+      completedSessions: { type: Number, default: 0 },
+      leftSessions: { type: Number, default: 0 },
+      totalTimeSpent: { type: Number, default: 0 },
     },
     payment: {
       status: {
@@ -178,49 +187,49 @@ const SessionMentorSchema = new Schema<SessionMentorshipDocument>(
         enum: Object.values(PaymentMethod),
         required: true,
       },
-      transactionId:    { type: String, index: true },
-      gatewayOrderId:   { type: String },
+      transactionId: { type: String, index: true },
+      gatewayOrderId: { type: String },
       gatewayPaymentId: { type: String },
-      paidAt:           { type: Date },
-      refundAmount:     { type: Number, min: 0 },
-      refundedAt:       { type: Date },
-      refundReason:     { type: String },
+      paidAt: { type: Date },
+      refundAmount: { type: Number, min: 0 },
+      refundedAt: { type: Date },
+      refundReason: { type: String },
     },
     meeting: {
-      platform:     { type: String, enum: ['zoom', 'google_meet', 'daily_co', 'custom'] },
-      meetingUrl:   { type: String },
-      meetingId:    { type: String },
-      passcode:     { type: String },
+      platform: { type: String, enum: ['zoom', 'google_meet', 'daily_co', 'custom'] },
+      meetingUrl: { type: String },
+      meetingId: { type: String },
+      passcode: { type: String },
       recordingUrl: { type: String },
     },
     cancellation: {
-      cancelledBy:    { type: String },
-      cancelledAt:    { type: Date },
-      reason:         { type: String },
+      cancelledBy: { type: String },
+      cancelledAt: { type: Date },
+      reason: { type: String },
       refundEligible: { type: Boolean, default: false },
     },
     reschedule: {
-      count:              { type: Number, default: 0, min: 0 },
-      lastRescheduledAt:  { type: Date },
-      previousDates:      [Date],
-      rescheduledBy:      { type: String },
-      reason:             { type: String },
+      count: { type: Number, default: 0, min: 0 },
+      lastRescheduledAt: { type: Date },
+      previousDates: [Date],
+      rescheduledBy: { type: String },
+      reason: { type: String },
     },
     review: {
       mentorReview: { type: String },
       menteeReview: { type: String },
-      rating:       { type: Number, min: 1, max: 5 },
-      reviewedAt:   { type: Date },
+      rating: { type: Number, min: 1, max: 5 },
+      reviewedAt: { type: Date },
     },
 
     completion: {
-      completedAt:      { type: Date },
-      actualDuration:   { type: Number },
-      wasSuccessful:    { type: Boolean, default: true },
+      completedAt: { type: Date },
+      actualDuration: { type: Number },
+      wasSuccessful: { type: Boolean, default: true },
       followUpRequired: { type: Boolean, default: false },
-      followUpNotes:    { type: String },
-      leftAt:           { type: Date },
-      leftEarlyReason:  { type: String },
+      followUpNotes: { type: String },
+      leftAt: { type: Date },
+      leftEarlyReason: { type: String },
     },
   },
   {
@@ -485,9 +494,9 @@ SessionMentorSchema.statics.getSessionStats = async function (
     {
       $group: {
         _id: null,
-        total:        { $sum: 1 },
-        completed:    { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
-        cancelled:    { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
+        total: { $sum: 1 },
+        completed: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
+        cancelled: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.CANCELLED] }, 1, 0] } },
         upcoming: {
           $sum: {
             $cond: [

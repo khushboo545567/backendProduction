@@ -21,9 +21,17 @@ class MentorRepository {
   }
 
   async updateByMentorId(mentorId: string, updates: any): Promise<any | null> {
+    const mongoUpdate: any = {};
+    if (updates.$unset) {
+      mongoUpdate.$unset = updates.$unset;
+      delete updates.$unset;
+    }
+    if (Object.keys(updates).length > 0) {
+      mongoUpdate.$set = updates;
+    }
     const mentor = await Mentor.findOneAndUpdate(
       { mentorId, isDeleted: false },
-      { $set: updates },
+      mongoUpdate,
       { new: true, runValidators: true }   // ✅ FIX: schema validation ab update ke time bhi chalegi
     );
     if (!mentor) return null;

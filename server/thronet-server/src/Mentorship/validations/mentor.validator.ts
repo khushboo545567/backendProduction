@@ -12,6 +12,106 @@ class MentorValidator {
   }
 
   /**
+   * Validate URL format with strict https and domain checks.
+   * Empty string/null/undefined is allowed when optional.
+   */
+  public static validateUrl(value: unknown, allowedDomains?: string[]): boolean {
+    if (value === undefined || value === null || value === '') return true;
+    if (typeof value !== 'string') throw new Error('URL must be a string');
+    const trimmed = value.trim();
+    if (trimmed === '') return true;
+    if (trimmed.length > 200) throw new Error('URL cannot exceed 200 characters');
+
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      throw new Error('Invalid URL format');
+    }
+
+    if (parsed.protocol !== 'https:') {
+      throw new Error('URL must use https:// protocol');
+    }
+
+    if (allowedDomains && allowedDomains.length > 0) {
+      const host = parsed.hostname.toLowerCase();
+      const isAllowed = allowedDomains.some(
+        (domain) => host === domain || host.endsWith(`.${domain}`)
+      );
+      if (!isAllowed) {
+        throw new Error(`URL must be from ${allowedDomains.join(' or ')}`);
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Validate previousRoles array
+   */
+  public static validatePreviousRoles(roles: unknown): boolean {
+    if (roles === undefined || roles === null) return true;
+    if (!Array.isArray(roles)) throw new Error('Experience entries must be an array');
+    if (roles.length > 10) throw new Error('Cannot exceed 10 experience entries');
+
+    const employmentTypes = ['Full-time', 'Part-time', 'Contract', 'Internship', 'Freelance'];
+    const yyyyMmRegex = /^\d{4}-(?:0[1-9]|1[0-2])$/;
+
+    for (let i = 0; i < roles.length; i++) {
+      const role = roles[i];
+      if (!role || typeof role !== 'object') {
+        throw new Error(`Experience entry #${i + 1} must be an object`);
+      }
+      if (!role.title || typeof role.title !== 'string' || !role.title.trim()) {
+        throw new Error(`Title is required for experience entry #${i + 1}`);
+      }
+      if (role.title.trim().length > 100) {
+        throw new Error(`Title for experience entry #${i + 1} cannot exceed 100 characters`);
+      }
+      if (!role.company || typeof role.company !== 'string' || !role.company.trim()) {
+        throw new Error(`Company is required for experience entry #${i + 1}`);
+      }
+      if (role.company.trim().length > 100) {
+        throw new Error(`Company for experience entry #${i + 1} cannot exceed 100 characters`);
+      }
+      if (role.startDate !== undefined && role.startDate !== null && role.startDate !== '') {
+        if (!yyyyMmRegex.test(role.startDate)) {
+          throw new Error(`Start date for experience entry #${i + 1} must be in YYYY-MM format`);
+        }
+      }
+      const isCurrent = Boolean(role.isCurrent);
+      if (!isCurrent && role.endDate !== undefined && role.endDate !== null && role.endDate !== '') {
+        if (!yyyyMmRegex.test(role.endDate)) {
+          throw new Error(`End date for experience entry #${i + 1} must be in YYYY-MM format`);
+        }
+        if (role.startDate && yyyyMmRegex.test(role.startDate)) {
+          if (role.endDate < role.startDate) {
+            throw new Error(`End date cannot be earlier than start date for experience entry #${i + 1}`);
+          }
+        }
+      }
+      if (role.employmentType !== undefined && role.employmentType !== null && role.employmentType !== '') {
+        if (!employmentTypes.includes(role.employmentType)) {
+          throw new Error(`Invalid employment type for experience entry #${i + 1}. Must be one of: ${employmentTypes.join(', ')}`);
+        }
+      }
+      if (role.description !== undefined && role.description !== null && role.description !== '') {
+        if (typeof role.description === 'string' && role.description.length > 300) {
+          throw new Error(`Description for experience entry #${i + 1} cannot exceed 300 characters`);
+        }
+      }
+      if (role.companyLogo !== undefined && role.companyLogo !== null && role.companyLogo !== '') {
+        try {
+          MentorValidator.validateUrl(role.companyLogo);
+        } catch {
+          throw new Error(`Company logo for experience entry #${i + 1} must be a valid https URL`);
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
    * ✅ UPDATED: Validate mentorId (UUID v4)
    */
   static getMentorById() {
@@ -226,6 +326,39 @@ body('experience.level')
       body('availability.bufferBetweenSessions').optional()
         .isInt({ min: 0 })
         .withMessage('Buffer must be >= 0'),
+
+      body('experience.previousRoles')
+        .optional()
+        .custom((roles) => MentorValidator.validatePreviousRoles(roles)),
+
+      body('socialProof.linkedinUrl')
+        .optional({ nullable: false })
+        .custom((val) => {
+          if (val === '' || val === null || (typeof val === 'string' && val.trim() === '')) {
+            throw new Error('LinkedIn URL cannot be cleared or empty');
+          }
+          return MentorValidator.validateUrl(val, ['linkedin.com']);
+        }),
+
+      body('socialProof.githubUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val, ['github.com'])),
+
+      body('socialProof.twitterUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val, ['x.com', 'twitter.com'])),
+
+      body('socialProof.leetcodeUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val, ['leetcode.com'])),
+
+      body('socialProof.portfolioUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val)),
+
+      body('socialProof.websiteUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val)),
     ];
   }
 
@@ -330,6 +463,39 @@ body('experience.level')
           }
           return true;
         }),
+
+      body('experience.previousRoles')
+        .optional()
+        .custom((roles) => MentorValidator.validatePreviousRoles(roles)),
+
+      body('socialProof.linkedinUrl')
+        .optional({ nullable: false })
+        .custom((val) => {
+          if (val === '' || val === null || (typeof val === 'string' && val.trim() === '')) {
+            throw new Error('LinkedIn URL cannot be cleared or empty');
+          }
+          return MentorValidator.validateUrl(val, ['linkedin.com']);
+        }),
+
+      body('socialProof.githubUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val, ['github.com'])),
+
+      body('socialProof.twitterUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val, ['x.com', 'twitter.com'])),
+
+      body('socialProof.leetcodeUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val, ['leetcode.com'])),
+
+      body('socialProof.portfolioUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val)),
+
+      body('socialProof.websiteUrl')
+        .optional()
+        .custom((val) => MentorValidator.validateUrl(val)),
     ];
   }
 

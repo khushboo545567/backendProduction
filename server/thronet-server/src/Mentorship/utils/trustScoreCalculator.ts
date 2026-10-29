@@ -15,15 +15,30 @@ export class TrustScoreCalculator {
   public static calculate(metrics: TrustScoreMetrics): ITrustScore {
     const profileCompleteness = this.calculateProfileCompleteness(metrics);
     const reliability = this.calculateReliability(metrics);
-    const studentSatisfaction = this.calculateStudentSatisfaction(metrics);
+    const hasReviews = metrics.totalReviews > 0;
+    const studentSatisfaction = hasReviews ? this.calculateStudentSatisfaction(metrics) : null;
     const engagement = this.calculateEngagement(metrics);
 
-    let overall = Math.round(
-      profileCompleteness * TRUST_SCORE_WEIGHTS.PROFILE_COMPLETENESS +
-      reliability * TRUST_SCORE_WEIGHTS.RELIABILITY +
-      studentSatisfaction * TRUST_SCORE_WEIGHTS.STUDENT_SATISFACTION +
-      engagement * TRUST_SCORE_WEIGHTS.ENGAGEMENT
-    );
+    let overall: number;
+    if (hasReviews && studentSatisfaction !== null) {
+      overall = Math.round(
+        profileCompleteness * TRUST_SCORE_WEIGHTS.PROFILE_COMPLETENESS +
+        reliability * TRUST_SCORE_WEIGHTS.RELIABILITY +
+        studentSatisfaction * TRUST_SCORE_WEIGHTS.STUDENT_SATISFACTION +
+        engagement * TRUST_SCORE_WEIGHTS.ENGAGEMENT
+      );
+    } else {
+      const activeWeightSum =
+        TRUST_SCORE_WEIGHTS.PROFILE_COMPLETENESS +
+        TRUST_SCORE_WEIGHTS.RELIABILITY +
+        TRUST_SCORE_WEIGHTS.ENGAGEMENT;
+
+      overall = Math.round(
+        (profileCompleteness * TRUST_SCORE_WEIGHTS.PROFILE_COMPLETENESS +
+         reliability * TRUST_SCORE_WEIGHTS.RELIABILITY +
+         engagement * TRUST_SCORE_WEIGHTS.ENGAGEMENT) / activeWeightSum
+      );
+    }
 
     overall = Math.min(Math.max(overall, 0), 100);
 
@@ -61,12 +76,15 @@ export class TrustScoreCalculator {
 
   private static calculateProfileCompleteness(metrics: TrustScoreMetrics): number {
     let score = 0;
-    const totalFields = 5;
+    const totalFields = 8;
     
     if (metrics.hasTitle) score++;
     if (metrics.hasBio) score++;
     if (metrics.hasDomains) score++;
     if (metrics.hasSkills) score++;
+    if (metrics.hasCompany) score++;
+    if (metrics.hasExperience) score++;
+    if (metrics.hasSocialLinks) score++;
     if (metrics.isVerified) score++;
     
     return Math.round((score / totalFields) * 100);
@@ -107,27 +125,83 @@ export class TrustScoreCalculator {
     return Math.min(Math.round(score), 100);
   }
 
-  private static generateImprovementSuggestions(metrics: TrustScoreMetrics, profile: number, reliability: number, satisfaction: number, engagement: number): { text: string }[] {
-    const suggestions: { text: string }[] = [];
+  private static generateImprovementSuggestions(metrics: TrustScoreMetrics, profile: number, reliability: number, satisfaction: number | null, engagement: number): { text: string; action?: string }[] {
+    const suggestions: { text: string; action?: string }[] = [];
 
-    if (profile < 100) {
-      suggestions.push({ text: `Complete the remaining profile sections to reach 100% (currently ${profile}%).` });
+    if (!metrics.isVerified) {
+      suggestions.push({
+        text: "Complete document and identity verification to earn your trusted mentor badge.",
+        action: "verify",
+      });
     }
 
-    if (metrics.completedSessions < 10) {
-      const remaining = 10 - metrics.completedSessions;
-      suggestions.push({ text: `Complete ${remaining} more session${remaining > 1 ? 's' : ''} to boost your engagement score.` });
+    if (!metrics.hasCompany) {
+      suggestions.push({
+        text: "Add your current company to enhance your profile completeness.",
+        action: "profile",
+      });
+    }
+
+    if (!metrics.hasExperience) {
+      suggestions.push({
+        text: "Add your work experience to highlight your professional background.",
+        action: "profile",
+      });
+    }
+
+    if (!metrics.hasSocialLinks) {
+      suggestions.push({
+        text: "Add a GitHub, portfolio, or other social link to verify your work.",
+        action: "profile",
+      });
+    }
+
+    if (profile < 100 && !(!metrics.hasCompany || !metrics.hasExperience || !metrics.hasSocialLinks)) {
+      suggestions.push({
+        text: `Complete the remaining profile sections to reach 100% (currently ${profile}%).`,
+        action: "profile",
+      });
+    }
+
+    if (reliability < 90) {
+      suggestions.push({
+        text: `Your session reliability is currently ${reliability}%. Attend upcoming scheduled sessions to rebuild reliability.`,
+        action: "bookings",
+      });
     }
 
     if (metrics.totalReviews < 5) {
       const remaining = 5 - metrics.totalReviews;
-      suggestions.push({ text: `Collect ${remaining} more review${remaining > 1 ? 's' : ''} to improve your student satisfaction score.` });
+      if (metrics.totalReviews === 0) {
+        suggestions.push({
+          text: "No reviews yet. Encourage mentees to leave a review after sessions to establish Student Satisfaction.",
+          action: "reviews",
+        });
+      } else {
+        suggestions.push({
+          text: `Collect ${remaining} more review${remaining > 1 ? 's' : ''} to improve your student satisfaction score.`,
+          action: "reviews",
+        });
+      }
     } else if (metrics.averageRating < 4.8) {
-      suggestions.push({ text: `Your average rating is ${metrics.averageRating.toFixed(1)}. Collect more high-quality reviews to improve student satisfaction.` });
+      suggestions.push({
+        text: `Your average rating is ${metrics.averageRating.toFixed(1)}. Collect more high-quality reviews to improve student satisfaction.`,
+        action: "reviews",
+      });
+    }
+
+    if (metrics.completedSessions < 10) {
+      const remaining = 10 - metrics.completedSessions;
+      suggestions.push({
+        text: `Complete ${remaining} more session${remaining > 1 ? 's' : ''} to boost your engagement score.`,
+        action: "sessions",
+      });
     }
 
     if (metrics.cancelledSessions > 0) {
-      suggestions.push({ text: `Reduce cancellations. You currently have ${metrics.cancelledSessions} cancelled session${metrics.cancelledSessions > 1 ? 's' : ''}.` });
+      suggestions.push({
+        text: `Reduce cancellations. You currently have ${metrics.cancelledSessions} cancelled session${metrics.cancelledSessions > 1 ? 's' : ''}.`,
+      });
     }
 
     if (suggestions.length === 0) {
