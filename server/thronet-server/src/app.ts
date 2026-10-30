@@ -240,6 +240,16 @@ app.use(prometheusRouter);
 // ==================== ROUTES ====================
 app.use('/api/v1', apiRoutes);
 
+// ==================== LOADER.IO VERIFICATION ====================
+app.get(
+    '/loaderio-95745e62d81767ffa071384bacd7a16a.txt',
+    (_req: Request, res: Response) => {
+        res.type('text/plain').send(
+            'loaderio-95745e62d81767ffa071384bacd7a16a'
+        );
+    }
+);
+
 // ==================== 404 HANDLER ====================
 app.use((req: Request, res: Response) => {
     res.status(404).json({
