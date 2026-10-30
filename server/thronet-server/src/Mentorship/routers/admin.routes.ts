@@ -225,4 +225,16 @@ router.post(
   refundAdminController.markRefunded
 );
 
+/**
+ * @route   POST /refunds/:bookingId/pay
+ * @desc    Send missed-session refund to student's UPI via RazorpayX payout
+ * @access  Private (Admin)
+ */
+router.post(
+  '/refunds/:bookingId/pay',
+  AuthMiddleware.authenticate as any,
+  validate([param('bookingId').isMongoId().withMessage('Invalid booking ID')]),
+  adminController.payRefund.bind(adminController)
+);
+
 export default router;
