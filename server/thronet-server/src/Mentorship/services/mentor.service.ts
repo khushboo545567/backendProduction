@@ -1178,46 +1178,74 @@ class MentorService {
       // Bulk resolve all mentee details and photo URLs (Zero N+1)
       const userDetailsMap = await resolveUserDetails(rawMenteeIds);
 
-      const formatted1on1 = upcoming1on1Docs.map((s: any) => {
-        const rawId =
-          (Array.isArray(s.bookings) && (s.bookings.find((b: any) => b?.menteeId || b?.bookedBy)?.menteeId || s.bookings[0]?.bookedBy)) ||
-          (Array.isArray(s.participants) && (s.participants.find((p: any) => p?.menteeId || p?.userId)?.menteeId || s.participants[0]?.userId)) ||
-          s.menteeId ||
-          s.bookedBy ||
-          null;
+           // Har ACTIVE booking ki alag row. Container ka status nahi, booking ka status + startedAt jata hai,
+      // taaki Overview par Start/Rejoin sahi dikhe aur completed/ended booking hat jaye.
+      const ACTIVE_BOOKING_STATUSES = ['pending', 'confirmed', 'rescheduled', 'in_progress'];
 
-        const resolved = rawId ? userDetailsMap.get(String(rawId)) : null;
+      const formatted1on1 = upcoming1on1Docs.flatMap((s: any) => {
+        const bookingList: any[] = Array.isArray(s.bookings) ? s.bookings : [];
 
-        let menteeId = resolved?.userId || (rawId ? String(rawId) : null);
-        let menteeName = (resolved && resolved.name && resolved.name !== 'User')
-          ? resolved.name
-          : (s.bookedMenteeName || 'Student');
-        let menteeProfilePhoto = resolved?.photoUrl || null;
+        const buildRow = (b: any | null) => {
+          const rawId =
+            b?.menteeId ||
+            b?.bookedBy ||
+            (Array.isArray(s.participants) &&
+              (s.participants.find((p: any) => p?.menteeId || p?.userId)?.menteeId || s.participants[0]?.userId)) ||
+            s.menteeId ||
+            s.bookedBy ||
+            null;
 
-        const durationMinutes = Number(s.duration || (Array.isArray(s.bookings) && s.bookings[0]?.slotDuration) || 60);
-        const startTimeIso = s.scheduledAt ? new Date(s.scheduledAt).toISOString() : new Date().toISOString();
-        const endTimeIso = s.endedAt
-          ? new Date(s.endedAt).toISOString()
-          : new Date(new Date(startTimeIso).getTime() + durationMinutes * 60000).toISOString();
+          const resolved = rawId ? userDetailsMap.get(String(rawId)) : null;
+          const menteeId = resolved?.userId || (rawId ? String(rawId) : null);
+          const menteeName =
+            resolved && resolved.name && resolved.name !== 'User'
+              ? resolved.name
+              : b?.menteeName || s.bookedMenteeName || 'Student';
+          const menteeProfilePhoto = resolved?.photoUrl || null;
 
-        return {
-          _id: s._id,
-          sessionId: s.sessionId || String(s._id),
-          menteeId,
-          menteeName,
-          menteeProfilePhoto,
-          title: s.title || s.sessionType || '1-on-1 Session',
-          sessionType: s.sessionType || '1-on-1 Session',
-          scheduledAt: startTimeIso,
-          startTime: startTimeIso,
-          endTime: endTimeIso,
-          durationMinutes,
-          status: s.status || 'pending',
-          isGroupSession: false,
-          meetingUrl: s.meetingDetails?.meetingUrl || null,
+          const durationMinutes = Number(b?.duration || b?.slotDuration || s.duration || 60);
+          const start = new Date(b?.scheduledAt || s.scheduledAt || Date.now());
+          const startTimeIso = start.toISOString();
+          const endTimeIso = b
+            ? (b.endTime ? new Date(b.endTime) : new Date(start.getTime() + durationMinutes * 60000)).toISOString()
+            : s.endedAt
+              ? new Date(s.endedAt).toISOString()
+              : new Date(start.getTime() + durationMinutes * 60000).toISOString();
+
+          return {
+            _id: b?._id || s._id,
+            sessionId: s.sessionId || String(s._id),
+            bookingId: b ? String(b.bookingId || b._id) : undefined,
+            menteeId,
+            menteeName,
+            menteeProfilePhoto,
+            title: s.title || s.sessionType || '1-on-1 Session',
+            sessionType: s.sessionType || '1-on-1 Session',
+            scheduledAt: startTimeIso,
+            startTime: startTimeIso,
+            endTime: endTimeIso,
+            durationMinutes,
+            status: b?.status || s.status || 'pending',
+            startedAt: b?.startedAt || null,
+            menteeJoinedAt: b?.menteeJoinedAt || null,
+            isGroupSession: false,
+            meetingUrl: s.meetingDetails?.meetingUrl || null,
+            bookings: b ? [b] : [],
+          };
         };
+
+        // Purane docs jinme bookings[] nahi hai: pehle jaisa single row
+        if (bookingList.length === 0) return [buildRow(null)];
+
+        return bookingList
+          .filter((b: any) => ACTIVE_BOOKING_STATUSES.includes(b?.status))
+          .map(buildRow)
+          // End time nikal chuka to upcoming se hata do (wo missedNotHeldSessions me jayega)
+          .filter((row: any) => new Date(row.endTime).getTime() >= now.getTime());
       });
 
+
+      
       const formattedGroup = upcomingGroupDocs.map((g: any) => {
         const firstParticipant = Array.isArray(g.participants) && g.participants[0];
         const participantId = firstParticipant?.menteeId || firstParticipant?.userId || null;
