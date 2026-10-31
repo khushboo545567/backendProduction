@@ -9,6 +9,7 @@ import ResponseHandler from '@/shared/utils/mentorship/responseHandler';
 import mentorRepository from '../repositories/mentor.repository';
 import sessionRepository from '../repositories/session.repository';
 import reviewRepository from '../repositories/review.repository';
+import refundService from '../services/refund.service';
 
 function isAdmin(req: Request): boolean {
   return req.user?.role === 'admin';
@@ -232,7 +233,7 @@ class AdminController {
       if (status && !validStatuses.includes(status as string)) {
         ResponseHandler.badRequest(res, `Invalid status value. Must be one of: ${validStatuses.join(', ')}`);
         return;
-      }
+      } 
 
       // Validate sessionType against SessionType enum
       const validSessionTypes = ['quick_call', 'deep_dive', 'resume_review', 'mock_interview', 'career_planning', 'portfolio_review', 'ask_query', 'group_session'];
@@ -674,6 +675,37 @@ class AdminController {
       ResponseHandler.paginated(res, 'Pending mentors retrieved successfully', enrichedMentors, validPage, validLimit, total);
     } catch (error: any) {
       logger.error('Failed to fetch pending mentors:', error);
+      next(error);
+    }
+  }
+  /**
+   * @route   POST /api/v1/mentorship/admin/refunds/:bookingId/pay
+   * @access  Private (Admin)
+   */
+  async payRefund(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!isAdmin(req)) {
+        ResponseHandler.forbidden(res, 'Admin access required');
+        return;
+      }
+
+      const { bookingId } = req.params;
+      const session: any = await SessionMentor.findOne({ 'bookings._id': bookingId })
+        .select('sessionId')
+        .lean();
+      if (!session) {
+        ResponseHandler.notFound(res, 'Booking not found');
+        return;
+      }
+
+      const result = await refundService.payMissedRefundViaPayout({
+        sessionId: session.sessionId,
+        bookingId,
+      });
+
+      ResponseHandler.success(res, 'Refund payout initiated', result);
+    } catch (error: any) {
+      logger.error('Failed to pay refund:', error);
       next(error);
     }
   }

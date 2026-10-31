@@ -55,7 +55,7 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
   const userId = socket.data.userId;
   if (!userId) return;
 
-  socket.on('mentorship:notify-join', async (data: { sessionId: string }) => {
+  socket.on('mentorship:notify-join', async (data: { sessionId: string; bookingId?: string }) => {
     try {
       const { sessionId } = data;
       if (!sessionId) return;
@@ -66,8 +66,26 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
         return;
       }
 
-      const { mentorUserId, menteeUserId, title, bookingIdStr } = sessionInfo;
+      const { mentorUserId, menteeUserId, title } = sessionInfo;
+      // payload ka bookingId pehle (ek session par multiple bookings ho sakti hain)
+      const bookingIdStr = data.bookingId || sessionInfo.bookingIdStr;
 
+      // Mentee room me aaya: pehli baar join record karo (cron completed vs no_show isi se tay karta hai)
+      if (userId !== mentorUserId) {
+        await SessionMentor.updateOne(
+          {
+            sessionId,
+            bookings: {
+              $elemMatch: {
+                $or: [{ menteeId: userId }, { bookedBy: userId }],
+                status: 'in_progress',
+                menteeJoinedAt: { $exists: false },
+              },
+            },
+          } as any,
+          { $set: { 'bookings.$.menteeJoinedAt': new Date() } }
+        ).catch((e: any) => LoggerUtil.warn('menteeJoinedAt save failed', { error: e.message }));
+      }
       let targetUserId: string | undefined;
       let joinerRole: 'mentor' | 'mentee' = 'mentee';
 
@@ -102,7 +120,11 @@ export const setupMentorshipHandlers = (io: Server, socket: AuthenticatedSocket)
           title: `${joinerRole === 'mentor' ? 'Mentor' : 'Mentee'} joined the session`,
           message: `${joinerRole === 'mentor' ? 'Your mentor' : 'Your mentee'} has joined "${title || 'the session'}". Join now to start the call.`,
           sessionId,
-          actionUrl: `/mentorship/session-room/${sessionId}?bookingId=${bookingIdStr}`,
+          // Mentee ke aane par mentor ko mentor-session room (End Session wala) par bhejo
+          actionUrl:
+            joinerRole === 'mentee'
+              ? `/mentorship/mentor-session?sessionId=${sessionId}&roomId=${bookingIdStr}&bookingId=${bookingIdStr}&role=mentor`
+              : `/mentorship/session-room/${sessionId}?bookingId=${bookingIdStr}`,
         },
       });
 

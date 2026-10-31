@@ -1192,16 +1192,14 @@ class MentorshipSessionService {
         const startMs = new Date(booking.scheduledAt || session.scheduledAt).getTime();
         if (Number.isNaN(startMs)) continue;
 
-        if (now.getTime() <= startMs + (durationMinutes + graceMinutes) * 60000) continue;
+              // Mentee kabhi room me aaya? Haan => completed. Nahi => no_show (mentor ki galti nahi)
+              const menteeAttended = !!booking.menteeJoinedAt;
 
-        // Session sirf mentor End kar sakta hai. Mentee aaya tha to cron kuch nahi karega,
-        // booking in_progress rahegi jab tak mentor End Session na dabaye.
-        // (Sirf wo booking aage badhegi jisme mentee kabhi aaya hi nahi -> no_show)
-        if (booking.menteeJoinedAt) continue;
-
-
-        // Mentee kabhi room me aaya? Haan => completed. Nahi => no_show (mentor ki galti nahi)
-        const menteeAttended = !!booking.menteeJoinedAt;
+              // Dono join hue the to end time ke thodi der baad (5 min) hi complete,
+              // nahi to purani grace (15 min) ke baad no_show
+              const effectiveGraceMinutes = menteeAttended ? 5 : graceMinutes;
+              if (now.getTime() <= startMs + (durationMinutes + effectiveGraceMinutes) * 60000) continue;
+              
 
         try {
           const result = await SessionMentor.updateOne(

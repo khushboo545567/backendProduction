@@ -524,6 +524,112 @@ class RefundService {
   }
 
 
+     /**
+   * Admin "Proceed to Pay": student ki UPI ID par RazorpayX payout bhejta hai.
+   * Idempotency key booking id se banti hai, isliye double click par double payment nahi hoga.
+   */
+  async payMissedRefundViaPayout(input: {
+    sessionId: string;
+    bookingId: string;
+  }): Promise<{ payoutId: string; utr?: string; status: string }> {
+    const session: any = await SessionMentor.findOne({ sessionId: input.sessionId });
+    if (!session) throw new NotFoundError('Session');
+
+    const booking: any = session.bookings?.find((b: any) => b._id?.toString() === input.bookingId);
+    if (!booking) throw new NotFoundError('Booking');
+
+    const rr = booking.refundRequest;
+    if (!rr) throw new NotFoundError('Refund request');
+    if (rr.status !== 'pending') throw new ConflictError('Refund is already processed');
+    if (!rr.upiId) throw new BadRequestError('Student did not provide a UPI ID');
+
+    const accountNumber = process.env.RAZORPAYX_ACCOUNT_NUMBER;
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!accountNumber || !keyId || !keySecret) {
+      throw new Error('RazorpayX not configured - set RAZORPAYX_ACCOUNT_NUMBER in .env');
+    }
+
+    const auth = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+    const call = async (path: string, body: any, extraHeaders: Record<string, string> = {}) => {
+      const res = await fetch(`https://api.razorpay.com/v1/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: auth, ...extraHeaders },
+        body: JSON.stringify(body),
+      });
+      const json: any = await res.json();
+      if (!res.ok) throw new BadRequestError(json?.error?.description || 'Razorpay payout failed');
+      return json;
+    };
+
+    const menteeUser: any = await User.findByUserId(booking.menteeId || booking.bookedBy);
+    const studentName = menteeUser?.fullName || 'Student';
+
+    const contact = await call('contacts', {
+      name: studentName,
+      email: rr.email || undefined,
+      contact: rr.phone || undefined,
+      type: 'customer',
+      reference_id: String(booking._id),
+    });
+
+    const fundAccount = await call('fund_accounts', {
+      contact_id: contact.id,
+      account_type: 'vpa',
+      vpa: { address: rr.upiId },
+    });
+
+    const payout = await call(
+      'payouts',
+      {
+        account_number: accountNumber,
+        fund_account_id: fundAccount.id,
+        amount: Math.round(Number(rr.amount) * 100), // paise
+        currency: 'INR',
+        mode: 'UPI',
+        purpose: 'refund',
+        queue_if_low_balance: false,
+        reference_id: String(booking._id),
+        narration: 'Throne8 session refund',
+      },
+
+      
+      { 'X-Payout-Idempotency': `missed_refund_${booking._id}` }
+    );
+
+    if (['rejected', 'cancelled', 'failed', 'reversed'].includes(String(payout.status))) {
+      throw new BadRequestError(`Payout ${payout.status}. Please check the UPI ID and RazorpayX balance.`);
+    }
+
+    await SessionMentor.updateOne(
+      { sessionId: session.sessionId, 'bookings._id': booking._id } as any,
+      {
+        $set: {
+          'bookings.$.refundRequest.status': 'refunded',
+          'bookings.$.refundRequest.refundedAt': new Date(),
+          'bookings.$.refundRequest.reference': payout.utr || payout.id,
+          'bookings.$.refundRequest.transactionId': payout.id,
+          'bookings.$.refundRequest.refundMode': 'gateway',
+        },
+      } as any
+    );
+
+        // Student ko batao ki refund bhej diya gaya (best-effort, fail hone par payout par asar nahi)
+        NotificationService.sendNotification({
+          userId: String(booking.menteeId || booking.bookedBy),
+          type: NotificationType.REFUND_PROCESSED,
+          channels: [NotificationChannel.IN_APP, NotificationChannel.EMAIL],
+          data: {
+            title: 'Refund sent',
+            message: `Your refund of ₹${rr.amount} for "${session.title}" has been sent to your UPI ID ${rr.upiId}. It should reflect in your account shortly.`,
+            refundAmount: rr.amount,
+            sessionId: session.sessionId,
+          },
+        }).catch((e) => logger.error('Notification failed (refund paid -> student):', e));
+    
+        return { payoutId: payout.id, utr: payout.utr || undefined, status: payout.status };
+  }
+
     /**
    * Missed-session refund request par saare admins ko in-app + email bhejo.
    */
@@ -600,7 +706,7 @@ class RefundService {
               ${rd?.upiId ? `<li>UPI ID: ${esc(rd.upiId)}</li>` : ''}
               ${rd?.note ? `<li>Note: ${esc(rd.note)}</li>` : ''}
             </ul>
-            <p>${p.isManual ? 'Open Admin Panel → Refunds, pay the student, then click "Mark Refunded".' : 'No action needed.'}</p>
+            <p>${p.isManual ? 'Open Admin Panel → Refunds, then click "Proceed to Pay" to pay the student.' : 'No action needed.'}</p>
           `,
         });
       }
